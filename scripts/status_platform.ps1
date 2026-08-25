@@ -1,6 +1,7 @@
 param(
     [int]$ApiPort = 8000,
-    [int]$PostgresHostPort = 5433
+    [int]$PostgresHostPort = 5433,
+    [string]$SharedDumpDir = "Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff"
 )
 
 function Test-Http {
@@ -51,4 +52,16 @@ $postgresPort = Get-NetTCPConnection -LocalPort $PostgresHostPort -State Listen 
 Write-Host "PostgreSQL Port $PostgresHostPort Listening: $([bool]$postgresPort)"
 if ($postgresPort) {
     $postgresPort | Select-Object LocalAddress,LocalPort,OwningProcess | Format-Table -AutoSize
+}
+
+$lockFilePath = Join-Path $SharedDumpDir "db_in_use.lock.json"
+Write-Host ""
+Write-Host "Shared Lock File Present: $(Test-Path $lockFilePath)"
+if (Test-Path $lockFilePath) {
+    try {
+        $lockData = Get-Content $lockFilePath -Raw | ConvertFrom-Json
+        Write-Host ($lockData | ConvertTo-Json -Depth 3)
+    } catch {
+        Write-Warning "Could not parse lock file: $lockFilePath"
+    }
 }

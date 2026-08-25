@@ -13,9 +13,12 @@ Run that from the repo root.
 What it does:
 1. checks whether Docker is running and attempts to start Docker Desktop if it is not
 2. optionally starts Ollama if it is not already listening on `127.0.0.1:11434`
-3. starts the project PostgreSQL container, Redis, and the API service
-4. waits for the API health endpoint to become ready
-5. opens the browser
+3. acquires a simple share lock in the handoff folder
+4. starts the project PostgreSQL container and Redis
+5. restores the latest shared dump from the handoff folder when present
+6. syncs repo-managed shared logic into the local database
+7. starts the API service and waits for health
+8. opens the browser
 
 Commander is now optional and is not started automatically by the standard wrappers.
 
@@ -49,6 +52,8 @@ python .\commander.py
 .\scripts\stop_platform.ps1
 ```
 
+By default this exports the current local PostgreSQL state back to the shared handoff dump before stopping containers.
+
 To also stop Ollama if it is running:
 
 ```powershell
@@ -60,6 +65,8 @@ To also stop Ollama if it is running:
 ```powershell
 .\scripts\status_platform.ps1
 ```
+
+This also reports whether the shared handoff lock file exists and who currently holds it.
 
 ## If You Only Want The API Stack
 
