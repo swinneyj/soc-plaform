@@ -16,16 +16,6 @@ API is now available at `http://localhost:8000`
 - **Health Check**: http://localhost:8000/health
 - **Tools Catalog**: http://localhost:8000/tools
 
-### Option 2: Interactive CLI (Docker Container)
-
-```bash
-docker compose --profile cli run --rm commander-cli
-```
-
-Runs the full interactive SOC Commander inside a container with volume-mounted data.
-
----
-
 ## Architecture
 
 ### Dockerfile (Multi-Stage Build)
@@ -44,11 +34,11 @@ Three services:
    - Redis backend for async job queuing
    - Volume-mounted data directories
 
-2. **commander-cli** (profile: cli): Interactive terminal
-   - TTY mode for user interaction
-   - Same volumes as API
+2. **postgres**: Default runtime database backend
+  - Exposed on configurable host port (default `5433`)
+  - Intended for repo-managed local runtime use
 
-3. **redis** (profile: api): Job queue and state management
+3. **redis**: Job queue and state management
    - Alpine-based, minimal footprint
    - Persisted data volume
 
@@ -75,15 +65,16 @@ Three services:
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/health` | GET | Health check |
-| `/tools` | GET | List all tools |
-| `/tools/{name}` | GET | Get tool metadata |
-| `/execute` | POST | Run tool asynchronously (returns job_id) |
-| `/jobs/{job_id}` | GET | Get job status and results |
-| `/jobs?status=running` | GET | List jobs by status |
-| `/reports` | GET | List generated reports |
-| `/reports/{name}` | GET | Download a report |
-| `/registry` | GET | Get full tool registry JSON |
-| `/registry/reload` | POST | Rebuild tool registry |
+| `/api/health` | GET | Compatibility health check |
+| `/api/tools` | GET | List all tools |
+| `/api/tools/{name}` | GET | Get tool metadata |
+| `/api/execute` | POST | Run tool asynchronously (returns job_id) |
+| `/api/jobs/{job_id}` | GET | Get job status and results |
+| `/api/jobs?status=running` | GET | List jobs by status |
+| `/api/reports` | GET | List generated reports |
+| `/api/reports/{name}` | GET | Download a report |
+| `/api/registry` | GET | Get full tool registry JSON |
+| `/api/registry/reload` | POST | Rebuild tool registry |
 | `/docs` | GET | Swagger interactive UI |
 
 ---

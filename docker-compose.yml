@@ -1,27 +1,5 @@
 ﻿
 services:
-  # CLI Service: Interactive terminal-based SOC Commander
-  commander-cli:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: soc-platform:latest
-    stdin_open: true
-    tty: true
-    environment:
-      - SOC_PLATFORM_ROOT=/app
-      - COMMANDER_BOOT=1
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
-    volumes:
-      - ./Data:/app/Data
-      - ./Playbooks:/app/Playbooks
-      - ./Tools:/app/Tools
-      - ./web:/app/web
-      - ./commander.py:/app/commander.py
-      - ./Splunk_Exports:/app/Splunk_Exports
-    working_dir: /app
-    command: python commander.py
-
   # API Service: FastAPI REST service for programmatic access
   api-service:
     build:
