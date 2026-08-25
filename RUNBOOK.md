@@ -56,6 +56,35 @@ The repo includes helper scripts for PostgreSQL dump export and restore:
 5. `scripts\export_db_dump_to_share.ps1`
 6. `scripts\restore_db_dump_from_share.ps1`
 
+## Shared DB Handoff Workflow
+
+The current start and stop scripts use a narrow shared lock window:
+
+1. `start_platform.ps1` acquires the lock only during the shared dump restore window.
+2. `start_platform.ps1` restores `current_soc_platform_dump.sql` from the shared handoff folder into the local PostgreSQL runtime when that dump exists.
+3. `start_platform.ps1` releases the lock after the restore finishes.
+4. The user works locally, tests locally, and syncs code through Git.
+5. `stop_platform.ps1` acquires the lock only during the shared dump export window.
+6. `stop_platform.ps1` exports the local PostgreSQL state back to the shared handoff folder.
+7. `stop_platform.ps1` releases the lock before shutdown completes.
+
+Default shared handoff folder:
+
+```powershell
+Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff
+```
+
+Useful switches:
+
+```powershell
+.\scripts\start_platform.ps1 -SkipSharedDumpRestore
+.\scripts\stop_platform.ps1 -SkipSharedDumpExport
+.\scripts\start_platform.ps1 -IgnoreExistingLock
+.\scripts\stop_platform.ps1 -IgnoreExistingLock
+```
+
+Use the ignore/override switches only when you have confirmed the lock is stale or you are intentionally taking over the handoff window.
+
 ## Option A: Use The Project PostgreSQL Container
 
 Start the container:
@@ -71,6 +100,12 @@ $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:5433/soc_platfo
 ```
 
 One-command setup:
+
+```powershell
+.\scripts\bootstrap_new_user.ps1
+```
+
+If you already have a specific local dump file and want to force that input:
 
 ```powershell
 .\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
@@ -128,7 +163,7 @@ The restore helper resets the `public` schema before loading the dump so repeate
 
 ### Migrate from the preserved SQLite backup
 
-If the maintainer provides `splunk-es-backup-toolkit\triage.db`, place it in the working repo and run:
+If a maintainer explicitly provides a preserved SQLite backup at `splunk-es-backup-toolkit\triage.db`, place it in the working repo and run:
 
 ```powershell
 python .\scripts\migrate_sqlite_to_postgres.py --target-url "postgresql+psycopg://soc_platform@localhost:5433/soc_platform" --drop-existing
@@ -148,6 +183,8 @@ python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8000
 $env:DATABASE_URL = "sqlite:///./splunk-es-backup-toolkit/triage.db"
 python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8001
 ```
+
+Use this only when that SQLite backup file has actually been provided. It is not part of the clean handoff clone by default.
 
 ## Health Checks
 

@@ -1,7 +1,7 @@
 # SOC Platform - Project Specification for AI Agents
 
 ## Overview
-Local SOC orchestration platform with containerized tools, PostgreSQL runtime database, preserved SQLite backup path, Ollama AI integration, and web dashboard.
+Local SOC orchestration platform with containerized tools, PostgreSQL runtime database, optional legacy SQLite fallback when separately provided, Ollama AI integration, and web dashboard.
 
 ## Architecture
 
@@ -13,8 +13,12 @@ project-root/
 ├── web/
 │   └── index.html             # Vue.js dashboard UI
 ├── db/
-│   ├── models.py              # SQLAlchemy ORM (SplunkEvent, TriageResult)
-│   └── triage.db              # Preserved SQLite backup/export source
+│   └── models.py              # SQLAlchemy ORM models
+├── scripts/
+│   ├── bootstrap_new_user.ps1 # New-user bootstrap and dump restore
+│   ├── start_platform.ps1     # Standard platform startup
+│   ├── stop_platform.ps1      # Standard platform shutdown and export
+│   └── sync_shared_logic_to_db.ps1 # Repo-backed rules/query sync
 ├── services/
 │   └── ollama_service.py       # Ollama LLM client wrapper
 ├── Tools/
@@ -32,6 +36,7 @@ project-root/
 - **Redis**: Job queue for long-running tasks
 - **Ollama**: Local LLM inference (on host network via `host.docker.internal:11434`)
 - **PostgreSQL**: Default runtime database for events and cases
+- **SQLite**: Optional legacy fallback only if a backup file is provided separately
 
 ## Database Schema
 
@@ -44,7 +49,7 @@ id (PK), sourcetype, source, host, raw (text), timestamp, created_at
 ### TriageResult
 Stores analyzed/triaged cases
 ```
-id (PK), case_id (unique), rule_name, verdict, confidence_score, 
+case_id (PK), rule_name, rule_id, verdict, confidence_score,
 analysis_summary, remediation_steps, triaged_at
 ```
 

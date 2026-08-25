@@ -11,13 +11,25 @@ WORKFLOW MODEL:
 QUICK START:
 1. Ensure Python 3 is installed on your system.
 2. Double-click 'Start_SOC_Platform.bat' to bring the platform and browser UI back up after a reboot.
-3. Type the ID number or Name of a tool to run it.
+3. Open the browser UI on `http://127.0.0.1:8000`.
+4. If you want the CLI orchestrator too, run `python .\commander.py` separately.
 
 RESTART PATH:
 * Preferred one-command restart:
   .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
 * Desktop-friendly wrapper:
   Start_SOC_Platform.bat
+
+SHARED DB HANDOFF:
+* Startup acquires the shared lock only during the shared dump restore window.
+* Shutdown acquires the shared lock only during the shared dump export window.
+* To start without restoring the shared dump:
+  .\scripts\start_platform.ps1 -SkipSharedDumpRestore
+* To stop without exporting the shared dump:
+  .\scripts\stop_platform.ps1 -SkipSharedDumpExport
+* To intentionally override an existing lock during restore or export:
+  .\scripts\start_platform.ps1 -IgnoreExistingLock
+  .\scripts\stop_platform.ps1 -IgnoreExistingLock
 
 COMMANDER (OPTIONAL):
 * Commander no longer auto-starts from the wrappers.
@@ -42,10 +54,11 @@ DEFAULT RUNTIME:
   -> postgresql+psycopg://soc_platform@postgres:5432/soc_platform
 
 SQLITE ROLE:
-* SQLite is retained as a backup/export source only.
-* Current backup/export location:
+* SQLite is retained as an optional legacy backup/export source only.
+* A SQLite backup is not included in this clean working copy by default.
+* If a maintainer provides one separately, the expected path is:
   -> splunk-es-backup-toolkit\triage.db
-* To run temporarily against SQLite instead of PostgreSQL, set:
+* To run temporarily against a provided SQLite backup instead of PostgreSQL, set:
   -> DATABASE_URL=sqlite:///./splunk-es-backup-toolkit/triage.db
 
 LOCAL HOST RUN COMMANDS:
@@ -69,7 +82,9 @@ POSTGRESQL DUMP HELPERS:
   .\scripts\export_postgres_dump.ps1 -OutputPath .\current_soc_platform_dump.sql
 * Restore a PostgreSQL dump into the active runtime database:
   .\scripts\restore_postgres_dump.ps1 -InputPath .\current_soc_platform_dump.sql
-* One-command bootstrap for a new user with a dump file:
+* One-command bootstrap for a new user:
+  .\scripts\bootstrap_new_user.ps1
+* If you already have a local dump file and want to force that specific input:
   .\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
 
 PORT GUIDANCE:
@@ -80,7 +95,8 @@ PORT GUIDANCE:
 TEAM USAGE NOTE:
 * Git contains the code and configuration only.
 * Git does NOT contain the live project database contents.
-* A new user who clones the repo should restore a PostgreSQL dump provided separately or migrate the preserved SQLite backup into PostgreSQL.
+* A new user who clones the repo should normally use `bootstrap_new_user.ps1`, which copies the shared handoff dump into `local-backups` and restores it automatically.
+* SQLite is only a fallback when a maintainer explicitly provides a preserved backup file.
 * The supported handoff model is repo sync through Git plus dump export and restore through the shared handoff folder.
 
 SHARED VS LOCAL DATA MODEL:
