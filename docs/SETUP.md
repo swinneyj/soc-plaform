@@ -42,6 +42,12 @@ That script will:
 3. restore the dump if present
 4. launch the API
 
+If multiple clones must run on the same machine, choose another PostgreSQL host port:
+
+```powershell
+.\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql -PostgresHostPort 5434 -ApiPort 8006
+```
+
 ## Manual Path
 
 ### Start PostgreSQL

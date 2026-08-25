@@ -61,6 +61,12 @@ One-command setup:
 .\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
 ```
 
+If multiple clones need to run on the same machine, override the PostgreSQL host port:
+
+```powershell
+.\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql -PostgresHostPort 5434 -ApiPort 8006
+```
+
 ## Option B: Use An Installed Local PostgreSQL Service
 
 If the user already has PostgreSQL installed and wants to use `localhost:5432`, create or restore a database there and set:

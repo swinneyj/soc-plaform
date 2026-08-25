@@ -1,12 +1,17 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-    [string]$DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform",
+    [string]$DatabaseUrl = "",
     [string]$DumpPath = "",
     [switch]$SkipDependencyInstall,
     [switch]$SkipPostgresStart,
     [switch]$SkipRestore,
+    [int]$PostgresHostPort = 5433,
     [int]$ApiPort = 8000
 )
+
+if (-not $DatabaseUrl) {
+    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:$PostgresHostPort/soc_platform"
+}
 
 Set-Location $RepoRoot
 
@@ -20,6 +25,7 @@ if (-not $SkipDependencyInstall) {
 
 if (-not $SkipPostgresStart) {
     Write-Host "[*] Starting PostgreSQL container..."
+    $env:POSTGRES_HOST_PORT = "$PostgresHostPort"
     docker compose up -d postgres
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
