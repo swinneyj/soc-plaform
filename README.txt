@@ -52,6 +52,8 @@ POSTGRESQL DUMP HELPERS:
   .\scripts\export_postgres_dump.ps1 -OutputPath .\current_soc_platform_dump.sql
 * Restore a PostgreSQL dump into the active runtime database:
   .\scripts\restore_postgres_dump.ps1 -InputPath .\current_soc_platform_dump.sql
+* One-command bootstrap for a new user with a dump file:
+  .\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
 
 PORT GUIDANCE:
 * A separate local postgres process is already listening on 5432 on this machine.

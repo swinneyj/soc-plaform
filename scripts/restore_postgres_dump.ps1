@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$InputPath,
-    [string]$DatabaseUrl = $env:DATABASE_URL
+    [string]$DatabaseUrl = $env:DATABASE_URL,
+    [string]$ContainerName = "soc-postgres"
 )
 
 if (-not (Test-Path $InputPath)) {
@@ -10,18 +11,23 @@ if (-not (Test-Path $InputPath)) {
 }
 
 if (-not $DatabaseUrl) {
-    Write-Error "DATABASE_URL is not set. Provide -DatabaseUrl or set the environment variable."
-    exit 1
+    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
 }
 
 $psql = Get-Command psql -ErrorAction SilentlyContinue
-if (-not $psql) {
-    Write-Error "psql was not found in PATH. Install PostgreSQL client tools or add them to PATH."
-    exit 1
-}
 
 Write-Host "[*] Restoring PostgreSQL dump from $InputPath"
-& $psql.Source $DatabaseUrl -f $InputPath
+
+if ($psql) {
+    & $psql.Source $DatabaseUrl -f $InputPath
+} else {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) {
+        Write-Error "Neither psql nor docker is available. Install PostgreSQL client tools or Docker."
+        exit 1
+    }
+    Get-Content $InputPath | docker exec -i $ContainerName psql -U soc_platform -d soc_platform
+}
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "psql restore failed with exit code $LASTEXITCODE"

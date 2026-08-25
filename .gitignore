@@ -10,6 +10,7 @@ splunk-es-backup-toolkit/triage.db
 *.db
 *.sqlite
 *.sql
+local-backups/
 
 Data/
 Splunk_Exports/

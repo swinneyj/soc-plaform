@@ -39,6 +39,7 @@ For current data, distribute one of these outside Git:
 The repo includes helper scripts for PostgreSQL dump export and restore:
 1. `scripts\export_postgres_dump.ps1`
 2. `scripts\restore_postgres_dump.ps1`
+3. `scripts\bootstrap_new_user.ps1`
 
 ## Option A: Use The Project PostgreSQL Container
 
@@ -52,6 +53,12 @@ Use this runtime URL:
 
 ```powershell
 $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+```
+
+One-command setup:
+
+```powershell
+.\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
 ```
 
 ## Option B: Use An Installed Local PostgreSQL Service

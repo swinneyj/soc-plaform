@@ -1,24 +1,30 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
-    [string]$OutputPath = "postgres_dump_$(Get-Date -Format 'yyyyMMdd_HHmmss').sql"
+    [string]$OutputPath = "postgres_dump_$(Get-Date -Format 'yyyyMMdd_HHmmss').sql",
+    [string]$ContainerName = "soc-postgres"
 )
 
 if (-not $DatabaseUrl) {
-    Write-Error "DATABASE_URL is not set. Provide -DatabaseUrl or set the environment variable."
-    exit 1
+    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
 }
 
 $pgDump = Get-Command pg_dump -ErrorAction SilentlyContinue
-if (-not $pgDump) {
-    Write-Error "pg_dump was not found in PATH. Install PostgreSQL client tools or add them to PATH."
-    exit 1
-}
 
 Write-Host "[*] Exporting PostgreSQL dump to $OutputPath"
-& $pgDump.Source --no-owner --no-privileges --file $OutputPath $DatabaseUrl
+
+if ($pgDump) {
+    & $pgDump.Source --no-owner --no-privileges --file $OutputPath $DatabaseUrl
+} else {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) {
+        Write-Error "Neither pg_dump nor docker is available. Install PostgreSQL client tools or Docker."
+        exit 1
+    }
+    docker exec $ContainerName pg_dump -U soc_platform -d soc_platform --no-owner --no-privileges > $OutputPath
+}
 
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "pg_dump failed with exit code $LASTEXITCODE"
+    Write-Error "PostgreSQL export failed with exit code $LASTEXITCODE"
     exit $LASTEXITCODE
 }
 
