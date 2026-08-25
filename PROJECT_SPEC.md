@@ -1,7 +1,7 @@
 # SOC Platform - Project Specification for AI Agents
 
 ## Overview
-Local SOC orchestration platform with containerized tools, SQLite database, Ollama AI integration, and web dashboard.
+Local SOC orchestration platform with containerized tools, PostgreSQL runtime database, preserved SQLite backup path, Ollama AI integration, and web dashboard.
 
 ## Architecture
 
@@ -14,7 +14,7 @@ project-root/
 │   └── index.html             # Vue.js dashboard UI
 ├── db/
 │   ├── models.py              # SQLAlchemy ORM (SplunkEvent, TriageResult)
-│   └── triage.db              # SQLite database
+│   └── triage.db              # Preserved SQLite backup/export source
 ├── services/
 │   └── ollama_service.py       # Ollama LLM client wrapper
 ├── Tools/
@@ -31,7 +31,7 @@ project-root/
 - **API** (FastAPI): REST endpoints for tools, database, Ollama integration
 - **Redis**: Job queue for long-running tasks
 - **Ollama**: Local LLM inference (on host network via `host.docker.internal:11434`)
-- **SQLite**: Persistent database for events and cases
+- **PostgreSQL**: Default runtime database for events and cases
 
 ## Database Schema
 
@@ -111,7 +111,7 @@ To add a new tool:
 Splunk Export (CSV)
   → splunk_folder_watcher (watches Splunk_Exports/)
   → splunk_csv_ingestor (imports to SplunkEvent table)
-  → SQLite DB
+  → PostgreSQL DB
   → Dashboard (Database tab)
 ```
 
@@ -156,7 +156,7 @@ docker compose down                   # Stop all
 ## Authentication & Security
 - **Ollama**: Local-only (no auth, host network)
 - **API**: No auth (local network only)
-- **Database**: SQLite (file-based, no network access)
+- **Database**: PostgreSQL by default; SQLite retained for backup/export migration paths
 - **Splunk Integration**: Manual CSV export (smartcard auth in browser)
 
 ## Adding New Features

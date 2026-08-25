@@ -52,6 +52,14 @@ PORT GUIDANCE:
 * This project intentionally uses 5433 for its containerized PostgreSQL to avoid collisions.
 * Recommendation: ignore the installed 5432 service unless you explicitly want to adopt and manage it as the project database.
 
+TEAM USAGE NOTE:
+* Git contains the code and configuration only.
+* Git does NOT contain the live project database contents.
+* A new user who clones the repo must either:
+  -> restore a PostgreSQL dump provided separately
+  -> restore the preserved SQLite backup into PostgreSQL
+  -> connect to an already-hosted shared PostgreSQL database
+
 ==================================================
         INSTALLED TOOLS DIRECTORY
 ==================================================

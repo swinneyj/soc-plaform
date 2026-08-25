@@ -25,9 +25,10 @@
 - ✅ **Analysis Tab**: (UI Ready) Run Ollama models on cases, add context
 - ✅ Dark theme, responsive design, live API status monitoring
 
-### 4. **SQLite Database Integration**
+### 4. **Database Integration**
 - ✅ SQLAlchemy models for `TriageResult`, `SplunkEvent`, `AnalysisResult`
-- ✅ Connected to `splunk-es-backup-toolkit/triage.db` (existing DB)
+- ✅ PostgreSQL is now the default runtime backend
+- ✅ Existing SQLite backup preserved for migration and export workflows
 - ✅ Auto-creates schema on first run
 - ✅ Ready for Splunk data ingestion
 
@@ -64,7 +65,8 @@ curl http://localhost:11434/api/tags  # Verify
 ```
 
 ### Database
-- Existing triage cases: 2 records in SQLite
+- Existing preserved dataset successfully migrated into PostgreSQL
+- SQLite retained as backup/export source only
 - Schema: case_id, rule_name, verdict, confidence_score, analysis_summary, remediation_steps, triaged_at
 
 ---
@@ -102,7 +104,7 @@ curl http://localhost:11434/api/tags  # Verify
 
 2. **Splunk Ingestion Tool**
    - Parse CSV exports from Splunk
-   - Load into SQLite `SplunkEvent` table
+   - Load into the active database backend `SplunkEvent` table
    - Auto-deduplicate
    - Add to Tools catalog
 
@@ -156,7 +158,7 @@ curl http://localhost:11434/api/tags  # Verify
 │   └── Active_Workspace/
 ├── Playbooks/                      # Automated workflows
 ├── splunk-es-backup-toolkit/
-│   └── triage.db                  # SQLite database (existing)
+│   └── triage.db                  # Preserved SQLite backup/export source
 └── CONTAINERIZATION.md             # Previous documentation
 ```
 
@@ -213,7 +215,7 @@ docker compose --profile api up -d
 - **Local-first**: All data stays on your machine, no cloud calls
 - **Containerized**: Run on any OS with Docker
 - **Extensible**: Easy to add new tools, models, or analysis endpoints
-- **Lightweight**: SQLite for simplicity, Ollama for offline AI
+- **Operational default**: PostgreSQL for shared/local durability, Ollama for offline AI
 - **Volume-based**: Data persists separately from containers
 
 ---
@@ -224,7 +226,7 @@ docker compose --profile api up -d
 - [x] Web UI loads and renders
 - [x] Tools catalog displays (28 tools)
 - [x] API endpoints respond
-- [x] SQLite database accessible
+- [x] Active database backend accessible
 - [x] Ollama service detectable
 - [ ] Database endpoints tested (need import fix)
 - [ ] End-to-end analysis flow tested

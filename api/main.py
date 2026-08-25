@@ -144,6 +144,11 @@ def health():
     """Health check endpoint."""
     return {"status": "healthy", "timestamp": datetime.datetime.utcnow().isoformat()}
 
+@app.get("/api/health", tags=["System"])
+def api_health():
+    """Compatibility health endpoint for UI callers that expect an /api prefix."""
+    return {"status": "healthy", "timestamp": datetime.datetime.utcnow().isoformat()}
+
 @app.get("/api/", tags=["System"])
 def api_root():
     """API root with metadata."""
