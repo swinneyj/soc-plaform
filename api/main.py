@@ -15,6 +15,7 @@ import json
 import uuid
 import subprocess
 import datetime
+import re
 from pathlib import Path
 from enum import Enum
 
@@ -67,6 +68,10 @@ class AnalyzeRequest(BaseModel):
     case_id: str
     model: str = "llama2"
     context: str = ""
+
+
+class PastedNotableRequest(BaseModel):
+    raw_text: str = Field(..., description="Pasted notable text from Splunk Incident Review")
 
 # Helper Functions
 def load_registry() -> List[Dict]:
@@ -137,6 +142,231 @@ def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent
         "exit_code": result["exit_code"],
         "completed_at": datetime.datetime.utcnow().isoformat()
     })
+
+
+NOTABLE_FIELD_ALIASES = [
+    ("Additional FieldsValue", "additional_fields_value"),
+    ("Additional Fields Value", "additional_fields_value"),
+    ("Coorelation Search", "correlation_search"),
+    ("Correlation Search", "correlation_search"),
+    ("Security Domain", "security_domain"),
+    ("Destination", "destination"),
+    ("Disposition", "disposition"),
+    ("Username", "username"),
+    ("File Name", "file_name"),
+    ("Risk Score", "risk_score"),
+    ("Severity", "severity"),
+    ("Urgency", "urgency"),
+    ("Status", "status"),
+    ("Actions", "actions"),
+    ("Action", "action"),
+    ("Owner", "owner"),
+    ("Title", "title"),
+    ("Type", "type"),
+    ("Time", "time"),
+    ("Host", "host"),
+    ("User", "user"),
+    ("Value", "value"),
+]
+
+NOTABLE_FIELD_LABELS = {
+    "title": "Title",
+    "correlation_search": "Correlation Search",
+    "type": "Type",
+    "time": "Time",
+    "disposition": "Disposition",
+    "urgency": "Urgency",
+    "status": "Status",
+    "owner": "Owner",
+    "host": "Host",
+    "destination": "Destination",
+    "user": "User",
+    "username": "Username",
+    "actions": "Actions",
+    "action": "Action",
+    "additional_fields_value": "Additional FieldsValue",
+    "value": "Value",
+    "file_name": "File Name",
+    "risk_score": "Risk Score",
+    "security_domain": "Security Domain",
+    "severity": "Severity",
+}
+
+
+def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
+    """Extract common Splunk notable key/value pairs from pasted text."""
+    matches = []
+    normalized = raw_text.replace("\r\n", "\n")
+
+    for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
+        for match in re.finditer(re.escape(alias), normalized, flags=re.IGNORECASE):
+            matches.append({
+                "start": match.start(),
+                "end": match.end(),
+                "canonical": canonical,
+            })
+
+    matches.sort(key=lambda item: (item["start"], -(item["end"] - item["start"])))
+
+    deduped = []
+    current_end = -1
+    for match in matches:
+        if match["start"] < current_end:
+            continue
+        deduped.append(match)
+        current_end = match["end"]
+
+    parsed: Dict[str, str] = {}
+    for index, match in enumerate(deduped):
+        value_start = match["end"]
+        value_end = deduped[index + 1]["start"] if index + 1 < len(deduped) else len(normalized)
+        value = normalized[value_start:value_end].strip(" \t:\n")
+        value = re.sub(r"\s+", " ", value).strip()
+        if value and match["canonical"] not in parsed:
+            parsed[match["canonical"]] = value
+
+    return parsed
+
+
+def parse_structured_notable(raw_text: str) -> Dict[str, str]:
+    """Parse line-oriented notable text in the form `Label: value`."""
+    alias_map = {alias.lower(): canonical for alias, canonical in NOTABLE_FIELD_ALIASES}
+    labels = sorted(alias_map.keys(), key=len, reverse=True)
+    pattern = re.compile(rf"^\s*({'|'.join(re.escape(label) for label in labels)})\s*:\s*(.*)$", re.IGNORECASE)
+
+    parsed: Dict[str, str] = {}
+    for line in raw_text.replace("\r\n", "\n").split("\n"):
+        match = pattern.match(line)
+        if not match:
+            continue
+
+        alias = match.group(1).lower()
+        value = re.sub(r"\s+", " ", match.group(2)).strip()
+        canonical = alias_map.get(alias)
+        if canonical and value and canonical not in parsed:
+            parsed[canonical] = value
+
+    return parsed
+
+
+def render_notable_fields(parsed_fields: Dict[str, str]) -> str:
+    ordered_keys = [label[1] for label in NOTABLE_FIELD_ALIASES]
+    seen = set()
+    lines = []
+    for key in ordered_keys:
+        if key in seen or key not in parsed_fields:
+            continue
+        seen.add(key)
+        label = NOTABLE_FIELD_LABELS.get(key, key.replace("_", " ").title())
+        lines.append(f"{label}: {parsed_fields[key]}")
+
+    if not lines:
+        return ""
+
+    return "\n".join(lines)
+
+
+def parse_notable_timestamp(value: str):
+    if not value:
+        return datetime.datetime.utcnow()
+
+    candidate = value.strip()
+    try:
+        return datetime.datetime.fromisoformat(candidate)
+    except ValueError:
+        try:
+            if len(candidate) > 5 and candidate[-3] == ':':
+                compact_offset = candidate[:-3] + candidate[-2:]
+                return datetime.datetime.strptime(compact_offset, "%Y-%m-%dT%H:%M:%S.000%z")
+        except ValueError:
+            pass
+
+    return datetime.datetime.utcnow()
+
+
+def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dict[str, str], parsed_fields: Dict[str, str]) -> Dict[str, str]:
+    active_dir = os.path.join(platform_root, "Data", "Active_Workspace")
+    os.makedirs(active_dir, exist_ok=True)
+
+    timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    text_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.txt")
+    fields_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.fields.json")
+    mapping_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.map.json")
+
+    with open(text_path, "w", encoding="utf-8") as text_file:
+        text_file.write(sanitized_text)
+
+    with open(fields_path, "w", encoding="utf-8") as fields_file:
+        json.dump(parsed_fields, fields_file, indent=2)
+
+    with open(mapping_path, "w", encoding="utf-8") as mapping_file:
+        json.dump(mapping, mapping_file, indent=2)
+
+    latest_text = os.path.join(active_dir, "Pasted_Notable_latest.txt")
+    latest_fields = os.path.join(active_dir, "Pasted_Notable_latest.fields.json")
+    latest_map = os.path.join(active_dir, "Pasted_Notable_latest.map.json")
+
+    for source_path, dest_path in ((text_path, latest_text), (fields_path, latest_fields), (mapping_path, latest_map)):
+        try:
+            import shutil
+            shutil.copy2(source_path, dest_path)
+        except Exception:
+            pass
+
+    return {
+        "sanitized_text_path": text_path,
+        "fields_path": fields_path,
+        "mapping_path": mapping_path,
+    }
+
+
+def serialize_recent_notable(event) -> Dict[str, Any]:
+    payload = {}
+    try:
+        payload = json.loads(event.raw) if event.raw else {}
+    except Exception:
+        payload = {"sanitized_text": event.raw}
+
+    fields = payload.get("fields", {})
+    return {
+        "id": event.id,
+        "promoted_case_id": payload.get("promoted_case_id"),
+        "promoted_at": payload.get("promoted_at"),
+        "title": fields.get("title") or event.source,
+        "correlation_search": fields.get("correlation_search"),
+        "type": fields.get("type"),
+        "time": fields.get("time") or (event.timestamp.isoformat() if event.timestamp else None),
+        "disposition": fields.get("disposition"),
+        "urgency": fields.get("urgency"),
+        "status": fields.get("status"),
+        "owner": fields.get("owner"),
+        "host": fields.get("host") or event.host,
+        "destination": fields.get("destination"),
+        "user": fields.get("user"),
+        "username": fields.get("username"),
+        "actions": fields.get("actions") or fields.get("action"),
+        "severity": fields.get("severity"),
+        "sanitized_text": payload.get("sanitized_text", ""),
+        "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+    }
+
+
+def derive_triage_verdict(disposition: str) -> str:
+    normalized = (disposition or "").strip().lower()
+    if "false positive" in normalized or "benign" in normalized:
+        return "benign"
+    if "true positive" in normalized or "malicious" in normalized:
+        return "malicious"
+    return "suspicious"
+
+
+def derive_triage_confidence(disposition: str) -> float:
+    normalized = (disposition or "").strip().lower()
+    if not normalized:
+        return 0.5
+    if "false positive" in normalized or "true positive" in normalized or "benign" in normalized:
+        return 0.8
+    return 0.6
 
 # Routes
 @app.get("/health", tags=["System"])
@@ -373,6 +603,182 @@ def get_triage(
         ]
     except Exception as e:
         return []
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/notables/paste", tags=["Database"])
+def paste_notable(request: PastedNotableRequest):
+    """Parse, sanitize, and store a pasted Splunk notable in the database."""
+    raw_text = request.raw_text.strip()
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="No notable text was provided")
+
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+        from text_sanitizer_pipeline.text_sanitizer_pipeline import sanitize_logs_with_tokens, sanitize_pii_phi
+
+        parsed_fields = parse_structured_notable(raw_text)
+        if not parsed_fields:
+            parsed_fields = parse_pasted_notable(raw_text)
+        structured_text = render_notable_fields(parsed_fields) or raw_text
+        sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
+        sanitized_text = sanitize_pii_phi(sanitized_text)
+        sanitized_fields = parse_structured_notable(sanitized_text)
+        if parsed_fields.get("time"):
+            sanitized_fields["time"] = parsed_fields["time"]
+        artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+
+        payload = {
+            "record_type": "splunk_notable_paste",
+            "fields": sanitized_fields,
+            "sanitized_text": sanitized_text,
+            "saved_at": datetime.datetime.utcnow().isoformat(),
+            "artifact_paths": artifact_paths,
+        }
+
+        source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
+        host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
+        timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
+
+        db = SessionLocal()
+        event = SplunkEvent(
+            sourcetype="splunk:notable:pasted",
+            source=source,
+            host=host,
+            raw=json.dumps(payload),
+            timestamp=timestamp,
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+
+        return {
+            "success": True,
+            "event_id": event.id,
+            "parsed_fields": sanitized_fields,
+            "artifact_paths": artifact_paths,
+            "mapping_entries": len(mapping),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/db/notables", tags=["Database"])
+def list_recent_notables(limit: int = Query(20, ge=1, le=200)):
+    """List recently pasted sanitized Splunk notables from the database."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        rows = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).order_by(SplunkEvent.ingested_at.desc()).limit(limit).all()
+
+        return [serialize_recent_notable(row) for row in rows]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/notables/{event_id}/promote", tags=["Database"])
+def promote_notable_to_triage(event_id: int):
+    """Promote a pasted notable into the triage_results table."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent, TriageResult
+
+        db = SessionLocal()
+        event = db.query(SplunkEvent).filter(
+            SplunkEvent.id == event_id,
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).first()
+
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
+
+        try:
+            payload = json.loads(event.raw) if event.raw else {}
+        except Exception:
+            payload = {}
+
+        fields = payload.get("fields", {})
+        existing_case_id = payload.get("promoted_case_id")
+        if existing_case_id:
+            existing_case = db.query(TriageResult).filter(TriageResult.case_id == existing_case_id).first()
+            if existing_case:
+                return {
+                    "success": True,
+                    "already_promoted": True,
+                    "case_id": existing_case.case_id,
+                    "verdict": existing_case.verdict,
+                }
+
+        case_id = existing_case_id or f"NOTABLE-{event.id}"
+        if db.query(TriageResult).filter(TriageResult.case_id == case_id).first():
+            raise HTTPException(status_code=409, detail=f"Case ID {case_id} already exists")
+
+        title = fields.get("title") or event.source or f"Pasted notable {event.id}"
+        correlation_search = fields.get("correlation_search") or title
+        disposition = fields.get("disposition", "")
+        verdict = derive_triage_verdict(disposition)
+        confidence = derive_triage_confidence(disposition)
+        notable_time = fields.get("time") or (event.timestamp.isoformat() if event.timestamp else None)
+
+        summary_parts = [title]
+        if disposition:
+            summary_parts.append(f"Disposition: {disposition}")
+        if fields.get("status"):
+            summary_parts.append(f"Status: {fields['status']}")
+        if notable_time:
+            summary_parts.append(f"Time: {notable_time}")
+
+        remediation_steps = "Review the sanitized notable evidence, validate disposition, and gather any supporting host/user activity before closure."
+
+        triage_case = TriageResult(
+            case_id=case_id,
+            rule_name=correlation_search,
+            rule_id=None,
+            verdict=verdict,
+            confidence_score=confidence,
+            analysis_summary=" | ".join(summary_parts),
+            remediation_steps=remediation_steps,
+            triaged_at=event.timestamp or datetime.datetime.utcnow(),
+        )
+        db.add(triage_case)
+
+        payload["promoted_case_id"] = case_id
+        payload["promoted_at"] = datetime.datetime.utcnow().isoformat()
+        event.raw = json.dumps(payload)
+
+        db.commit()
+
+        return {
+            "success": True,
+            "already_promoted": False,
+            "case_id": case_id,
+            "verdict": verdict,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         try:
             db.close()
