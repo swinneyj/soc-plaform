@@ -1,0 +1,16 @@
+{
+    "Platform": {
+        "environment": "IL5_OFFLINE",
+        "debug_mode": false
+    },
+    "Directories": {
+        "dropzone": "data\\dropzone",
+        "processed": "data\\processed",
+        "archive": "data\\archive",
+        "manifests": "docs\\manifests"
+    },
+    "Intel_Pipeline": {
+        "taxonomy_file": "docs\\manifests\\Threat_Taxonomy.json",
+        "auto_copy_to_clipboard": true
+    }
+}

@@ -1,0 +1,21 @@
+{
+  "name": "Zero-Touch Automated Triage",
+  "description": "Ingest -> Parse/Redact -> Extract IOCs -> Compare on Sites",
+  "steps": [
+    {
+      "name": "Phase 1: Ingest, Parse, and Redact Data",
+      "tool": "Data_Ingestor_Pipeline",
+      "args": "--mode 3 --silent --target \"Data\\Dropzone\""
+    },
+    {
+      "name": "Phase 2: Extract and Defang Network IOCs",
+      "tool": "IOC_Extractor",
+      "args": "--silent --target \"Data\\Dropzone\""
+    },
+    {
+      "name": "Phase 3: Compare IOCs Against Live Threat Feeds",
+      "tool": "Threat_Intel_Fetcher",
+      "args": "--silent --compare_dir \"Data\\Archive\""
+    }
+  ]
+}

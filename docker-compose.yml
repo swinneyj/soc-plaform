@@ -1,0 +1,74 @@
+﻿
+services:
+  # CLI Service: Interactive terminal-based SOC Commander
+  commander-cli:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soc-commander-cli
+    image: soc-platform:latest
+    stdin_open: true
+    tty: true
+    environment:
+      - SOC_PLATFORM_ROOT=/app
+      - COMMANDER_BOOT=1
+    volumes:
+      - ./Data:/app/Data
+      - ./Playbooks:/app/Playbooks
+      - ./Tools:/app/Tools
+      - ./web:/app/web
+      - ./commander.py:/app/commander.py
+      - ./Splunk_Exports:/app/Splunk_Exports
+    working_dir: /app
+    command: python commander.py
+
+  # API Service: FastAPI REST service for programmatic access
+  api-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soc-api-service
+    image: soc-platform:latest
+    environment:
+      - SOC_PLATFORM_ROOT=/app
+      - LOG_LEVEL=INFO
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./Data:/app/Data
+      - ./Playbooks:/app/Playbooks
+      - ./Tools:/app/Tools
+      - ./Splunk_Exports:/app/Splunk_Exports
+      - ./splunk-es-backup-toolkit:/app/splunk-es-backup-toolkit
+    working_dir: /app
+    command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      - redis
+
+  # Redis: Job queue for async tool execution
+  redis:
+    image: redis:7-alpine
+    container_name: soc-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+
+networks:
+  default:
+    name: soc-platform-network

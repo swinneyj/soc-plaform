@@ -1,0 +1,198 @@
+#!/usr/bin/env python3
+"""
+Splunk ES Correlation Rules Importer
+Imports Splunk Enterprise Security correlation rules into the database.
+"""
+
+import os
+import sys
+import json
+from pathlib import Path
+
+# Ensure Tools and the overall platform root are on sys.path
+tools_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, tools_root)
+
+# Platform root is the parent of Tools
+platform_root = os.path.dirname(tools_root)
+if platform_root not in sys.path:
+    sys.path.insert(0, platform_root)
+
+from core_lib.utils import get_platform_root
+
+
+class Colors:
+    """Fallback ANSI color codes for CLI output.
+    Defined here to avoid import errors if not provided by core_lib.utils.
+    """
+    GREEN = "\033[92m"
+    CYAN = "\033[96m"
+    FAIL = "\033[91m"
+    ENDC = "\033[0m"
+
+def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
+    """Import rules from JSON file into database."""
+    if not os.path.exists(json_file):
+        return {"success": False, "error": f"File not found: {json_file}", "imported": 0}
+    
+    try:
+        from db.models import SessionLocal, ESCorrelationRule, SupportiveQuery
+        
+        with open(json_file, 'r') as f:
+            rules_data = json.load(f)
+        
+        # Handle both array and object with "rules" key
+        if isinstance(rules_data, dict) and "rules" in rules_data:
+            rules = rules_data["rules"]
+        elif isinstance(rules_data, list):
+            rules = rules_data
+        else:
+            return {"success": False, "error": "JSON must be array or object with 'rules' key", "imported": 0}
+        
+        db = SessionLocal()
+        imported = 0
+        skipped = 0
+        supportive_imported = 0
+        supportive_skipped = 0
+        errors = []
+        
+        for rule_data in rules:
+            try:
+                # Check if rule already exists
+                existing = db.query(ESCorrelationRule).filter(
+                    ESCorrelationRule.rule_id == rule_data.get("rule_id")
+                ).first()
+
+                # If the rule already exists, reuse it so we can still attach supportive queries
+                if existing:
+                    rule = existing
+                    skipped += 1
+                else:
+                    # Create rule record
+                    rule = ESCorrelationRule(
+                        rule_id=rule_data.get("rule_id", ""),
+                        rule_name=rule_data.get("rule_name", ""),
+                        description=rule_data.get("description", ""),
+                        category=rule_data.get("category", "Unknown"),
+                        severity=rule_data.get("severity", "medium"),
+                        drilldown_fields=json.dumps(rule_data.get("drilldown_fields", [])),
+                        required_closure_fields=json.dumps(rule_data.get("required_closure_fields", [])),
+                        closure_template=rule_data.get("closure_template", ""),
+                        enabled=rule_data.get("enabled", 1)
+                    )
+                    db.add(rule)
+                    imported += 1
+
+                # Optional: import any supportive queries tied to this rule
+                for q in rule_data.get("supportive_queries", []):
+                    try:
+                        title = q.get("title", "").strip()
+                        spl_query = q.get("spl_query", "").strip()
+                        if not title or not spl_query:
+                            supportive_skipped += 1
+                            continue
+
+                        # Avoid duplicate supportive queries for the same rule & title
+                        existing_q = db.query(SupportiveQuery).filter(
+                            SupportiveQuery.rule_id == rule.rule_id,
+                            SupportiveQuery.title == title
+                        ).first()
+                        if existing_q:
+                            supportive_skipped += 1
+                            continue
+
+                        sq = SupportiveQuery(
+                            rule_id=rule.rule_id,
+                            title=title,
+                            description=q.get("description", ""),
+                            spl_query=spl_query
+                        )
+                        db.add(sq)
+                        supportive_imported += 1
+                    except Exception as sq_e:
+                        errors.append(f"Supportive query for rule '{rule.rule_id}': {str(sq_e)[:100]}")
+                
+            except Exception as e:
+                skipped += 1
+                errors.append(f"Rule '{rule_data.get('rule_name', 'Unknown')}': {str(e)[:100]}")
+        
+        db.commit()
+        db.close()
+        
+        if not silent:
+            print(f"{Colors.GREEN}[+] Import complete!{Colors.ENDC}")
+            print(f"    Rules - Imported: {imported} | Skipped: {skipped}")
+            print(f"    Supportive Queries - Imported: {supportive_imported} | Skipped: {supportive_skipped}")
+            if errors:
+                print(f"    Errors: {len(errors)}")
+                for err in errors[:5]:
+                    print(f"      - {err}")
+        
+        return {
+            "success": True,
+            "imported": imported,
+            "skipped": skipped,
+            "errors": errors
+        }
+    
+    except Exception as e:
+        return {"success": False, "error": str(e), "imported": 0}
+
+def list_rules(silent: bool = False) -> dict:
+    """List all imported rules."""
+    try:
+        from db.models import SessionLocal, ESCorrelationRule
+        
+        db = SessionLocal()
+        rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
+        db.close()
+        
+        result = {
+            "success": True,
+            "total": len(rules),
+            "rules": [
+                {
+                    "rule_id": r.rule_id,
+                    "rule_name": r.rule_name,
+                    "category": r.category,
+                    "severity": r.severity,
+                    "description": r.description[:100] + "..." if len(r.description) > 100 else r.description
+                }
+                for r in rules
+            ]
+        }
+        
+        if not silent:
+            print(f"{Colors.CYAN}[*] Available ES Correlation Rules:{Colors.ENDC}\n")
+            for rule in result["rules"]:
+                print(f"{Colors.GREEN}{rule['rule_name']}{Colors.ENDC}")
+                print(f"   ID: {rule['rule_id']}")
+                print(f"   Category: {rule['category']} | Severity: {rule['severity']}\n")
+        
+        return result
+    
+    except Exception as e:
+        return {"success": False, "error": str(e), "total": 0, "rules": []}
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description="Import Splunk ES correlation rules")
+    parser.add_argument('--import', type=str, dest='import_file', help='JSON file to import')
+    parser.add_argument('--list', action='store_true', help='List all imported rules')
+    parser.add_argument('--silent', action='store_true', help='Suppress output')
+    
+    args = parser.parse_args()
+    
+    if args.import_file:
+        result = import_rules_from_json(args.import_file, args.silent)
+        if not result["success"]:
+            print(f"{Colors.FAIL}[!] Error: {result['error']}{Colors.ENDC}")
+            sys.exit(1)
+        sys.exit(0)
+    
+    if args.list or not args.import_file:
+        list_rules(args.silent)
+
+if __name__ == "__main__":
+    main()

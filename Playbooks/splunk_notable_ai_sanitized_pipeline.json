@@ -1,0 +1,17 @@
+{
+  "name": "Splunk Notable AI (Sanitize + Analyze)",
+  "description": "Paste or provide raw-notable text from Splunk ES Incident Review, sanitize it, then automatically build an AI prompt for SPL, disposition, and a two-sentence closing comment.",
+  "enabled": true,
+  "steps": [
+    {
+      "name": "Phase 1: Sanitize & Reflow Notable Text",
+      "tool": "Text_Sanitizer_Pipeline",
+      "args": ""
+    },
+    {
+      "name": "Phase 2: Build AI Prompt from Sanitized Notable",
+      "tool": "Splunk_Notable_AI_Helper",
+      "args": "--evidence Data/Active_Workspace/Sanitized_Text_latest.txt"
+    }
+  ]
+}

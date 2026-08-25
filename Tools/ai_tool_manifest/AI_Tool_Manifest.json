@@ -1,0 +1,427 @@
+{
+    "Generated": "2026-08-05 11:18:23",
+    "Arsenal": [
+        {
+            "Tool_Name": "archive workspace",
+            "File_Name": "Archive_Workspace.py.txt",
+            "Language": "Python",
+            "Description": "Safely moves processed text and markdown files from a working folder into Cold Storage to prevent duplicate ingestion.",
+            "Last_Modified": "2026-08-04 16:32:04",
+            "Functions": [
+                "archive_files",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "shutil",
+                "datetime"
+            ]
+        },
+        {
+            "Tool_Name": "automated triage",
+            "File_Name": "Automated_Triage.py.txt",
+            "Language": "Python",
+            "Description": "Playbook: Hashes a file, extracts all IOCs, and cross-references them against the local Knowledge Base.",
+            "Last_Modified": "2026-08-04 14:24:56",
+            "Functions": [
+                "get_file_stats",
+                "extract_iocs",
+                "cross_reference_kb",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "re",
+                "hashlib"
+            ]
+        },
+        {
+            "Tool_Name": "auto tagger",
+            "File_Name": "Auto_Tagger.py.txt",
+            "Language": "Python",
+            "Description": "Scans vault, tags known scripts, and provides an interactive AI-assist menu for unknown ones.",
+            "Last_Modified": "2026-08-04 15:35:24",
+            "Functions": [
+                "copy_to_clipboard",
+                "tag_scripts"
+            ],
+            "Imports": [
+                "os",
+                "subprocess"
+            ]
+        },
+        {
+            "Tool_Name": "commander",
+            "File_Name": "Commander.py",
+            "Language": "Python",
+            "Description": "The master orchestrator for your SOC tools (Self-Healing, Categorized UI).",
+            "Last_Modified": "2026-08-04 15:34:02",
+            "Functions": [
+                "get_category",
+                "get_tools",
+                "run_boot_sequence",
+                "print_menu",
+                "display_info",
+                "run_tool",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "sys",
+                "json",
+                "subprocess",
+                "collections"
+            ]
+        },
+        {
+            "Tool_Name": "compile and sieve",
+            "File_Name": "Compile_and_Sieve.py.txt",
+            "Language": "Python",
+            "Description": "Scans a folder for MD/TXT files, extracts high-value logic, and outputs AI-ready chunk files to the Knowledge Base.",
+            "Last_Modified": "2026-08-04 16:54:48",
+            "Functions": [
+                "resolve_default_output",
+                "extract_and_chunk",
+                "playbook_compile_and_sieve",
+                "compile_and_sieve"
+            ],
+            "Imports": [
+                "os"
+            ]
+        },
+        {
+            "Tool_Name": "config_manager",
+            "File_Name": "config_manager.py.txt",
+            "Language": "Python",
+            "Description": "Core engine module to load, auto-generate, and interactively edit the master global_config.json.",
+            "Last_Modified": "2026-08-05 11:00:13",
+            "Functions": [
+                "get_config_path",
+                "generate_default_config",
+                "get_config",
+                "save_config",
+                "interactive_menu"
+            ],
+            "Imports": [
+                "os",
+                "json",
+                "sys"
+            ]
+        },
+        {
+            "Tool_Name": "generate manifest",
+            "File_Name": "Generate_AI_Manifest.py.txt",
+            "Language": "Python",
+            "Description": "Deep-scans the arsenal to extract tools, descriptions, functions, and imports (Forgiving mode).",
+            "Last_Modified": "2026-08-04 14:50:48",
+            "Functions": [
+                "parse_python_file",
+                "parse_powershell_file",
+                "scan_arsenal",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "re",
+                "json",
+                "ast",
+                "datetime"
+            ]
+        },
+        {
+            "Tool_Name": "knowledge pack manager",
+            "File_Name": "Knowledge_Pack_Manager.py.txt",
+            "Language": "Python",
+            "Description": "Lists, validates, and initializes offline knowledge packs for the local SOC platform.",
+            "Last_Modified": "2026-08-04 10:50:56",
+            "Functions": [
+                "ensure_packs_root",
+                "slugify",
+                "pack_paths",
+                "list_packs",
+                "validate_pack",
+                "init_pack",
+                "pause_before_return",
+                "manage_knowledge_packs"
+            ],
+            "Imports": [
+                "json",
+                "os"
+            ]
+        },
+        {
+            "Tool_Name": "offline_ingestor",
+            "File_Name": "offline_ingestor.py",
+            "Language": "Python",
+            "Description": "Ingests, sanitizes, and formats out-of-band OSINT files (HTML/TXT) dropped into the environment.",
+            "Last_Modified": "2026-08-05 08:30:07",
+            "Functions": [
+                "setup_directories",
+                "strip_html",
+                "process_file",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "re",
+                "shutil",
+                "datetime"
+            ]
+        },
+        {
+            "Tool_Name": "osint_parser",
+            "File_Name": "osint_parser.py.txt",
+            "Language": "Python",
+            "Description": "Auto-extracts core article text from OSINT files, wraps in AI Prompt, and loads to clipboard (Master Config Enabled).",
+            "Last_Modified": "2026-08-05 10:25:07",
+            "Functions": [
+                "setup_directories",
+                "smart_extract_text",
+                "copy_to_clipboard",
+                "format_for_ai",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "sys",
+                "re",
+                "shutil",
+                "subprocess",
+                "config_manager"
+            ]
+        },
+        {
+            "Tool_Name": "parse transcript",
+            "File_Name": "Parse_Transcript.py.txt",
+            "Language": "Python",
+            "Description": "Cleans and formats messy copy-pasted web video transcripts into readable paragraphs (Supports Batch Folders).",
+            "Last_Modified": "2026-08-04 16:44:28",
+            "Functions": [
+                "clean_transcript",
+                "batch_clean_transcripts",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "re"
+            ]
+        },
+        {
+            "Tool_Name": "platform_builder",
+            "File_Name": "platform_builder.py.txt",
+            "Language": "Python",
+            "Description": "Aggressively sweeps all loose scripts into a clean, enterprise folder structure.",
+            "Last_Modified": "2026-08-05 11:18:16",
+            "Functions": [
+                "build_and_sweep"
+            ],
+            "Imports": [
+                "os",
+                "shutil"
+            ]
+        },
+        {
+            "Tool_Name": "platform_packager",
+            "File_Name": "platform_packager.py.txt",
+            "Language": "Python",
+            "Description": "Compiles the entire SOC_Tools architecture, scripts, and configurations into a deployable ZIP file.",
+            "Last_Modified": "2026-08-05 08:59:55",
+            "Functions": [
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "zipfile",
+                "datetime"
+            ]
+        },
+        {
+            "Tool_Name": "playbook engine",
+            "File_Name": "Playbook_Engine.py.txt",
+            "Language": "Python",
+            "Description": "Dynamically executes JSON-based playbooks to chain modular tools together.",
+            "Last_Modified": "2026-08-04 16:51:45",
+            "Functions": [
+                "load_tool_module",
+                "main"
+            ],
+            "Imports": [
+                "os",
+                "sys",
+                "json",
+                "importlib.util",
+                "importlib.machinery"
+            ]
+        },
+        {
+            "Tool_Name": "search kb",
+            "File_Name": "Search_KB.py.txt",
+            "Language": "Python",
+            "Description": "Searches local SOC documentation for keywords and displays the full relevant SOP/Section.",
+            "Last_Modified": "2026-08-04 10:27:04",
+            "Functions": [
+                "resolve_docs_vault",
+                "search_knowledge_base"
+            ],
+            "Imports": [
+                "os",
+                "re"
+            ]
+        },
+        {
+            "Tool_Name": "skill audit",
+            "File_Name": "Skill_Audit.py.txt",
+            "Language": "Python",
+            "Description": "Audits the Commander manifest, tool headers, aliases, dependencies, and future browser/credential flags.",
+            "Last_Modified": "2026-08-04 15:27:57",
+            "Functions": [
+                "pause_before_return",
+                "read_tool_header",
+                "load_manifest",
+                "gather_tool_files",
+                "audit_manifest",
+                "print_findings",
+                "fix_manifest_sync",
+                "run_skill_audit"
+            ],
+            "Imports": [
+                "json",
+                "os",
+                "shutil",
+                "subprocess",
+                "sys"
+            ]
+        },
+        {
+            "Tool_Name": "tool harvester",
+            "File_Name": "Tool_Harvester.py.txt",
+            "Language": "Python",
+            "Description": "Scans Desktop and Downloads for new scripts, strips hidden .txt extensions, and moves them to the vault.",
+            "Last_Modified": "2026-08-04 15:35:30",
+            "Functions": [
+                "harvest_scripts"
+            ],
+            "Imports": [
+                "os",
+                "shutil"
+            ]
+        },
+        {
+            "Tool_Name": "Extract Documenttext",
+            "File_Name": "Extract-DocumentText.ps1.txt",
+            "Language": "PowerShell",
+            "Description": "No description provided.",
+            "Last_Modified": "2026-07-31 15:50:09",
+            "Functions": [],
+            "Imports": []
+        },
+        {
+            "Tool_Name": "Check Drift",
+            "File_Name": "Check-Drift.ps1.txt",
+            "Language": "PowerShell",
+            "Description": "No description provided.",
+            "Last_Modified": "2026-07-31 15:50:16",
+            "Functions": [],
+            "Imports": []
+        },
+        {
+            "Tool_Name": "Clear Debuglogs",
+            "File_Name": "Clear-DebugLogs.ps1.txt",
+            "Language": "PowerShell",
+            "Description": "No description provided.",
+            "Last_Modified": "2026-07-31 15:50:43",
+            "Functions": [],
+            "Imports": []
+        },
+        {
+            "Tool_Name": "Wipe Alldebuglogs",
+            "File_Name": "Wipe-AllDebugLogs.ps1.txt",
+            "Language": "PowerShell",
+            "Description": "No description provided.",
+            "Last_Modified": "2026-07-31 15:50:38",
+            "Functions": [],
+            "Imports": []
+        },
+        {
+            "Tool_Name": "mde incident queue",
+            "File_Name": "MDE_Incident_Queue.py.txt",
+            "Language": "Python",
+            "Description": "Dedupes MDE Incidents CSV into a summary table (Interactive).",
+            "Last_Modified": "2026-07-31 15:45:14",
+            "Functions": [
+                "summarize_mde_incidents",
+                "join_set"
+            ],
+            "Imports": [
+                "csv",
+                "os",
+                "collections"
+            ]
+        },
+        {
+            "Tool_Name": "mde summarizer",
+            "File_Name": "MDE_Summarizer.py.txt",
+            "Language": "Python",
+            "Description": "Dedupes MDE Alerts CSV into a clean summary table (Interactive).",
+            "Last_Modified": "2026-07-31 15:45:06",
+            "Functions": [
+                "summarize_mde_alerts"
+            ],
+            "Imports": [
+                "csv",
+                "os",
+                "collections"
+            ]
+        },
+        {
+            "Tool_Name": "parse threat analytics",
+            "File_Name": "Parse_Threat_Analytics.py.txt",
+            "Language": "Python",
+            "Description": "Parses raw Defender Threat Analytics paste into structured tables (Interactive).",
+            "Last_Modified": "2026-07-31 15:45:21",
+            "Functions": [
+                "parse_threat_analytics"
+            ],
+            "Imports": [
+                "os"
+            ]
+        },
+        {
+            "Tool_Name": "Decode B64",
+            "File_Name": "Decode-B64.ps1.txt",
+            "Language": "PowerShell",
+            "Description": "No description provided.",
+            "Last_Modified": "2026-07-31 15:50:24",
+            "Functions": [],
+            "Imports": []
+        },
+        {
+            "Tool_Name": "filecheck",
+            "File_Name": "Filecheck.py",
+            "Language": "Python",
+            "Description": "Reliably counts lines, searches for phrases, and hashes a file (Interactive).",
+            "Last_Modified": "2026-07-31 15:53:42",
+            "Functions": [
+                "reliable_file_check"
+            ],
+            "Imports": [
+                "hashlib",
+                "os"
+            ]
+        },
+        {
+            "Tool_Name": "sanitize logs",
+            "File_Name": "Sanitize_Logs.py",
+            "Language": "Python",
+            "Description": "Redacts IPs, Hostnames, and Ticket Numbers from log files (Interactive Output).",
+            "Last_Modified": "2026-07-31 15:38:57",
+            "Functions": [
+                "sanitize_content"
+            ],
+            "Imports": [
+                "re",
+                "os"
+            ]
+        }
+    ]
+}

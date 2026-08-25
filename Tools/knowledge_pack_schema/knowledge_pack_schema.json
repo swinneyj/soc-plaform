@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Knowledge Pack Manifest",
+  "type": "object",
+  "required": [
+    "name",
+    "description",
+    "version",
+    "source_system"
+  ],
+  "properties": {
+    "name": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "source_system": {
+      "type": "string"
+    },
+    "offline_ready": {
+      "type": "boolean"
+    },
+    "search_enabled": {
+      "type": "boolean"
+    }
+  },
+  "additionalProperties": true
+}

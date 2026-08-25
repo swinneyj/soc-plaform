@@ -1,0 +1,17 @@
+{
+  "name": "ai_analysis_pipeline",
+  "description": "Runs AI Analyst Engine on an evidence file, then Automated Reporter on a chosen AI prompt to produce an HTML briefing.",
+  "enabled": true,
+  "steps": [
+    {
+      "name": "Phase 1: Build AI Analysis Prompt",
+      "tool": "AI_Analyst_Engine",
+      "args": "--evidence {{DYNAMIC_TARGET}}"
+    },
+    {
+      "name": "Phase 2: Generate HTML Briefing from AI Prompt",
+      "tool": "Automated_Reporter",
+      "args": "--mode 1"
+    }
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "name": "splunk_mde_triage_pipeline",
+  "description": "FUTURE (DISABLED): Pipeline for triaging exported Splunk notables and MDE incidents using local tools only. This playbook is architecture/infrastructure only and MUST NOT be used on any production or mission data in the current environment.",
+  "enabled": false,
+  "notes": "This playbook is intentionally disabled and exists solely as future infrastructure. DO NOT set 'enabled' to true, or use this playbook with Splunk/MDE exports, without explicit written leadership approval documenting the authorized data scope and usage.",
+  "steps": [
+    {
+      "name": "Phase 1: Normalize and Triage MDE Export (if provided)",
+      "tool": "mde_triage_aggregator",
+      "args": "--file {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 2: Normalize and Parse Splunk Notables Export (if provided)",
+      "tool": "splunk_notable_parser",
+      "args": "--file {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 3: Extract IOCs from Aggregated Outputs",
+      "tool": "IOC_Extractor",
+      "args": "--target {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 4: Generate AI Prompt Using SOC SKILL",
+      "tool": "AI_Analyst_Engine",
+      "args": "--evidence {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 5: Build Human-Readable HTML Summary",
+      "tool": "Automated_Reporter",
+      "args": "--mode 1"
+    }
+  ]
+}

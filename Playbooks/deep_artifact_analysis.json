@@ -1,0 +1,21 @@
+{
+  "name": "deep_artifact_analysis",
+  "description": "Extracts Base64, decodes certs, and parses IOCs from raw evidence concurrently.",
+  "steps": [
+    {
+      "name": "Phase 1: Deep Base64 Payload Extraction",
+      "tool": "base64_decoder",
+      "args": "--target {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 2: PKI Certificate Analysis",
+      "tool": "pki_cert_decoder",
+      "args": "--cert {{DYNAMIC_TARGET}} --silent"
+    },
+    {
+      "name": "Phase 3: Aggressive Network IOC Extraction",
+      "tool": "ioc_extractor",
+      "args": "--target {{DYNAMIC_TARGET}} --silent"
+    }
+  ]
+}

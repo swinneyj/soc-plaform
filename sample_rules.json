@@ -1,0 +1,257 @@
+{
+  "rules": [
+    {
+      "rule_id": "citrix_netscaler_saml_inventory",
+      "rule_name": "Citrix NetScaler SAML IdP Attack Surface Inventory",
+      "description": "Detects reconnaissance activity against Citrix NetScaler SAML IdP infrastructure.",
+      "category": "Reconnaissance",
+      "severity": "medium",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Citrix NetScaler SAML IdP Attack Surface Inventory\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAffected Asset:\nHost: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "citrix_netscaler_cve_2026_8451",
+      "rule_name": "Citrix NetScaler SAML IdP Exploitation Attempt Indicators (CVE-2026-8451)",
+      "description": "Detects exploitation attempts targeting CVE-2026-8451 in Citrix NetScaler SAML IdP.",
+      "category": "Exploitation",
+      "severity": "high",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Citrix NetScaler CVE-2026-8451 Exploitation Attempt\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAffected Asset:\nHost: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "f5_bigip_pki_denial_abuse",
+      "rule_name": "F5 BIG-IP APM PKI Client-Certificate Denial Abuse",
+      "description": "Detects abuse patterns in F5 BIG-IP APM client certificate denial handling.",
+      "category": "Access Control Abuse",
+      "severity": "medium",
+      "drilldown_fields": ["host", "src_ip"],
+      "required_closure_fields": ["host", "source_ip", "justification"],
+      "closure_template": "CLOSURE NOTES - F5 BIG-IP PKI Client-Certificate Denial Abuse\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nNetwork Context:\nAffected Host: {host}\nSource IP: {source_ip}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "f5_bigip_pki_convergence",
+      "rule_name": "F5 BIG-IP APM PKI Client-Certificate Denial-to-Grant Convergence",
+      "description": "Detects transition patterns from certificate denial to grant in F5 BIG-IP APM.",
+      "category": "Access Control Abuse",
+      "severity": "high",
+      "drilldown_fields": ["host", "src_ip"],
+      "required_closure_fields": ["host", "source_ip", "justification"],
+      "closure_template": "CLOSURE NOTES - F5 BIG-IP PKI Denial-to-Grant Convergence\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nNetwork Context:\nAffected Host: {host}\nSource IP: {source_ip}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "f5_bigip_ssl_errors",
+      "rule_name": "F5 BIG-IP High-Volume SSL Connection Errors",
+      "description": "Detects high-volume SSL connection errors on F5 BIG-IP systems.",
+      "category": "Network Anomaly",
+      "severity": "medium",
+      "drilldown_fields": ["host", "src_ip", "dest_ip", "signature"],
+      "required_closure_fields": ["host", "source_ip", "dest_ip", "signature", "justification"],
+      "closure_template": "CLOSURE NOTES - F5 BIG-IP High-Volume SSL Connection Errors\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nNetwork Context:\nAffected Host: {host}\nSource IP: {source_ip}\nDestination IP: {dest_ip}\nSSL Error Signature: {signature}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "f5_bigip_tls_handshake",
+      "rule_name": "F5 BIG-IP TLS/SSL Handshake Failure Spikes",
+      "description": "Detects spike patterns in TLS/SSL handshake failures on F5 BIG-IP.",
+      "category": "Network Anomaly",
+      "severity": "medium",
+      "drilldown_fields": ["host", "src_ip"],
+      "required_closure_fields": ["host", "source_ip", "justification"],
+      "closure_template": "CLOSURE NOTES - F5 BIG-IP TLS/SSL Handshake Failure Spikes\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nNetwork Context:\nAffected Host: {host}\nSource IP: {source_ip}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "git_child_process",
+      "rule_name": "Git Unexpected Child Process",
+      "description": "Detects unexpected child processes spawned from Git executable.",
+      "category": "Process Execution Anomaly",
+      "severity": "high",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Git Unexpected Child Process\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAffected Asset:\nHost: {host}\n\nJustification for Closure:\n{justification}\n\nRecommendation: Review underlying raw event for process chain details.\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "interactive_logon_service_accounts",
+      "rule_name": "Interactive Logon to Service Accounts",
+      "description": "Detects interactive logon attempts to service accounts.",
+      "category": "Identity & Access",
+      "severity": "high",
+      "drilldown_fields": ["host", "user", "process"],
+      "required_closure_fields": ["host", "user", "process_name", "justification"],
+      "closure_template": "CLOSURE NOTES - Interactive Logon to Service Accounts\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nIdentity Context:\nAffected Host: {host}\nUser Account: {user}\nProcess: {process_name}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "linux_auditd_ssh_keys",
+      "rule_name": "Linux Auditd Find Ssh Private Keys",
+      "description": "Detects attempts to search for SSH private keys via Linux auditd.",
+      "category": "Credential Access",
+      "severity": "high",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Linux Auditd SSH Private Key Search\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAffected Asset:\nHost: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "linux_ngrok",
+      "rule_name": "Linux Ngrok Reverse Proxy Usage",
+      "description": "Detects usage of Ngrok reverse proxy tunneling tool on Linux systems.",
+      "category": "Exfiltration",
+      "severity": "high",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Linux Ngrok Reverse Proxy Usage\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAffected Asset:\nHost: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "linux_sudoers_access",
+      "rule_name": "Linux Possible Access To Sudoers File",
+      "description": "Detects potential unauthorized access to sudoers configuration file.",
+      "category": "Privilege Escalation",
+      "severity": "high",
+      "drilldown_fields": ["host", "user"],
+      "required_closure_fields": ["host", "user", "justification"],
+      "closure_template": "CLOSURE NOTES - Linux Sudoers File Access\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nIdentity & Asset Context:\nAffected Host: {host}\nUser Account: {user}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "linux_ssh_key_creation",
+      "rule_name": "Linux Possible ssh Key File Creation",
+      "description": "Detects creation of SSH key files on Linux systems.",
+      "category": "Privilege Escalation",
+      "severity": "high",
+      "drilldown_fields": ["host", "user"],
+      "required_closure_fields": ["host", "user", "justification"],
+      "closure_template": "CLOSURE NOTES - Linux SSH Key Creation\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nIdentity & Asset Context:\nAffected Host: {host}\nUser Account: {user}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "linux_proxy_socks_curl",
+      "rule_name": "Linux Proxy Socks Curl",
+      "description": "Detects SOCKS proxy usage via curl on Linux systems.",
+      "category": "Exfiltration",
+      "severity": "high",
+      "drilldown_fields": ["host", "command"],
+      "required_closure_fields": ["host", "command", "justification"],
+      "closure_template": "CLOSURE NOTES - Linux SOCKS Proxy Usage\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nCommand Execution Context:\nAffected Host: {host}\nCommand: {command}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "network_change_detected",
+      "rule_name": "Network Change Detected",
+      "description": "Detects unauthorized changes to network configuration.",
+      "category": "Configuration Change",
+      "severity": "high",
+      "drilldown_fields": ["host", "command"],
+      "required_closure_fields": ["host", "command", "justification"],
+      "closure_template": "CLOSURE NOTES - Network Configuration Change\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nConfiguration Change:\nAffected Host: {host}\nCommand/Change: {command}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "powershell_in_memory",
+      "rule_name": "PowerShell In-Memory Execution",
+      "description": "Detects in-memory code execution via PowerShell.",
+      "category": "Code Execution",
+      "severity": "critical",
+      "drilldown_fields": ["host", "user", "command"],
+      "required_closure_fields": ["host", "user", "command", "justification"],
+      "closure_template": "CLOSURE NOTES - PowerShell In-Memory Execution\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nExecution Context:\nAffected Host: {host}\nUser Account: {user}\nCommand: {command}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "public_bucket_exposure",
+      "rule_name": "Public Bucket / Storage Exposure",
+      "description": "Detects publicly exposed cloud storage buckets or containers.",
+      "category": "Data Exposure",
+      "severity": "critical",
+      "drilldown_fields": ["host", "src_ip", "bucket_name"],
+      "required_closure_fields": ["host", "source_ip", "bucket_name", "justification"],
+      "closure_template": "CLOSURE NOTES - Public Bucket/Storage Exposure\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nExposure Details:\nAffected Host: {host}\nSource IP: {source_ip}\nBucket Name: {bucket_name}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "sso_brute_force_pingfederate",
+      "rule_name": "SSO Brute Force Success - PingFederate",
+      "description": "Detects successful brute force attacks against PingFederate SSO.",
+      "category": "Authentication Brute Force",
+      "severity": "critical",
+      "drilldown_fields": ["host", "user", "signature"],
+      "required_closure_fields": ["host", "user", "signature", "justification"],
+      "closure_template": "CLOSURE NOTES - PingFederate SSO Brute Force Success\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAuthentication Attack:\nAffected Host: {host}\nTargeted User: {user}\nAttack Signature: {signature}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "combined_brute_force_spray",
+      "rule_name": "Security Alert: Combined Brute-Force and Password Spraying Attack",
+      "description": "Detects combined brute-force and password spraying attacks.",
+      "category": "Authentication Attack",
+      "severity": "critical",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Combined Brute-Force & Password Spraying\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nAttack Details:\nTarget Host: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "dnsadmins_addition",
+      "rule_name": "Suspicious Addition to DnsAdmins Group",
+      "description": "Detects unauthorized additions to DnsAdmins security group.",
+      "category": "Privilege Escalation",
+      "severity": "critical",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Suspicious DnsAdmins Group Addition\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nPrivilege Escalation:\nAffected Host: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "double_extension_file",
+      "rule_name": "Suspicious Double Extension File Creation",
+      "description": "Detects creation of files with suspicious double file extensions.",
+      "category": "Malware / Phishing",
+      "severity": "high",
+      "drilldown_fields": ["host", "user", "file_name"],
+      "required_closure_fields": ["host", "user", "file_name", "justification"],
+      "closure_template": "CLOSURE NOTES - Double Extension File Creation\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nFile Artifact:\nAffected Host: {host}\nUser Account: {user}\nFile Name: {file_name}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "lotl_outbound_connection",
+      "rule_name": "Suspicious LotL Process Outbound Connection",
+      "description": "Detects Living-off-the-Land (LotL) processes making anomalous outbound connections.",
+      "category": "C2 / Malware",
+      "severity": "high",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Suspicious LotL Outbound Connection\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nNetwork Activity:\nAffected Host: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "local_admin_addition",
+      "rule_name": "Unauthorized Local Administrator Group Addition",
+      "description": "Detects unauthorized additions to local Administrator group.",
+      "category": "Privilege Escalation",
+      "severity": "critical",
+      "drilldown_fields": ["host"],
+      "required_closure_fields": ["host", "justification"],
+      "closure_template": "CLOSURE NOTES - Unauthorized Local Admin Addition\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nPrivilege Escalation:\nAffected Host: {host}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    },
+    {
+      "rule_id": "tier0_logon",
+      "rule_name": "Unauthorized Tier 0 Interactive Logon",
+      "description": "Detects unauthorized interactive logons to Tier 0 systems.",
+      "category": "Identity & Access",
+      "severity": "critical",
+      "drilldown_fields": ["host", "user"],
+      "required_closure_fields": ["host", "user", "justification"],
+      "closure_template": "CLOSURE NOTES - Unauthorized Tier 0 Interactive Logon\n\nAlert Rule: {rule_name}\nCase ID: {case_id}\nDate: {date}\nDisposition: {disposition}\n\nIdentity Context:\nTier 0 System: {host}\nUser Account: {user}\n\nJustification for Closure:\n{justification}\n\nStatus: CLOSED\nAnalyst: Auto-Generated\n",
+      "enabled": 1
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "name": "incident_case_bundle",
+  "description": "Builds a v1 consolidated case bundle from a folder of exports (files are copied only; further parsing can be layered later).",
+  "enabled": true,
+  "steps": [
+    {
+      "name": "Phase 1: Build Case Bundle from Source Folder",
+      "tool": "Case_Bundle_Builder",
+      "args": "--source_dir {{DYNAMIC_TARGET}}"
+    }
+  ]
+}
