@@ -99,6 +99,16 @@ Invoke-RestMethod http://127.0.0.1:8000/health
 Invoke-RestMethod http://127.0.0.1:8000/api/health
 ```
 
+## After A Reboot
+
+Use this from the repo root:
+
+```powershell
+.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
+```
+
+Or double-click `Launch_Commander.bat`.
+
 ## If A User Wants To Use Their Installed PostgreSQL Instead
 
 They can, but it should be an explicit choice.

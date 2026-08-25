@@ -4,8 +4,12 @@
 
 QUICK START:
 1. Ensure Python 3 is installed on your system.
-2. Double-click 'launch_commander.bat' to open the central menu.
+2. Double-click 'launch_commander.bat' to bring the platform, API, and Commander back up after a reboot.
 3. Type the ID number or Name of a tool to run it.
+
+RESTART PATH:
+* Preferred one-command restart:
+  .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
 
 COMMANDS:
 * reload       - Scans the folder for new tools and updates the menu.

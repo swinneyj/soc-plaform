@@ -10,9 +10,9 @@ services:
       - SOC_PLATFORM_ROOT=/app
       - LOG_LEVEL=INFO
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
+      - DATABASE_URL=${COMPOSE_DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
     ports:
-      - "8000:8000"
+      - "${API_HOST_PORT:-8000}:8000"
     volumes:
       - ./Data:/app/Data
       - ./Playbooks:/app/Playbooks
@@ -51,8 +51,6 @@ services:
   # Redis: Job queue for async tool execution
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redis-data:/data
     healthcheck:
