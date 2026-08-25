@@ -62,6 +62,8 @@ docker compose up -d postgres
 .\scripts\restore_postgres_dump.ps1 -InputPath .\local-backups\current_soc_platform_dump.sql
 ```
 
+This helper resets the `public` schema before import so rerunning setup on the same machine does not accumulate duplicate objects.
+
 ### Start the API
 
 ```powershell

@@ -85,6 +85,8 @@ Use this only if the team intentionally wants the installed local PostgreSQL ser
 .\scripts\restore_postgres_dump.ps1 -InputPath .\current_soc_platform_dump.sql
 ```
 
+The restore helper resets the `public` schema before loading the dump so repeated restores stay clean.
+
 ### Create a PostgreSQL dump for another user
 
 ```powershell
