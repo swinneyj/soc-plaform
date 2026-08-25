@@ -55,6 +55,7 @@ if ($postgresPort) {
 }
 
 $lockFilePath = Join-Path $SharedDumpDir "db_in_use.lock.json"
+$dumpMetadataPath = Join-Path $SharedDumpDir "current_soc_platform_dump.metadata.json"
 Write-Host ""
 Write-Host "Shared Lock File Present: $(Test-Path $lockFilePath)"
 if (Test-Path $lockFilePath) {
@@ -63,5 +64,15 @@ if (Test-Path $lockFilePath) {
         Write-Host ($lockData | ConvertTo-Json -Depth 3)
     } catch {
         Write-Warning "Could not parse lock file: $lockFilePath"
+    }
+}
+
+Write-Host "Shared Dump Metadata Present: $(Test-Path $dumpMetadataPath)"
+if (Test-Path $dumpMetadataPath) {
+    try {
+        $dumpMetadata = Get-Content $dumpMetadataPath -Raw | ConvertFrom-Json
+        Write-Host ($dumpMetadata | ConvertTo-Json -Depth 3)
+    } catch {
+        Write-Warning "Could not parse dump metadata file: $dumpMetadataPath"
     }
 }

@@ -5,6 +5,7 @@ param(
 )
 
 $outputPath = Join-Path $ShareDir $FileName
+$metadataPath = Join-Path $ShareDir "current_soc_platform_dump.metadata.json"
 
 if (-not (Test-Path $ShareDir)) {
     New-Item -ItemType Directory -Path $ShareDir -Force | Out-Null
@@ -14,4 +15,18 @@ if (-not (Test-Path $ShareDir)) {
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+$dumpFile = Get-Item $outputPath
+$metadata = @{
+    file_name = $dumpFile.Name
+    full_path = $dumpFile.FullName
+    size_bytes = $dumpFile.Length
+    exported_at = (Get-Date).ToString("o")
+    exported_by_user = $env:USERNAME
+    exported_by_computer = $env:COMPUTERNAME
+    database_url = $DatabaseUrl
+} | ConvertTo-Json
+
+Set-Content -Path $metadataPath -Value $metadata -Encoding UTF8
+
 Write-Host "[+] Shared dump updated: $outputPath"
+Write-Host "[+] Shared dump metadata updated: $metadataPath"

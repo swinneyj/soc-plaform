@@ -5,10 +5,16 @@ param(
 )
 
 $inputPath = Join-Path $ShareDir $FileName
+$metadataPath = Join-Path $ShareDir "current_soc_platform_dump.metadata.json"
 
 if (-not (Test-Path $inputPath)) {
     Write-Error "Shared dump file not found: $inputPath"
     exit 1
+}
+
+if (Test-Path $metadataPath) {
+    Write-Host "[*] Shared dump metadata:"
+    Get-Content $metadataPath -Raw | Write-Host
 }
 
 & (Join-Path $PSScriptRoot "restore_postgres_dump.ps1") -InputPath $inputPath -DatabaseUrl $DatabaseUrl

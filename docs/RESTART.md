@@ -54,6 +54,12 @@ python .\commander.py
 
 By default this exports the current local PostgreSQL state back to the shared handoff dump before stopping containers.
 
+The stop flow also refreshes a metadata file beside the dump so users can see:
+- who exported it
+- when it was exported
+- which machine exported it
+- the dump file size
+
 To also stop Ollama if it is running:
 
 ```powershell
@@ -67,6 +73,8 @@ To also stop Ollama if it is running:
 ```
 
 This also reports whether the shared handoff lock file exists and who currently holds it.
+
+It also reports the latest shared dump metadata when present.
 
 ## If You Only Want The API Stack
 
