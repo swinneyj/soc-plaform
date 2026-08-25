@@ -14,6 +14,45 @@ COMMANDS:
 * exit         - Closes the orchestrator safely.
 
 ==================================================
+        DATABASE RUNTIME MODES
+==================================================
+
+DEFAULT RUNTIME:
+* PostgreSQL is now the default runtime backend.
+* For local host execution, the project expects the containerized database at:
+  -> postgresql+psycopg://soc_platform@localhost:5433/soc_platform
+* For docker compose execution, the services default to:
+  -> postgresql+psycopg://soc_platform@postgres:5432/soc_platform
+
+SQLITE ROLE:
+* SQLite is retained as a backup/export source only.
+* Current backup/export location:
+  -> splunk-es-backup-toolkit\triage.db
+* To run temporarily against SQLite instead of PostgreSQL, set:
+  -> DATABASE_URL=sqlite:///C:/Users/<user>/Downloads/SOC_Automation_Working/splunk-es-backup-toolkit/triage.db
+
+LOCAL HOST RUN COMMANDS:
+1. Start PostgreSQL container:
+   docker compose up -d postgres
+2. Start API against PostgreSQL:
+   set DATABASE_URL=postgresql+psycopg://soc_platform@localhost:5433/soc_platform
+   python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8000
+
+SQLITE BACKUP/EXPORT RUN COMMANDS:
+1. Start API against SQLite backup:
+   set DATABASE_URL=sqlite:///C:/Users/%USERNAME%/Downloads/SOC_Automation_Working/splunk-es-backup-toolkit/triage.db
+   python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8001
+
+MIGRATION COMMAND:
+* To copy the preserved SQLite contents into PostgreSQL:
+  python .\scripts\migrate_sqlite_to_postgres.py --target-url postgresql+psycopg://soc_platform@localhost:5433/soc_platform --drop-existing
+
+PORT GUIDANCE:
+* A separate local postgres process is already listening on 5432 on this machine.
+* This project intentionally uses 5433 for its containerized PostgreSQL to avoid collisions.
+* Recommendation: ignore the installed 5432 service unless you explicitly want to adopt and manage it as the project database.
+
+==================================================
         INSTALLED TOOLS DIRECTORY
 ==================================================
 

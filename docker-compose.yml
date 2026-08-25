@@ -12,7 +12,7 @@ services:
     environment:
       - SOC_PLATFORM_ROOT=/app
       - COMMANDER_BOOT=1
-      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/splunk-es-backup-toolkit/triage.db}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
     volumes:
       - ./Data:/app/Data
       - ./Playbooks:/app/Playbooks
@@ -34,7 +34,7 @@ services:
       - SOC_PLATFORM_ROOT=/app
       - LOG_LEVEL=INFO
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - DATABASE_URL=${DATABASE_URL:-sqlite:////app/splunk-es-backup-toolkit/triage.db}
+      - DATABASE_URL=${DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
     ports:
       - "8000:8000"
     volumes:
