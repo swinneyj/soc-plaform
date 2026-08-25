@@ -189,11 +189,11 @@
                         <button @click="loadTriageData" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
                     </div>
 
-                    <div v-if="triageData.length === 0" class="text-gray-400 text-center py-8">
+                    <div v-if="filteredTriageData.length === 0" class="text-gray-400 text-center py-8">
                         No triage cases found. Run analysis or ingest Splunk data.
                     </div>
 
-                    <div v-for="case_ in triageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
+                    <div v-for="case_ in filteredTriageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
                         <div class="flex items-start justify-between mb-2">
                             <div>
                                 <h4 class="font-bold text-blue-400">{{ case_.case_id }}</h4>
@@ -235,12 +235,23 @@
 
                 <div v-else class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
                     <div>
-                        <label class="text-sm text-gray-400">Case ID to Analyze</label>
-                        <input 
-                            v-model="analysisCaseId" 
-                            type="text" 
-                            placeholder="e.g., CASE-001" 
+                        <label class="text-sm text-gray-400">Case to Analyze</label>
+                        <input
+                            v-model="analysisCaseSearch"
+                            type="text"
+                            placeholder="Filter cases by ID, rule, verdict, or summary"
                             class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                        <select 
+                            v-model="analysisCaseId"
+                            class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                            <option value="">-- Choose a case from the database --</option>
+                            <option v-for="case_ in filteredAnalysisCases" :key="case_.case_id" :value="case_.case_id">
+                                {{ case_.case_id }} - {{ case_.rule_name }} ({{ case_.verdict }})
+                            </option>
+                        </select>
+                        <p class="mt-2 text-xs text-gray-400">
+                            Showing {{ filteredAnalysisCases.length }} of {{ analysisCases.length }} cases for AI analysis.
+                        </p>
                     </div>
 
                     <div>
@@ -510,12 +521,14 @@
                     
                     // Database
                     triageData: [],
+                    analysisCases: [],
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
+                    analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
                     analysisContext: '',
@@ -549,6 +562,54 @@
                         const matchCategory = !this.selectedCategory || tool.category === this.selectedCategory;
                         return matchSearch && matchCategory;
                     });
+                },
+                filteredTriageData() {
+                    const searchTerm = this.dbSearch.trim().toLowerCase();
+
+                    return this.triageData.filter(case_ => {
+                        const verdict = (case_.verdict || '').toLowerCase();
+                        const matchesVerdict = !this.dbVerdictFilter || verdict === this.dbVerdictFilter.toLowerCase();
+
+                        if (!matchesVerdict) {
+                            return false;
+                        }
+
+                        if (!searchTerm) {
+                            return true;
+                        }
+
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
+                },
+                filteredAnalysisCases() {
+                    const searchTerm = this.analysisCaseSearch.trim().toLowerCase();
+
+                    if (!searchTerm) {
+                        return this.analysisCases;
+                    }
+
+                    return this.analysisCases.filter(case_ => {
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.verdict,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
                 }
             },
             methods: {
@@ -578,11 +639,30 @@
                 },
                 async loadTriageData() {
                     try {
-                        const res = await axios.get(this.apiUrl + '/db/triage?limit=50');
+                        const params = { limit: 50 };
+                        if (this.dbSearch.trim()) {
+                            params.search = this.dbSearch.trim();
+                        }
+                        if (this.dbVerdictFilter) {
+                            params.verdict = this.dbVerdictFilter;
+                        }
+
+                        const res = await axios.get(this.apiUrl + '/db/triage', { params });
                         this.triageData = res.data;
                     } catch (err) {
                         console.error('Failed to load triage data:', err);
                         this.triageData = [];
+                    }
+                },
+                async loadAnalysisCases() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
+                            params: { limit: 1000 }
+                        });
+                        this.analysisCases = res.data;
+                    } catch (err) {
+                        console.error('Failed to load analysis cases:', err);
+                        this.analysisCases = [];
                     }
                 },
                 async loadDbStats() {
@@ -731,6 +811,7 @@
                 this.loadJobs();
                 this.loadReports();
                 this.loadTriageData();
+                this.loadAnalysisCases();
                 this.loadDbStats();
                 this.loadRules();
                 this.checkOllama();

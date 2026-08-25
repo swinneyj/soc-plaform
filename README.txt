@@ -2,6 +2,12 @@
         SOC ORCHESTRATION PLATFORM
 ==================================================
 
+WORKFLOW MODEL:
+* Git is the shared source of truth for code, rules, supportive SPL logic, templates, and scripts.
+* Each user runs the platform locally from their own working clone.
+* The operational database is handed off through an exported PostgreSQL dump on the share.
+* The old model of trying to run one live shared database from the share is no longer the normal path.
+
 QUICK START:
 1. Ensure Python 3 is installed on your system.
 2. Double-click 'Start_SOC_Platform.bat' to bring the platform and browser UI back up after a reboot.
@@ -32,7 +38,7 @@ DEFAULT RUNTIME:
 * PostgreSQL is now the default runtime backend.
 * For local host execution, the project expects the containerized database at:
   -> postgresql+psycopg://soc_platform@localhost:5433/soc_platform
-* For docker compose execution, the services default to:
+* For docker compose execution inside the project network, the services default to:
   -> postgresql+psycopg://soc_platform@postgres:5432/soc_platform
 
 SQLITE ROLE:
@@ -40,19 +46,19 @@ SQLITE ROLE:
 * Current backup/export location:
   -> splunk-es-backup-toolkit\triage.db
 * To run temporarily against SQLite instead of PostgreSQL, set:
-  -> DATABASE_URL=sqlite:///C:/Users/<user>/Downloads/SOC_Automation_Working/splunk-es-backup-toolkit/triage.db
+  -> DATABASE_URL=sqlite:///./splunk-es-backup-toolkit/triage.db
 
 LOCAL HOST RUN COMMANDS:
 1. Start PostgreSQL container:
    docker compose up -d postgres
 2. Start API against PostgreSQL:
    set DATABASE_URL=postgresql+psycopg://soc_platform@localhost:5433/soc_platform
-   python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8000
+  python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8000
 
 SQLITE BACKUP/EXPORT RUN COMMANDS:
 1. Start API against SQLite backup:
-   set DATABASE_URL=sqlite:///C:/Users/%USERNAME%/Downloads/SOC_Automation_Working/splunk-es-backup-toolkit/triage.db
-   python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8001
+  set DATABASE_URL=sqlite:///./splunk-es-backup-toolkit/triage.db
+  python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8001
 
 MIGRATION COMMAND:
 * To copy the preserved SQLite contents into PostgreSQL:
@@ -74,10 +80,8 @@ PORT GUIDANCE:
 TEAM USAGE NOTE:
 * Git contains the code and configuration only.
 * Git does NOT contain the live project database contents.
-* A new user who clones the repo must either:
-  -> restore a PostgreSQL dump provided separately
-  -> restore the preserved SQLite backup into PostgreSQL
-  -> connect to an already-hosted shared PostgreSQL database
+* A new user who clones the repo should restore a PostgreSQL dump provided separately or migrate the preserved SQLite backup into PostgreSQL.
+* The supported handoff model is repo sync through Git plus dump export and restore through the shared handoff folder.
 
 SHARED VS LOCAL DATA MODEL:
 * Shared through Git:

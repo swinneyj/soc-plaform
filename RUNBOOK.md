@@ -32,6 +32,12 @@ Use PostgreSQL as the runtime database.
 
 Git should remain code-only.
 
+The practical handoff model is:
+1. clone or pull the working repo
+2. run the platform locally
+3. export current database state to the shared dump when handing off
+4. restore that dump on the next user's machine
+
 Shared logic should be repo-backed and re-imported into each local database.
 
 For current data, distribute one of these outside Git:
@@ -133,14 +139,14 @@ python .\scripts\migrate_sqlite_to_postgres.py --target-url "postgresql+psycopg:
 ### Run against PostgreSQL
 
 ```powershell
-python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8000
 ```
 
 ### Run temporarily against SQLite backup
 
 ```powershell
-$env:DATABASE_URL = "sqlite:///C:/Users/%USERNAME%/Downloads/SOC_Automation_Working/splunk-es-backup-toolkit/triage.db"
-python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8001
+$env:DATABASE_URL = "sqlite:///./splunk-es-backup-toolkit/triage.db"
+python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8001
 ```
 
 ## Health Checks

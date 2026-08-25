@@ -4,6 +4,11 @@
 
 This guide is the single setup path for a new user who pulls the project from Git and needs both code and current database-backed runtime behavior.
 
+At a high level:
+- Git shares the codebase and shared logic.
+- Each user runs the app locally.
+- Current operational data is handed off by PostgreSQL dump instead of a live shared database.
+
 ## What Comes From Git
 
 Git provides:
@@ -70,7 +75,7 @@ This helper resets the `public` schema before import so rerunning setup on the s
 
 ```powershell
 $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
-python -m uvicorn --app-dir C:\Users\%USERNAME%\Downloads\SOC_Automation_Working api.main:app --host 127.0.0.1 --port 8000
+python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8000
 ```
 
 ## Creating a Current Dump for Another User
@@ -105,10 +110,12 @@ Invoke-RestMethod http://127.0.0.1:8000/api/health
 Use this from the repo root:
 
 ```powershell
-.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
+.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
 ```
 
-Or double-click `Launch_Commander.bat`.
+Or double-click `Start_SOC_Platform.bat`.
+
+Commander is optional. If you want it, run `python .\commander.py` separately.
 
 ## If A User Wants To Use Their Installed PostgreSQL Instead
 

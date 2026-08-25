@@ -327,14 +327,38 @@ def db_stats():
         return {"triage_cases": 0, "error": str(e)}
 
 @app.get("/api/db/triage", tags=["Database"])
-def get_triage(limit: int = Query(50, ge=1, le=1000)):
+def get_triage(
+    limit: int = Query(50, ge=1, le=1000),
+    search: str = Query("", description="Search case ID, rule name, or summary"),
+    verdict: str = Query("", description="Filter by verdict")
+):
     """Get triaged cases from database."""
     try:
         sys.path.insert(0, get_platform_root())
+        from sqlalchemy import or_
         from db.models import SessionLocal, TriageResult
+
         db = SessionLocal()
-        results = db.query(TriageResult).limit(limit).all()
-        db.close()
+
+        query = db.query(TriageResult)
+
+        normalized_verdict = verdict.strip().lower()
+        if normalized_verdict:
+            query = query.filter(TriageResult.verdict.ilike(normalized_verdict))
+
+        normalized_search = search.strip()
+        if normalized_search:
+            search_term = f"%{normalized_search}%"
+            query = query.filter(
+                or_(
+                    TriageResult.case_id.ilike(search_term),
+                    TriageResult.rule_name.ilike(search_term),
+                    TriageResult.analysis_summary.ilike(search_term)
+                )
+            )
+
+        results = query.order_by(TriageResult.triaged_at.desc()).limit(limit).all()
+
         return [
             {
                 "case_id": r.case_id,
@@ -349,6 +373,11 @@ def get_triage(limit: int = Query(50, ge=1, le=1000)):
         ]
     except Exception as e:
         return []
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 @app.post("/api/db/analyze", tags=["Database"])
 def analyze_case(request: AnalyzeRequest):
