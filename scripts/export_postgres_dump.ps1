@@ -1,8 +1,11 @@
 param(
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$OutputPath = "postgres_dump_$(Get-Date -Format 'yyyyMMdd_HHmmss').sql",
-    [string]$ContainerName = "soc-postgres"
+    [string]$ContainerName = "soc-postgres",
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 )
+
+Set-Location $RepoRoot
 
 if (-not $DatabaseUrl) {
     $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
@@ -20,7 +23,7 @@ if ($pgDump) {
         Write-Error "Neither pg_dump nor docker is available. Install PostgreSQL client tools or Docker."
         exit 1
     }
-    docker exec $ContainerName pg_dump -U soc_platform -d soc_platform --no-owner --no-privileges > $OutputPath
+    docker compose exec -T postgres pg_dump -U soc_platform -d soc_platform --no-owner --no-privileges > $OutputPath
 }
 
 if ($LASTEXITCODE -ne 0) {

@@ -3,8 +3,11 @@ param(
     [string]$InputPath,
     [string]$DatabaseUrl = $env:DATABASE_URL,
     [string]$ContainerName = "soc-postgres",
-    [switch]$SkipResetSchema
+    [switch]$SkipResetSchema,
+    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 )
+
+Set-Location $RepoRoot
 
 if (-not (Test-Path $InputPath)) {
     Write-Error "Input dump file not found: $InputPath"
@@ -33,7 +36,7 @@ if (-not $SkipResetSchema) {
             Write-Error "Neither psql nor docker is available. Install PostgreSQL client tools or Docker."
             exit 1
         }
-        docker exec $ContainerName psql -U soc_platform -d soc_platform -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
+        docker compose exec -T postgres psql -U soc_platform -d soc_platform -c "DROP SCHEMA IF EXISTS public CASCADE; CREATE SCHEMA public;"
         if ($LASTEXITCODE -ne 0) {
             Write-Error "Failed to reset PostgreSQL schema before restore."
             exit $LASTEXITCODE
@@ -49,7 +52,7 @@ if ($psql) {
         Write-Error "Neither psql nor docker is available. Install PostgreSQL client tools or Docker."
         exit 1
     }
-    Get-Content $InputPath | docker exec -i $ContainerName psql -U soc_platform -d soc_platform
+    Get-Content $InputPath | docker compose exec -T postgres psql -U soc_platform -d soc_platform
 }
 
 if ($LASTEXITCODE -ne 0) {
