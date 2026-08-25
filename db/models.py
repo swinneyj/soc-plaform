@@ -1,20 +1,34 @@
-"""
-SQLAlchemy models for SOC Platform database schema.
-Maps triage_results table and extensible for future Splunk ingestion tables.
-"""
+"""SQLAlchemy models and database bootstrap for SOC Platform."""
 
-from sqlalchemy import create_engine, Column, String, Float, DateTime, Integer, Text
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import os
 
-# Database path
-platform_root = os.environ.get('SOC_PLATFORM_ROOT', '/app')
-DATABASE_URL = f"sqlite:///{platform_root}/splunk-es-backup-toolkit/triage.db"
+from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy.orm import declarative_base, sessionmaker
 
-# Create engine and session
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+def get_default_sqlite_url() -> str:
+    platform_root = os.environ.get("SOC_PLATFORM_ROOT")
+    if platform_root:
+        db_path = os.path.join(platform_root, "splunk-es-backup-toolkit", "triage.db")
+    else:
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        db_path = os.path.join(repo_root, "splunk-es-backup-toolkit", "triage.db")
+    normalized = db_path.replace("\\", "/")
+    return f"sqlite:///{normalized}"
+
+
+DATABASE_URL = os.environ.get("DATABASE_URL", get_default_sqlite_url())
+
+
+def create_database_engine(database_url: str):
+    engine_kwargs = {}
+    if database_url.startswith("sqlite"):
+        engine_kwargs["connect_args"] = {"check_same_thread": False}
+    return create_engine(database_url, **engine_kwargs)
+
+
+engine = create_database_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()

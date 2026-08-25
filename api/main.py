@@ -301,16 +301,22 @@ def db_stats():
     """Get database statistics."""
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult, SplunkEvent
+        from sqlalchemy import func
+        from db.models import AnalysisResult, SessionLocal, SplunkEvent, TriageResult
         db = SessionLocal()
         triage_count = db.query(TriageResult).count()
         splunk_count = db.query(SplunkEvent).count()
+        analysis_count = db.query(AnalysisResult).count()
+        verdict_rows = db.query(
+            TriageResult.verdict,
+            func.count(TriageResult.verdict)
+        ).group_by(TriageResult.verdict).all()
         db.close()
         return {
             "triage_cases": triage_count,
             "splunk_events": splunk_count,
-            "analyses": 0,
-            "verdict_breakdown": {"benign": 0, "suspicious": 0, "malicious": 0}
+            "analyses": analysis_count,
+            "verdict_breakdown": {row[0]: row[1] for row in verdict_rows}
         }
     except Exception as e:
         return {"triage_cases": 0, "error": str(e)}
