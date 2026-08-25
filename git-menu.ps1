@@ -1,66 +1,84 @@
-﻿function Do-Pull {
-    Write-Host "
-[+] Stashing local changes..." -ForegroundColor Cyan
-    git stash
-    Write-Host "[+] Pulling latest updates from origin main..." -ForegroundColor Cyan
-    git pull origin main
+﻿Set-StrictMode -Version Latest
 
-    if ($LASTEXITCODE -eq 0) {
-        $hasStash = git stash list
-        if ($hasStash) {
-            Write-Host "[+] Restoring your local changes..." -ForegroundColor Green
-            git stash pop
-        } else {
-            Write-Host "✓ Successfully updated! No local changes to restore." -ForegroundColor Green
-        }
-    } else {
-        Write-Warning "Pull failed. Skipping stash restoration until conflicts are fixed manually."
-    }
+$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SyncScript = Join-Path $RepoRoot 'scripts\sync_upstream_safe.ps1'
+
+function Show-Status {
+    Write-Host "`n--- Current Local Status ---" -ForegroundColor Yellow
+    git status -sb
+    Write-Host "`n--- Remotes ---" -ForegroundColor Yellow
+    git remote -v
+    Write-Host "----------------------------`n" -ForegroundColor Yellow
 }
 
-function Do-Push {
-    Write-Host "
-[+] Preparing to push changes..." -ForegroundColor Cyan
-    $commitMsg = Read-Host "Enter a short description of your changes (or press Enter for 'Update SOC Platform files')"
-    if ([string]::IsNullOrWhiteSpace($commitMsg)) { 
-        $commitMsg = "Update SOC Platform files" 
+function Wait-ForUser {
+    Read-Host "Press Enter to return to the menu" | Out-Null
+}
+
+function Invoke-PullWorkflow {
+    if (-not (Test-Path $SyncScript)) {
+        Write-Warning "Sync helper not found: $SyncScript"
+        Wait-ForUser
+        return
     }
-    
-    git add .
-    git commit -m "$commitMsg"
-    git push origin main
-    Write-Host "✓ Successfully pushed to central repo!" -ForegroundColor Green
+
+    Write-Host "`n[+] Pulling latest changes into this working copy..." -ForegroundColor Cyan
+    Write-Host "    A local checkpoint commit will be created first if your tree is dirty." -ForegroundColor Cyan
+    powershell.exe -ExecutionPolicy Bypass -File $SyncScript -AutoCheckpoint
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "`n[+] Pull workflow completed." -ForegroundColor Green
+    } else {
+        Write-Warning "Pull workflow stopped. Review the output above for conflicts or validation errors."
+    }
+
+    Wait-ForUser
+}
+
+function Invoke-PushWorkflow {
+    Write-Host "`n[+] Preparing to push changes..." -ForegroundColor Cyan
+    $commitMsg = Read-Host "Enter a short description of your changes (or press Enter for 'Update SOC Platform files')"
+    if ([string]::IsNullOrWhiteSpace($commitMsg)) {
+        $commitMsg = 'Update SOC Platform files'
+    }
+
+    git add -A
+    git commit -m $commitMsg
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "Commit did not complete. Push aborted."
+        Wait-ForUser
+        return
+    }
+
+    git push origin HEAD
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "`n[+] Successfully pushed changes." -ForegroundColor Green
+    } else {
+        Write-Warning "Push failed. Review the git output above."
+    }
+
+    Wait-ForUser
 }
 
 # --- Main Menu Loop ---
 while ($true) {
-    Write-Host "
-=================================" -ForegroundColor Cyan
-    Write-Host "       SOC DOCKER GIT SYNC       " -ForegroundColor Cyan
-    Write-Host "=================================" -ForegroundColor Cyan
-    
-    Write-Host "
---- Current Local Status ---" -ForegroundColor Yellow
-    git status -s
-    Write-Host "----------------------------
-" -ForegroundColor Yellow
-
-    Write-Host "1. Push (Upload local changes)"
-    Write-Host "2. Pull & Merge (Download updates)"
-    Write-Host "3. Full Sync (Pull, Merge, then Push)"
-    Write-Host "4. Exit"
+    Write-Host "`n=================================" -ForegroundColor Cyan
+    Write-Host "      SOC WORKING COPY SYNC      " -ForegroundColor Cyan
     Write-Host "=================================" -ForegroundColor Cyan
 
-    $choice = Read-Host "Select an option (1-4)"
+    Show-Status
+
+    Write-Host "1. Pull latest safely (recommended)"
+    Write-Host "2. Push current branch"
+    Write-Host "3. Exit"
+    Write-Host "=================================" -ForegroundColor Cyan
+
+    $choice = Read-Host "Select an option (1-3)"
 
     switch ($choice) {
-        '1' { Do-Push }
-        '2' { Do-Pull }
-        '3' { 
-            Do-Pull
-            if ($LASTEXITCODE -eq 0) { Do-Push }
-        }
-        '4' { exit }
-        default { Write-Warning "Invalid selection. Please choose 1-4." }
+        '1' { Invoke-PullWorkflow }
+        '2' { Invoke-PushWorkflow }
+        '3' { exit }
+        default { Write-Warning "Invalid selection. Please choose 1-3." }
     }
 }
