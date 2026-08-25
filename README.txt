@@ -4,14 +4,19 @@
 
 QUICK START:
 1. Ensure Python 3 is installed on your system.
-2. Double-click 'launch_commander.bat' to bring the platform, API, and Commander back up after a reboot.
+2. Double-click 'Start_SOC_Platform.bat' to bring the platform and browser UI back up after a reboot.
 3. Type the ID number or Name of a tool to run it.
 
 RESTART PATH:
 * Preferred one-command restart:
-  .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
+  .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
 * Desktop-friendly wrapper:
   Start_SOC_Platform.bat
+
+COMMANDER (OPTIONAL):
+* Commander no longer auto-starts from the wrappers.
+* If you want it, run:
+  python .\commander.py
 
 COMMANDS:
 * reload       - Scans the folder for new tools and updates the menu.

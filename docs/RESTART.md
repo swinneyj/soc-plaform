@@ -5,7 +5,7 @@
 The clean supported way to bring the project back up is:
 
 ```powershell
-.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
+.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
 ```
 
 Run that from the repo root.
@@ -16,7 +16,8 @@ What it does:
 3. starts the project PostgreSQL container, Redis, and the API service
 4. waits for the API health endpoint to become ready
 5. opens the browser
-6. launches `commander.py`
+
+Commander is now optional and is not started automatically by the standard wrappers.
 
 ## Fastest GUI Path
 
@@ -32,7 +33,15 @@ or:
 Launch_Commander.bat
 ```
 
-Both wrappers now call the PowerShell startup script with the normal options.
+Both wrappers now call the PowerShell startup script without auto-starting Commander.
+
+## If You Want Commander
+
+Run it manually from the repo root:
+
+```powershell
+python .\commander.py
+```
 
 ## Stop The Platform
 
@@ -61,7 +70,7 @@ To also stop Ollama if it is running:
 ## If You Do Not Care About Ollama Yet
 
 ```powershell
-.\scripts\start_platform.ps1 -OpenBrowser -StartCommander
+.\scripts\start_platform.ps1 -OpenBrowser
 ```
 
 The platform will still run. Only AI-analysis features will be unavailable until Ollama is started.
