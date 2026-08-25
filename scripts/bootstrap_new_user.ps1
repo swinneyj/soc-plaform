@@ -2,6 +2,7 @@ param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$DatabaseUrl = "",
     [string]$DumpPath = "",
+    [string]$SharedDumpPath = "Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql",
     [switch]$SkipDependencyInstall,
     [switch]$SkipPostgresStart,
     [switch]$SkipRestore,
@@ -37,6 +38,18 @@ if (-not $SkipRestore) {
         if (Test-Path $candidate) {
             $DumpPath = $candidate
         }
+    }
+
+    if (-not $DumpPath -and $SharedDumpPath -and (Test-Path $SharedDumpPath)) {
+        Write-Host "[*] No local dump specified. Using shared handoff dump at $SharedDumpPath"
+        $localBackupsDir = Join-Path $RepoRoot "local-backups"
+        if (-not (Test-Path $localBackupsDir)) {
+            New-Item -ItemType Directory -Path $localBackupsDir -Force | Out-Null
+        }
+
+        $localDumpPath = Join-Path $localBackupsDir "current_soc_platform_dump.sql"
+        Copy-Item $SharedDumpPath $localDumpPath -Force
+        $DumpPath = $localDumpPath
     }
 
     if ($DumpPath -and (Test-Path $DumpPath)) {

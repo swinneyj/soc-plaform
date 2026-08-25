@@ -29,24 +29,25 @@ Reason:
 ## Fastest New-User Path
 
 1. Clone the repo.
-2. Obtain `current_soc_platform_dump.sql` from the maintainer.
+2. Make sure the shared handoff dump is reachable at:
+	`Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql`
 3. Run:
 
 ```powershell
-.\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql
+.\scripts\bootstrap_new_user.ps1
 ```
 
 That script will:
 1. install Python dependencies
 2. start the PostgreSQL container
-3. restore the dump if present
+3. restore the local dump if present, otherwise pull the shared handoff dump from `Z:` automatically
 4. sync shared logic from the repo into the database
 5. launch the API
 
 If multiple clones must run on the same machine, choose another PostgreSQL host port:
 
 ```powershell
-.\scripts\bootstrap_new_user.ps1 -DumpPath .\local-backups\current_soc_platform_dump.sql -PostgresHostPort 5434 -ApiPort 8006
+.\scripts\bootstrap_new_user.ps1 -PostgresHostPort 5434 -ApiPort 8006
 ```
 
 ## Manual Path
