@@ -184,10 +184,6 @@ if ($EnsureOllama) {
     Ensure-OllamaRunning | Out-Null
 }
 
-if (-not (Acquire-ShareLock)) {
-    exit 1
-}
-
 $env:POSTGRES_HOST_PORT = "$PostgresHostPort"
 $env:API_HOST_PORT = "$ApiPort"
 $env:COMPOSE_DATABASE_URL = "postgresql+psycopg://soc_platform@postgres:5432/soc_platform"
@@ -211,11 +207,16 @@ if (-not (Wait-ForPostgres -MaxAttempts 60 -DelaySeconds 2)) {
 if (-not $SkipSharedDumpRestore) {
     $sharedDumpPath = Join-Path $SharedDumpDir "current_soc_platform_dump.sql"
     if (Test-Path $sharedDumpPath) {
+        if (-not (Acquire-ShareLock)) {
+            exit 1
+        }
+
         Write-Host "[*] Restoring shared dump from $sharedDumpPath"
         & (Join-Path $PSScriptRoot "restore_db_dump_from_share.ps1") -ShareDir $SharedDumpDir -DatabaseUrl $env:DATABASE_URL
-        if ($LASTEXITCODE -ne 0) {
-            Release-ShareLock
-            exit $LASTEXITCODE
+        $restoreExitCode = $LASTEXITCODE
+        Release-ShareLock
+        if ($restoreExitCode -ne 0) {
+            exit $restoreExitCode
         }
     } else {
         Write-Host "[*] No shared dump found. Skipping restore."
