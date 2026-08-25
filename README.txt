@@ -47,6 +47,12 @@ MIGRATION COMMAND:
 * To copy the preserved SQLite contents into PostgreSQL:
   python .\scripts\migrate_sqlite_to_postgres.py --target-url postgresql+psycopg://soc_platform@localhost:5433/soc_platform --drop-existing
 
+POSTGRESQL DUMP HELPERS:
+* Export current PostgreSQL data for another user:
+  .\scripts\export_postgres_dump.ps1 -OutputPath .\current_soc_platform_dump.sql
+* Restore a PostgreSQL dump into the active runtime database:
+  .\scripts\restore_postgres_dump.ps1 -InputPath .\current_soc_platform_dump.sql
+
 PORT GUIDANCE:
 * A separate local postgres process is already listening on 5432 on this machine.
 * This project intentionally uses 5433 for its containerized PostgreSQL to avoid collisions.

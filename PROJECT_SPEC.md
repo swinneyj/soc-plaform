@@ -111,7 +111,7 @@ To add a new tool:
 Splunk Export (CSV)
   → splunk_folder_watcher (watches Splunk_Exports/)
   → splunk_csv_ingestor (imports to SplunkEvent table)
-  → PostgreSQL DB
+  → active database backend (default: PostgreSQL)
   → Dashboard (Database tab)
 ```
 
@@ -140,16 +140,16 @@ User clicks "Execute" on a tool
 ### Environment Variables
 ```
 OLLAMA_URL=http://host.docker.internal:11434  # Default
-DB_PATH=/app/splunk-es-backup-toolkit/triage.db
+DATABASE_URL=postgresql+psycopg://soc_platform@postgres:5432/soc_platform
 REGISTRY_PATH=/app/Commander_Registry.json
 REPORTS_DIR=/app/reports
 SPLUNK_EXPORTS_DIR=/app/Splunk_Exports
 ```
 
-### Docker Compose Profiles
+### Docker Compose Runtime
 ```
-docker compose --profile api up       # API + Redis + Ollama
-docker compose --profile db up        # DB container only
+docker compose up -d postgres         # PostgreSQL only
+docker compose up -d api-service redis postgres
 docker compose down                   # Stop all
 ```
 
@@ -171,6 +171,13 @@ docker compose down                   # Stop all
 1. Add model to `/db/models.py` (SQLAlchemy class)
 2. Add endpoint to `/api/main.py`
 3. Restart API
+
+### Database Bootstrap For New Users
+1. Clone the repo
+2. Start PostgreSQL locally or via compose
+3. Restore a PostgreSQL dump or migrate the preserved SQLite backup with `/scripts/migrate_sqlite_to_postgres.py`
+4. Set `DATABASE_URL`
+5. Start the API
 
 ### New Dashboard Feature
 1. Add Vue method to `/web/index.html`

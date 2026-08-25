@@ -30,7 +30,7 @@
 - ✅ PostgreSQL is now the default runtime backend
 - ✅ Existing SQLite backup preserved for migration and export workflows
 - ✅ Auto-creates schema on first run
-- ✅ Ready for Splunk data ingestion
+- ✅ Ready for Splunk data ingestion into the active backend
 
 ### 5. **Ollama Local AI Service**
 - ✅ `OllamaClient` class for local LLM inference

@@ -36,6 +36,10 @@ For current data, distribute one of these outside Git:
 1. a PostgreSQL dump
 2. the preserved SQLite backup file
 
+The repo includes helper scripts for PostgreSQL dump export and restore:
+1. `scripts\export_postgres_dump.ps1`
+2. `scripts\restore_postgres_dump.ps1`
+
 ## Option A: Use The Project PostgreSQL Container
 
 Start the container:
@@ -65,7 +69,13 @@ Use this only if the team intentionally wants the installed local PostgreSQL ser
 ### Restore a PostgreSQL dump
 
 ```powershell
-psql -d soc_platform -f .\current_soc_platform_dump.sql
+.\scripts\restore_postgres_dump.ps1 -InputPath .\current_soc_platform_dump.sql
+```
+
+### Create a PostgreSQL dump for another user
+
+```powershell
+.\scripts\export_postgres_dump.ps1 -OutputPath .\current_soc_platform_dump.sql
 ```
 
 ### Migrate from the preserved SQLite backup

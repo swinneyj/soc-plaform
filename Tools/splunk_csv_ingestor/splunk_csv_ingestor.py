@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Splunk CSV Ingestion Tool
-Parses Splunk exports (CSV) and loads events into SQLite database.
+Parses Splunk exports (CSV) and loads events into the active database backend.
 Handles common Splunk export formats with field deduplication and error handling.
 """
 
@@ -150,7 +150,7 @@ def ingest_splunk_csv(csv_file: str, silent: bool = False) -> dict:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Ingest Splunk CSV exports into SOC Platform SQLite database"
+        description="Ingest Splunk CSV exports into the SOC Platform active database backend"
     )
     parser.add_argument(
         '--target',
