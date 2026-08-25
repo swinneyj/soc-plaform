@@ -23,10 +23,34 @@ What it does:
 You can also double-click:
 
 ```text
+Start_SOC_Platform.bat
+```
+
+or:
+
+```text
 Launch_Commander.bat
 ```
 
-That now calls the PowerShell startup script with the normal options.
+Both wrappers now call the PowerShell startup script with the normal options.
+
+## Stop The Platform
+
+```powershell
+.\scripts\stop_platform.ps1
+```
+
+To also stop Ollama if it is running:
+
+```powershell
+.\scripts\stop_platform.ps1 -StopOllama
+```
+
+## Quick Status Check
+
+```powershell
+.\scripts\status_platform.ps1
+```
 
 ## If You Only Want The API Stack
 

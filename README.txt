@@ -10,6 +10,8 @@ QUICK START:
 RESTART PATH:
 * Preferred one-command restart:
   .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -StartCommander
+* Desktop-friendly wrapper:
+  Start_SOC_Platform.bat
 
 COMMANDS:
 * reload       - Scans the folder for new tools and updates the menu.

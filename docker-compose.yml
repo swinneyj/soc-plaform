@@ -14,11 +14,7 @@ services:
     ports:
       - "${API_HOST_PORT:-8000}:8000"
     volumes:
-      - ./Data:/app/Data
-      - ./Playbooks:/app/Playbooks
-      - ./Tools:/app/Tools
-      - ./Splunk_Exports:/app/Splunk_Exports
-      - ./splunk-es-backup-toolkit:/app/splunk-es-backup-toolkit
+      - ./:/app
     working_dir: /app
     command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000
     healthcheck:
