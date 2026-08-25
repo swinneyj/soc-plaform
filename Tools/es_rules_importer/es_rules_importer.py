@@ -51,8 +51,10 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
         
         db = SessionLocal()
         imported = 0
+        updated = 0
         skipped = 0
         supportive_imported = 0
+        supportive_updated = 0
         supportive_skipped = 0
         errors = []
         
@@ -66,7 +68,19 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
                 # If the rule already exists, reuse it so we can still attach supportive queries
                 if existing:
                     rule = existing
-                    skipped += 1
+                    rule.rule_name = rule_data.get("rule_name", rule.rule_name)
+                    rule.description = rule_data.get("description", rule.description)
+                    rule.category = rule_data.get("category", rule.category)
+                    rule.severity = rule_data.get("severity", rule.severity)
+                    if "drilldown_fields" in rule_data:
+                        rule.drilldown_fields = json.dumps(rule_data.get("drilldown_fields", []))
+                    if "required_closure_fields" in rule_data:
+                        rule.required_closure_fields = json.dumps(rule_data.get("required_closure_fields", []))
+                    if "closure_template" in rule_data:
+                        rule.closure_template = rule_data.get("closure_template", rule.closure_template)
+                    if "enabled" in rule_data:
+                        rule.enabled = rule_data.get("enabled", rule.enabled)
+                    updated += 1
                 else:
                     # Create rule record
                     rule = ESCorrelationRule(
@@ -98,7 +112,9 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
                             SupportiveQuery.title == title
                         ).first()
                         if existing_q:
-                            supportive_skipped += 1
+                            existing_q.description = q.get("description", existing_q.description)
+                            existing_q.spl_query = spl_query
+                            supportive_updated += 1
                             continue
 
                         sq = SupportiveQuery(
@@ -121,8 +137,8 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
         
         if not silent:
             print(f"{Colors.GREEN}[+] Import complete!{Colors.ENDC}")
-            print(f"    Rules - Imported: {imported} | Skipped: {skipped}")
-            print(f"    Supportive Queries - Imported: {supportive_imported} | Skipped: {supportive_skipped}")
+            print(f"    Rules - Imported: {imported} | Updated: {updated} | Skipped: {skipped}")
+            print(f"    Supportive Queries - Imported: {supportive_imported} | Updated: {supportive_updated} | Skipped: {supportive_skipped}")
             if errors:
                 print(f"    Errors: {len(errors)}")
                 for err in errors[:5]:
@@ -131,7 +147,11 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
         return {
             "success": True,
             "imported": imported,
+            "updated": updated,
             "skipped": skipped,
+            "supportive_imported": supportive_imported,
+            "supportive_updated": supportive_updated,
+            "supportive_skipped": supportive_skipped,
             "errors": errors
         }
     

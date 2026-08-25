@@ -40,7 +40,8 @@ That script will:
 1. install Python dependencies
 2. start the PostgreSQL container
 3. restore the dump if present
-4. launch the API
+4. sync shared logic from the repo into the database
+5. launch the API
 
 If multiple clones must run on the same machine, choose another PostgreSQL host port:
 
@@ -109,3 +110,11 @@ $env:DATABASE_URL = "postgresql+psycopg://<user>:<password>@localhost:5432/soc_p
 ```
 
 That is outside the default project path and should only be used if the team decides to adopt that installed PostgreSQL service as the maintained runtime.
+
+## Shared Logic Refresh After Pulling Git Changes
+
+When a user pulls rule or supportive-query changes from Git, refresh their local PostgreSQL copy of the shared logic with:
+
+```powershell
+.\scripts\sync_shared_logic_to_db.ps1
+```

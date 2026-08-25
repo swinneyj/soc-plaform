@@ -5,6 +5,7 @@ param(
     [switch]$SkipDependencyInstall,
     [switch]$SkipPostgresStart,
     [switch]$SkipRestore,
+    [switch]$SkipSharedLogicSync,
     [int]$PostgresHostPort = 5433,
     [int]$ApiPort = 8000
 )
@@ -45,6 +46,12 @@ if (-not $SkipRestore) {
     } else {
         Write-Host "[*] No dump file provided or found. Skipping restore."
     }
+}
+
+if (-not $SkipSharedLogicSync) {
+    Write-Host "[*] Syncing shared rules and supportive queries from repo..."
+    & (Join-Path $PSScriptRoot "sync_shared_logic_to_db.ps1") -RepoRoot $RepoRoot -DatabaseUrl $DatabaseUrl
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 $env:DATABASE_URL = $DatabaseUrl

@@ -32,14 +32,23 @@ Use PostgreSQL as the runtime database.
 
 Git should remain code-only.
 
+Shared logic should be repo-backed and re-imported into each local database.
+
 For current data, distribute one of these outside Git:
 1. a PostgreSQL dump
 2. the preserved SQLite backup file
+
+Recommended split:
+1. Share rules, supportive SPL queries, templates, and baked logic through Git.
+2. Share alert and case data only when needed through PostgreSQL dumps.
 
 The repo includes helper scripts for PostgreSQL dump export and restore:
 1. `scripts\export_postgres_dump.ps1`
 2. `scripts\restore_postgres_dump.ps1`
 3. `scripts\bootstrap_new_user.ps1`
+4. `scripts\sync_shared_logic_to_db.ps1`
+5. `scripts\export_db_dump_to_share.ps1`
+6. `scripts\restore_db_dump_from_share.ps1`
 
 ## Option A: Use The Project PostgreSQL Container
 
@@ -91,6 +100,24 @@ The restore helper resets the `public` schema before loading the dump so repeate
 
 ```powershell
 .\scripts\export_postgres_dump.ps1 -OutputPath .\current_soc_platform_dump.sql
+```
+
+### Update the shared handoff dump on Z:
+
+```powershell
+.\scripts\export_db_dump_to_share.ps1
+```
+
+### Restore the latest shared handoff dump from Z:
+
+```powershell
+.\scripts\restore_db_dump_from_share.ps1
+```
+
+### Re-apply repo-managed shared logic into local PostgreSQL
+
+```powershell
+.\scripts\sync_shared_logic_to_db.ps1
 ```
 
 ### Migrate from the preserved SQLite backup

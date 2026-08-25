@@ -68,6 +68,17 @@ TEAM USAGE NOTE:
   -> restore the preserved SQLite backup into PostgreSQL
   -> connect to an already-hosted shared PostgreSQL database
 
+SHARED VS LOCAL DATA MODEL:
+* Shared through Git:
+  -> tooling and scripts
+  -> rule definitions in `sample_rules.json`
+  -> supportive SPL query definitions in `supportive_rules.json`
+  -> baked logic, templates, and workflow JSON
+* Local / not required to be shared live:
+  -> alert and event exports
+  -> case-specific supportive query results
+  -> local triage activity unless explicitly exported
+
 ==================================================
         INSTALLED TOOLS DIRECTORY
 ==================================================
