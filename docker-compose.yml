@@ -5,7 +5,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: soc-commander-cli
     image: soc-platform:latest
     stdin_open: true
     tty: true
@@ -28,7 +27,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: soc-api-service
     image: soc-platform:latest
     environment:
       - SOC_PLATFORM_ROOT=/app
@@ -57,7 +55,6 @@ services:
 
   postgres:
     image: postgres:16-alpine
-    container_name: soc-postgres
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-soc_platform}
       - POSTGRES_USER=${POSTGRES_USER:-soc_platform}
@@ -76,7 +73,6 @@ services:
   # Redis: Job queue for async tool execution
   redis:
     image: redis:7-alpine
-    container_name: soc-redis
     ports:
       - "6379:6379"
     volumes:
@@ -90,7 +86,3 @@ services:
 volumes:
   redis-data:
   postgres-data:
-
-networks:
-  default:
-    name: soc-platform-network
