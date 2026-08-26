@@ -14,6 +14,13 @@ QUICK START:
 3. Open the browser UI on `http://127.0.0.1:8000`.
 4. If you want the CLI orchestrator too, run `python .\commander.py` separately.
 
+CURRENT OPERATING MODEL:
+* Daily local use should prefer resume mode, not a shared dump restore every time.
+* On this machine, the Desktop launcher `Start_SOC.bat` is the intended normal start path.
+* If you want to save current local runtime state and then refresh from the shared handoff dump, use `Restore_SOC_From_Handoff.bat`.
+* If you intentionally want to overwrite local runtime state without exporting it first, use `Force_Restore_SOC_From_Handoff.bat`.
+* For current workflow details, read `docs\CURRENT_OPERATING_MODEL.md`.
+
 RESTART PATH:
 * Preferred one-command restart:
   .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
@@ -98,6 +105,7 @@ TEAM USAGE NOTE:
 * A new user who clones the repo should normally use `bootstrap_new_user.ps1`, which copies the shared handoff dump into `local-backups` and restores it automatically.
 * SQLite is only a fallback when a maintainer explicitly provides a preserved backup file.
 * The supported handoff model is repo sync through Git plus dump export and restore through the shared handoff folder.
+* Branch workflow is temp-branch-first. Do not push directly from `main`.
 
 SHARED VS LOCAL DATA MODEL:
 * Shared through Git:

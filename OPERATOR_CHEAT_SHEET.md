@@ -1,5 +1,19 @@
 # SOC Operator Cheat Sheet
 
+## Read This First If You Are New
+
+If you need the step-by-step operator decision flows, read:
+
+`docs\FLOW_SHEETS.md`
+
+If you need the visual architecture and mental model map, read:
+
+`docs\SYSTEM_VISUAL_MAP.md`
+
+If you want the full visual dashboard in the browser, run:
+
+`.\scripts\show_system_maps.ps1`
+
 ## Current Canonical Working Copy
 
 Use this folder for day-to-day work:
@@ -41,6 +55,22 @@ Pull with an automatic checkpoint if there are local edits:
 ```powershell
 Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\sync_upstream_safe.ps1 -AutoCheckpoint
+```
+
+## Troubleshoot And Smoke Test
+
+Use this as the default decision tool before startup, sync, or push:
+
+```powershell
+Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
+.\scripts\troubleshoot_platform.ps1
+```
+
+Use this when the platform is already up and you want a live validation pass:
+
+```powershell
+Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
+.\scripts\troubleshoot_platform.ps1 -RunSmokeTest
 ```
 
 ## Push

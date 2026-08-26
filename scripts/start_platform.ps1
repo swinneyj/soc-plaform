@@ -86,20 +86,34 @@ function Ensure-DockerRunning {
     return $false
 }
 
+function Get-OllamaExecutablePath {
+    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
+    if ($ollama) {
+        return $ollama.Source
+    }
+
+    $candidatePaths = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Ollama\ollama.exe"),
+        "C:\Program Files\Ollama\ollama.exe"
+    )
+
+    return $candidatePaths | Where-Object { Test-Path $_ } | Select-Object -First 1
+}
+
 function Ensure-OllamaRunning {
     if (Test-HttpReady -Url "http://127.0.0.1:11434/api/tags") {
         Write-Host "[+] Ollama is already running"
         return $true
     }
 
-    $ollama = Get-Command ollama -ErrorAction SilentlyContinue
-    if (-not $ollama) {
+    $ollamaPath = Get-OllamaExecutablePath
+    if (-not $ollamaPath) {
         Write-Warning "Ollama CLI not found. Start Ollama manually if AI analysis is needed."
         return $false
     }
 
     Write-Host "[*] Starting Ollama service..."
-    Start-Process -FilePath $ollama.Source -ArgumentList "serve" -WindowStyle Hidden
+    Start-Process -FilePath $ollamaPath -ArgumentList "serve" -WindowStyle Hidden
 
     if (Wait-ForHttp -Url "http://127.0.0.1:11434/api/tags" -MaxAttempts 30 -DelaySeconds 2) {
         Write-Host "[+] Ollama is ready"

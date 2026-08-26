@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SOC System Maps Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f1e8;
+      --panel: #fffdf8;
+      --ink: #1f2a2e;
+      --muted: #5f6b70;
+      --accent: #0f6c5c;
+      --accent-2: #d66b1f;
+      --border: #d9d2c3;
+    }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #efe7d8 0%, #f9f6ef 100%);
+      color: var(--ink);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 280px 1fr;
+      min-height: 100vh;
+    }
+    nav {
+      background: #1e2d2f;
+      color: #f7f4ee;
+      padding: 24px 20px;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      box-sizing: border-box;
+      overflow: auto;
+    }
+    nav h1 {
+      font-size: 1.3rem;
+      margin: 0 0 12px;
+    }
+    nav p {
+      color: #d8d0c2;
+      line-height: 1.45;
+      margin: 0 0 18px;
+    }
+    nav a {
+      display: block;
+      color: #f7f4ee;
+      text-decoration: none;
+      padding: 10px 12px;
+      border-left: 3px solid transparent;
+      margin-bottom: 6px;
+      background: rgba(255,255,255,0.04);
+    }
+    nav a:hover {
+      border-left-color: var(--accent-2);
+      background: rgba(255,255,255,0.08);
+    }
+    main {
+      padding: 28px;
+    }
+    section {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 22px;
+      margin-bottom: 22px;
+      box-shadow: 0 8px 24px rgba(31, 42, 46, 0.08);
+    }
+    h2 {
+      margin-top: 0;
+      font-size: 1.5rem;
+    }
+    .note {
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .cmd {
+      background: #152124;
+      color: #f7f4ee;
+      padding: 12px 14px;
+      border-radius: 12px;
+      font-family: Consolas, monospace;
+      overflow: auto;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px;
+      background: #fffaf2;
+    }
+    .mermaid {
+      display: none;
+    }
+    .flow-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0;
+    }
+    .flow-box {
+      background: #fff;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 14px 16px;
+      min-width: 180px;
+      box-shadow: 0 4px 14px rgba(31, 42, 46, 0.08);
+    }
+    .flow-box strong {
+      display: block;
+      margin-bottom: 6px;
+    }
+    .flow-arrow {
+      font-size: 1.4rem;
+      color: var(--accent);
+      font-weight: bold;
+    }
+    .flow-column {
+      display: grid;
+      gap: 12px;
+      margin-top: 12px;
+    }
+    @media (max-width: 960px) {
+      .layout { grid-template-columns: 1fr; }
+      nav { position: static; height: auto; }
+      main { padding: 18px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav>
+      <h1>SOC Maps Dashboard</h1>
+      <p>Single place for the system picture, Git flow, API and DB flow, and beginner onboarding.</p>
+      <a href="#system">System Map</a>
+      <a href="#git">Git Map</a>
+      <a href="#api-db">API + DB Map</a>
+      <a href="#onboarding">Onboarding</a>
+      <a href="#commands">Core Commands</a>
+    </nav>
+    <main>
+      <section id="system">
+        <h2>System Map</h2>
+        <p class="note">The system has an operator layer, a runtime layer, and a state layer.</p>
+        <div class="flow-row">
+          <div class="flow-box"><strong>Operator Layer</strong>scripts and docs</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>Runtime Layer</strong>API, Postgres, Redis, Ollama</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>State Layer</strong>Git repo, local DB, shared dump</div>
+        </div>
+        <div class="flow-row">
+          <div class="flow-box"><strong>Operator or Browser</strong>User-facing entry</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>api-service</strong>FastAPI plus web mount</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>PostgreSQL 5433</strong>runtime DB</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>Redis / Ollama / Repo Files</strong>supporting services and code</div>
+        </div>
+        <div class="mermaid">
+flowchart TD
+      A["Operator Layer<br/>scripts and docs"] --> B["Runtime Layer<br/>API, Postgres, Redis, Ollama"]
+      B --> C["State Layer<br/>Git repo, local DB, shared dump"]
+        </div>
+        <div class="mermaid">
+flowchart LR
+      User["Operator or Browser"] --> API["api-service<br/>FastAPI and web mount"]
+      API --> PG[("PostgreSQL<br/>localhost:5433")]
+      API --> Redis[("Redis")]
+      API --> Ollama["Ollama<br/>localhost:11434"]
+      API --> Repo["Repo Files<br/>Tools, config, web, docs"]
+        </div>
+      </section>
+
+      <section id="git">
+        <h2>Git Map</h2>
+        <p class="note">`origin/main` is the team baseline, local `main` is your synced baseline, and your temp branch is where you safely share work.</p>
+        <div class="flow-row">
+          <div class="flow-box"><strong>origin/main</strong>team baseline</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>local main</strong>synced local baseline</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>temp branch</strong>your shareable work</div>
+        </div>
+        <div class="flow-column">
+          <div class="flow-box"><strong>If coworker is still pushing</strong>Wait and validate local stack only.</div>
+          <div class="flow-box"><strong>If upstream is ready</strong>Run safe sync with auto-checkpoint.</div>
+          <div class="flow-box"><strong>If conflict happens</strong>Resolve only the conflicted files, commit merge, then revalidate.</div>
+        </div>
+        <div class="mermaid">
+flowchart LR
+      A["origin/main<br/>team baseline"] --> B["local main<br/>synced baseline"]
+      B --> C["temp branch<br/>your shareable work"]
+        </div>
+        <div class="mermaid">
+flowchart TD
+      A{"Coworker still pushing?"} -->|Yes| B["Wait"]
+      B --> C["Validate local stack only"]
+      A -->|No| D["Run safe sync"]
+      D --> E{"Merge conflict?"}
+      E -- Yes --> F["Resolve only conflicted files"]
+      F --> G["Commit merge"]
+      E -- No --> H["Run troubleshooter and smoke test"]
+    G --> H
+        </div>
+      </section>
+
+      <section id="api-db">
+        <h2>API And Database Map</h2>
+        <div class="flow-row">
+          <div class="flow-box"><strong>Browser</strong>operator UI</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>api/main.py</strong>FastAPI app</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>db/models.py</strong>SQLAlchemy models</div>
+          <div class="flow-arrow">→</div>
+          <div class="flow-box"><strong>PostgreSQL</strong>runtime data</div>
+        </div>
+        <div class="flow-column">
+          <div class="flow-box"><strong>Notables path</strong>Pasted notable text → parse and sanitize → store as SplunkEvent → notables list.</div>
+          <div class="flow-box"><strong>Triage path</strong>Optional promote → TriageResult rows → triage list → triage detail route.</div>
+          <div class="flow-box"><strong>Smoke validation path</strong>web root → health → api health → db stats → triage list → notables list.</div>
+        </div>
+        <div class="mermaid">
+flowchart LR
+      Browser["Browser or Operator"] --> API["api/main.py<br/>FastAPI app"]
+      API --> Web["web static UI"]
+      API --> Models["db/models.py<br/>SQLAlchemy models"]
+      Models --> PG[("PostgreSQL")]
+      API --> Services["services adapters"]
+      Services --> Ollama["Ollama"]
+        </div>
+        <div class="mermaid">
+flowchart TD
+      A["Pasted notable text"] --> B["notables paste endpoint"]
+      B --> C["Sanitize and parse"]
+      C --> D["Store as SplunkEvent"]
+      D --> E["notables list endpoint"]
+      E --> F["Optional promote"]
+      F --> G["TriageResult rows"]
+      G --> H["triage list endpoint"]
+      H --> I["triage detail endpoint"]
+        </div>
+      </section>
+
+      <section id="onboarding">
+        <h2>Beginner Onboarding Flow</h2>
+        <div class="flow-column">
+          <div class="flow-box"><strong>Step 1</strong>Run the troubleshooter first.</div>
+          <div class="flow-box"><strong>Step 2</strong>If the platform is down, run the startup script.</div>
+          <div class="flow-box"><strong>Step 3</strong>Run the smoke test to prove the live stack works.</div>
+          <div class="flow-box"><strong>Step 4</strong>If you need latest main, wait for upstream ready, safe sync, then revalidate.</div>
+          <div class="flow-box"><strong>Step 5</strong>Push through git-menu.ps1 on your own branch.</div>
+        </div>
+        <div class="mermaid">
+flowchart TD
+      A["Run troubleshooter"] --> B{"Platform healthy?"}
+      B -- No --> C["Run start_platform.ps1"]
+      C --> D["Run smoke test"]
+    B -- Yes --> D
+      D --> E{"Need latest main?"}
+      E -- Yes --> F["Wait for upstream ready"]
+      F --> G["Run safe sync"]
+      G --> H["Run troubleshooter and smoke test again"]
+      E -- No --> I["Continue work"]
+      H --> J["Push via git-menu.ps1"]
+        </div>
+        <div class="grid">
+          <div class="card"><strong>Read first</strong><br />OPERATOR_CHEAT_SHEET.md<br />FLOW_SHEETS.md<br />SYSTEM_VISUAL_MAP.md</div>
+          <div class="card"><strong>Trust scripts</strong><br />Use script entry points instead of memorizing raw commands.</div>
+          <div class="card"><strong>Validate often</strong><br />Smoke test after startup, after sync, and after merge resolution.</div>
+        </div>
+      </section>
+
+      <section id="commands">
+        <h2>Core Commands</h2>
+        <div class="cmd">.\scripts\troubleshoot_platform.ps1</div>
+        <div class="cmd">.\scripts\troubleshoot_platform.ps1 -RunSmokeTest</div>
+        <div class="cmd">.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser</div>
+        <div class="cmd">.\scripts\sync_upstream_safe.ps1 -AutoCheckpoint</div>
+        <div class="cmd">.\git-menu.ps1</div>
+      </section>
+    </main>
+  </div>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({ startOnLoad: true, theme: 'default', securityLevel: 'loose' });
+  </script>
+</body>
+</html>

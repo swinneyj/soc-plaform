@@ -754,6 +754,36 @@ def get_triage(
             pass
 
 
+@app.get("/api/db/triage/{case_id}", tags=["Database"])
+def get_triage_case(case_id: str):
+    """Get a specific triage case by case ID."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult
+
+        db = SessionLocal()
+        result = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        return {
+            "case_id": result.case_id,
+            "rule_name": result.rule_name,
+            "verdict": result.verdict,
+            "confidence_score": result.confidence_score,
+            "analysis_summary": result.analysis_summary,
+            "remediation_steps": result.remediation_steps,
+            "triaged_at": result.triaged_at.isoformat()
+        }
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
 def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """Delete a triage case from the database.
@@ -793,17 +823,6 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
 def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """GET wrapper for delete_triage_case for environments that disallow POST."""
     return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
-
-
-@app.get("/api/db/triage/delete", tags=["Database"])
-def delete_triage_case_query(
-    case_id: str = Query(..., description="Case ID to delete"),
-    delete_analysis: bool = Query(False, description="Also delete analysis results for this case"),
-):
-    """Delete a triage case using query parameters instead of a path parameter."""
-    return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
-
-
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
