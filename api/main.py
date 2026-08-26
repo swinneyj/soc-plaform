@@ -380,6 +380,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         "username": fields.get("username"),
         "actions": fields.get("actions") or fields.get("action"),
         "severity": fields.get("severity"),
+        "fields": fields,
         "sanitized_text": payload.get("sanitized_text", ""),
         "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
     }
@@ -644,6 +645,37 @@ def get_triage(
             pass
 
 
+@app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
+def delete_triage_case(case_id: str):
+    """Delete a triage case from the database.
+
+    Intended mainly for removing test/development cases; this does not
+    automatically delete any related analysis results.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Triage case {case_id} not found")
+
+        db.delete(case)
+        db.commit()
+
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -739,6 +771,52 @@ def list_recent_notables(limit: int = Query(20, ge=1, le=200)):
             pass
 
 
+@app.delete("/api/db/notables/{event_id}", tags=["Database"])
+def delete_pasted_notable(event_id: int):
+    """Delete a pasted Splunk notable from the database.
+
+    This removes the stored sanitized text and metadata for the pasted notable
+    but does not delete any triage cases that may have been created from it.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        event = db.query(SplunkEvent).filter(
+            SplunkEvent.id == event_id,
+            SplunkEvent.sourcetype == "splunk:notable:pasted",
+        ).first()
+
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
+
+        db.delete(event)
+        db.commit()
+
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/notables/{event_id}/delete", tags=["Database"])
+def delete_pasted_notable_post(event_id: int):
+    """Compatibility endpoint to delete a pasted notable via POST.
+
+    Some environments or proxies may not allow DELETE from the browser UI,
+    so the frontend can call this POST variant instead. Logic is delegated
+    to the main delete_pasted_notable handler above.
+    """
+    return delete_pasted_notable(event_id)
+
+
 @app.post("/api/db/notables/{event_id}/promote", tags=["Database"])
 def promote_notable_to_triage(event_id: int):
     """Promote a pasted notable into the triage_results table."""
@@ -790,6 +868,12 @@ def promote_notable_to_triage(event_id: int):
             summary_parts.append(f"Status: {fields['status']}")
         if notable_time:
             summary_parts.append(f"Time: {notable_time}")
+        if fields.get("host"):
+            summary_parts.append(f"Host: {fields['host']}")
+        if fields.get("destination"):
+            summary_parts.append(f"Destination: {fields['destination']}")
+        if fields.get("user") or fields.get("username"):
+            summary_parts.append(f"User: {fields.get('user') or fields.get('username')}")
 
         remediation_steps = "Review the sanitized notable evidence, validate disposition, and gather any supporting host/user activity before closure."
 

@@ -224,6 +224,12 @@
                                     <p class="text-xs text-gray-400">{{ notable.correlation_search || 'No correlation search parsed' }}</p>
                                 </div>
                                 <div class="text-right text-xs text-gray-400">
+                                    <button
+                                        @click="deletePastedNotable(notable)"
+                                        class="text-gray-500 hover:text-red-400 mb-1 ml-2"
+                                        title="Remove this pasted notable from the recent list">
+                                        ✕
+                                    </button>
                                     <p>{{ notable.urgency || 'n/a' }} urgency</p>
                                     <p>{{ notable.status || 'n/a' }} status</p>
                                 </div>
@@ -251,8 +257,22 @@
                                 </button>
                             </div>
                             <details class="text-xs text-gray-300">
-                                <summary class="cursor-pointer text-blue-400">Show sanitized text</summary>
-                                <pre class="mt-2 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.sanitized_text }}</pre>
+                                <summary class="cursor-pointer text-blue-400">Show details</summary>
+                                <div class="mt-2 space-y-2">
+                                    <div v-if="notable.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div v-for="(value, key) in notable.fields" :key="key" class="flex">
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.sanitized_text }}</pre>
+                                    </div>
+                                </div>
                             </details>
                         </div>
                     </div>
@@ -271,6 +291,13 @@
                             <option value="suspicious">Suspicious</option>
                             <option value="malicious">Malicious</option>
                         </select>
+                        <label class="flex items-center text-xs text-gray-300 space-x-1">
+                            <input
+                                type="checkbox"
+                                v-model="triageFromPastedOnly"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
+                            <span>From pasted notables only</span>
+                        </label>
                         <button @click="loadTriageData" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
                     </div>
 
@@ -281,8 +308,8 @@
                     <div v-for="case_ in filteredTriageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
                         <div class="flex items-start justify-between mb-2">
                             <div>
-                                <h4 class="font-bold text-blue-400">{{ case_.case_id }}</h4>
-                                <p class="text-sm text-gray-400">{{ case_.rule_name }}</p>
+                                <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
+                                <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
                             </div>
                             <span :class="{
                                 'bg-red-900 text-red-200': case_.verdict === 'malicious',
@@ -297,11 +324,18 @@
                             <span>Confidence: {{ (case_.confidence_score * 100).toFixed(1) }}%</span>
                             <span>Triaged: {{ new Date(case_.triaged_at).toLocaleString() }}</span>
                         </div>
-                        <button 
-                            @click="analyzeCase(case_)"
-                            class="mt-2 px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
-                            Analyze with AI
-                        </button>
+                        <div class="mt-2 flex space-x-2">
+                            <button 
+                                @click="analyzeCase(case_)"
+                                class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                Analyze with AI
+                            </button>
+                            <button
+                                @click="deleteTriageCase(case_)"
+                                class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold transition">
+                                Delete case
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -611,6 +645,7 @@
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
+                    triageFromPastedOnly: false,
                     notablePasteText: '',
                     notableRedactionEnabled: true,
                     notablePasteSaving: false,
@@ -663,6 +698,13 @@
 
                         if (!matchesVerdict) {
                             return false;
+                        }
+
+                        if (this.triageFromPastedOnly) {
+                            const id = (case_.case_id || '').toUpperCase();
+                            if (!id.startsWith('NOTABLE-')) {
+                                return false;
+                            }
                         }
 
                         if (!searchTerm) {
@@ -796,6 +838,19 @@
                         this.notablePasteSaving = false;
                     }
                 },
+                async deletePastedNotable(notable) {
+                    if (!confirm('Remove this pasted notable from the recent list? This will not delete any triage cases created from it.')) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/delete');
+                        await this.loadRecentNotables();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
                 async promoteNotableToTriage(notable) {
                     this.notablePromotingId = notable.id;
                     try {
@@ -818,6 +873,20 @@
                     this.dbSearch = caseId;
                     this.currentTab = 'database';
                     this.loadTriageData();
+                },
+                async deleteTriageCase(case_) {
+                    if (!confirm('Delete this triage case from the database?')) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(case_.case_id) + '/delete');
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
                 },
                 async loadRules() {
                     try {
