@@ -106,38 +106,54 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
                     db.add(rule)
                     imported += 1
 
-                # Optional: import any supportive queries tied to this rule
-                for q in rule_data.get("supportive_queries", []):
-                    try:
-                        title = q.get("title", "").strip()
-                        spl_query = q.get("spl_query", "").strip()
-                        if not title or not spl_query:
-                            supportive_skipped += 1
-                            continue
+                # Optional: import any supportive queries tied to this rule.
+                #
+                # IMPORTANT: once a rule has any supportive queries in the
+                # database (whether seeded or edited via the UI), we treat the
+                # DB as the source of truth and do not re-import JSON seeds for
+                # that rule again. This prevents deleted/edited queries from
+                # being resurrected on every sync.
 
-                        # Avoid duplicate supportive queries for the same rule & title
-                        existing_q = db.query(SupportiveQuery).filter(
-                            SupportiveQuery.rule_id == rule.rule_id,
-                            SupportiveQuery.title == title
-                        ).first()
-                        if existing_q:
-                            existing_q.description = q.get("description", existing_q.description)
-                            existing_q.spl_query = spl_query
-                            supportive_updated += 1
-                            continue
+                existing_for_rule = db.query(SupportiveQuery).filter(
+                    SupportiveQuery.rule_id == rule.rule_id
+                ).all()
 
-                        sq = SupportiveQuery(
-                            id=next_supportive_id,
-                            rule_id=rule.rule_id,
-                            title=title,
-                            description=q.get("description", ""),
-                            spl_query=spl_query
-                        )
-                        next_supportive_id += 1
-                        db.add(sq)
-                        supportive_imported += 1
-                    except Exception as sq_e:
-                        errors.append(f"Supportive query for rule '{rule.rule_id}': {str(sq_e)[:100]}")
+                if existing_for_rule:
+                    # Rule already has supportive queries in DB; skip JSON
+                    # seeds for this rule to preserve analyst customizations.
+                    supportive_skipped += len(rule_data.get("supportive_queries", []))
+                else:
+                    for q in rule_data.get("supportive_queries", []):
+                        try:
+                            title = q.get("title", "").strip()
+                            spl_query = q.get("spl_query", "").strip()
+                            if not title or not spl_query:
+                                supportive_skipped += 1
+                                continue
+
+                            # Avoid duplicate supportive queries for the same rule & title
+                            existing_q = db.query(SupportiveQuery).filter(
+                                SupportiveQuery.rule_id == rule.rule_id,
+                                SupportiveQuery.title == title
+                            ).first()
+                            if existing_q:
+                                existing_q.description = q.get("description", existing_q.description)
+                                existing_q.spl_query = spl_query
+                                supportive_updated += 1
+                                continue
+
+                            sq = SupportiveQuery(
+                                id=next_supportive_id,
+                                rule_id=rule.rule_id,
+                                title=title,
+                                description=q.get("description", ""),
+                                spl_query=spl_query
+                            )
+                            next_supportive_id += 1
+                            db.add(sq)
+                            supportive_imported += 1
+                        except Exception as sq_e:
+                            errors.append(f"Supportive query for rule '{rule.rule_id}': {str(sq_e)[:100]}")
                 
             except Exception as e:
                 skipped += 1

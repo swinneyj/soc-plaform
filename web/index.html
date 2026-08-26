@@ -758,21 +758,31 @@
                             Rule ID: <span class="font-mono">{{ supportiveEditorRuleId }}</span>
                         </p>
                     </div>
-                    <button
-                        type="button"
-                        class="ml-3 text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-gray-300"
-                        @click="openPlaceholderAliasEditor"
-                        title="Manage dynamic placeholder aliases ($host$, $process$, etc.)"
-                    >
-                        Manage Placeholder Aliases
-                    </button>
-                    <button
-                        type="button"
-                        class="text-gray-400 hover:text-white text-xl"
-                        @click="closeSupportiveEditor"
-                    >
-                        &times;
-                    </button>
+                    <div class="flex items-center gap-2">
+                        <button
+                            type="button"
+                            class="ml-3 text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-gray-300"
+                            @click="openPlaceholderAliasEditor"
+                            title="Manage dynamic placeholder aliases ($host$, $process$, etc.)"
+                        >
+                            Manage Placeholder Aliases
+                        </button>
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white"
+                            @click="saveSupportiveQueries"
+                            :disabled="supportiveEditorBusy"
+                        >
+                            {{ supportiveEditorBusy ? 'Saving...' : 'Save Changes' }}
+                        </button>
+                        <button
+                            type="button"
+                            class="text-gray-400 hover:text-white text-xl"
+                            @click="closeSupportiveEditor"
+                        >
+                            &times;
+                        </button>
+                    </div>
                 </div>
 
                 <p v-if="supportiveEditorError" class="text-xs text-red-400 mb-2">
@@ -849,14 +859,6 @@
                         :disabled="supportiveEditorBusy"
                     >
                         Cancel
-                    </button>
-                    <button
-                        type="button"
-                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white"
-                        @click="saveSupportiveQueries"
-                        :disabled="supportiveEditorBusy"
-                    >
-                        {{ supportiveEditorBusy ? 'Saving...' : 'Save Changes' }}
                     </button>
                 </div>
             </div>
@@ -1092,6 +1094,16 @@
                     const case_ = this.analysisCases.find(c => c.case_id === this.analysisCaseId);
                     if (!case_) {
                         return null;
+                    }
+
+                    // Prefer stable rule_id mapping when available so
+                    // supportive queries stay consistent for the same rule.
+                    const caseRuleId = (case_.rule_id || '').trim();
+                    if (caseRuleId) {
+                        const byId = this.availableRules.find(r => (r.rule_id || '').trim() === caseRuleId);
+                        if (byId) {
+                            return byId;
+                        }
                     }
 
                     const caseRule = (case_.rule_name || '').toLowerCase().trim();
@@ -1414,9 +1426,6 @@
                     this.supportiveEditorOpen = true;
                 },
                 closeSupportiveEditor() {
-                    if (this.supportiveEditorBusy) {
-                        return;
-                    }
                     this.supportiveEditorOpen = false;
                     this.supportiveEditorQueries = [];
                     this.supportiveEditorRuleId = '';

@@ -851,6 +851,7 @@ def get_triage(
             {
                 "case_id": r.case_id,
                 "rule_name": r.rule_name,
+                "rule_id": r.rule_id,
                 "verdict": r.verdict,
                 "confidence_score": r.confidence_score,
                 "analysis_summary": r.analysis_summary,
@@ -884,6 +885,7 @@ def get_triage_case(case_id: str):
         return {
             "case_id": result.case_id,
             "rule_name": result.rule_name,
+            "rule_id": result.rule_id,
             "verdict": result.verdict,
             "confidence_score": result.confidence_score,
             "analysis_summary": result.analysis_summary,
@@ -1221,7 +1223,7 @@ def promote_notable_to_triage(event_id: int):
     """Promote a pasted notable into the triage_results table."""
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent, TriageResult
+        from db.models import SessionLocal, SplunkEvent, TriageResult, ESCorrelationRule
 
         db = SessionLocal()
         event = db.query(SplunkEvent).filter(
@@ -1269,6 +1271,31 @@ def promote_notable_to_triage(event_id: int):
         confidence = derive_triage_confidence(disposition)
         notable_time = fields.get("time") or (event.timestamp.isoformat() if event.timestamp else None)
 
+        # Try to resolve a stable rule_id from the ES correlation rules
+        # table so future cases for the same rule consistently reuse the
+        # same supportive queries and templates.
+        resolved_rule_id = None
+        anchor = (correlation_search or "").strip().lower()
+        if anchor:
+            rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
+
+            # 1) Prefer exact rule_name match
+            for r in rules:
+                name = (r.rule_name or "").strip().lower()
+                if name and name == anchor:
+                    resolved_rule_id = r.rule_id
+                    break
+
+            # 2) Fallback to relaxed contains-based match
+            if not resolved_rule_id:
+                for r in rules:
+                    name = (r.rule_name or "").strip().lower()
+                    if not name:
+                        continue
+                    if anchor in name or name in anchor:
+                        resolved_rule_id = r.rule_id
+                        break
+
         summary_parts = [title]
         if disposition:
             summary_parts.append(f"Disposition: {disposition}")
@@ -1288,7 +1315,7 @@ def promote_notable_to_triage(event_id: int):
         triage_case = TriageResult(
             case_id=case_id,
             rule_name=correlation_search,
-            rule_id=None,
+            rule_id=resolved_rule_id,
             verdict=verdict,
             confidence_score=confidence,
             analysis_summary=" | ".join(summary_parts),
