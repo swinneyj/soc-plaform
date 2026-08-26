@@ -686,6 +686,15 @@ def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, de
     return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
 
 
+@app.get("/api/db/triage/delete", tags=["Database"])
+def delete_triage_case_query(
+    case_id: str = Query(..., description="Case ID to delete"),
+    delete_analysis: bool = Query(False, description="Also delete analysis results for this case"),
+):
+    """Delete a triage case using query parameters instead of a path parameter."""
+    return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
+
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
