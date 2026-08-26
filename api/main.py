@@ -595,15 +595,25 @@ def db_stats():
 def get_triage(
     limit: int = Query(50, ge=1, le=1000),
     search: str = Query("", description="Search case ID, rule name, or summary"),
-    verdict: str = Query("", description="Filter by verdict")
+    verdict: str = Query("", description="Filter by verdict"),
+    delete_case_id: Optional[str] = Query(None, description="If provided, delete this case before listing"),
+    delete_analysis: bool = Query(False, description="Also delete analysis results for this case when deleting"),
 ):
-    """Get triaged cases from database."""
+    """Get triaged cases from database (optionally deleting one first)."""
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import or_
         from db.models import SessionLocal, TriageResult
 
         db = SessionLocal()
+
+        # Optional delete step
+        if delete_case_id:
+            try:
+                delete_triage_case(case_id=delete_case_id, delete_analysis=delete_analysis)
+            except HTTPException:
+                # Surface delete errors via empty list; UI will already show alert
+                pass
 
         query = db.query(TriageResult)
 
@@ -769,13 +779,24 @@ def paste_notable(request: PastedNotableRequest):
 
 
 @app.get("/api/db/notables", tags=["Database"])
-def list_recent_notables(limit: int = Query(20, ge=1, le=200)):
-    """List recently pasted sanitized Splunk notables from the database."""
+def list_recent_notables(
+    limit: int = Query(20, ge=1, le=200),
+    delete_event_id: Optional[int] = Query(None, description="If provided, delete this pasted notable before listing"),
+):
+    """List recently pasted sanitized Splunk notables (optionally deleting one first)."""
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SplunkEvent
 
         db = SessionLocal()
+
+        # Optional delete step
+        if delete_event_id is not None:
+            try:
+                delete_pasted_notable(delete_event_id)
+            except HTTPException:
+                # Ignore delete errors here; UI will already show alert
+                pass
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
         ).order_by(SplunkEvent.ingested_at.desc()).limit(limit).all()
