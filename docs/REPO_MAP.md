@@ -16,9 +16,15 @@ If you are new to this repo, read in this order:
 
 1. `README.txt`
 2. `RUNBOOK.md`
-3. `docs\REPO_MAP.md`
-4. `docs\SETUP.md`
-5. `docs\SHARED_LOGIC_MODEL.md`
+3. `OPERATOR_CHEAT_SHEET.md`
+4. `docs\FLOW_SHEETS.md`
+5. `docs\SYSTEM_VISUAL_MAP.md`
+6. `docs\GIT_VISUAL_MAP.md`
+7. `docs\API_DB_VISUAL_MAP.md`
+8. `docs\NEW_DEVELOPER_ONBOARDING.md`
+9. `docs\REPO_MAP.md`
+10. `docs\SETUP.md`
+11. `docs\SHARED_LOGIC_MODEL.md`
 
 ---
 
@@ -93,6 +99,16 @@ Use `docs\` like this:
   Setup instructions
 - `docs\RESTART.md`
   Restart flow and wrapper behavior
+- `docs\FLOW_SHEETS.md`
+  Beginner-friendly operator decision flows
+- `docs\SYSTEM_VISUAL_MAP.md`
+  Visual architecture and mental-model map
+- `docs\GIT_VISUAL_MAP.md`
+  Visual Git, sync, and branch mental model
+- `docs\API_DB_VISUAL_MAP.md`
+  Visual API, database, and route mental model
+- `docs\NEW_DEVELOPER_ONBOARDING.md`
+  Short guided path for a new developer
 - `docs\DAILY_WORKFLOW.md`
   Daily operating routine
 - `docs\SHARED_LOGIC_MODEL.md`

@@ -659,6 +659,7 @@ def get_triage(
 @app.get("/api/db/triage/{case_id}", tags=["Database"])
 def get_triage_case(case_id: str):
     """Get a specific triage case by case ID."""
+    db = None
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, TriageResult
@@ -677,6 +678,12 @@ def get_triage_case(case_id: str):
             "remediation_steps": result.remediation_steps,
             "triaged_at": result.triaged_at.isoformat()
         }
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])

@@ -90,6 +90,48 @@ This also reports whether the shared handoff lock file exists and who currently 
 
 It also reports the latest shared dump metadata when present.
 
+## Troubleshooting Check
+
+Use this as the primary entry point before startup work, smoke tests, or asking for manual troubleshooting help:
+
+```powershell
+.\scripts\troubleshoot_platform.ps1
+```
+
+It checks:
+- Git merge/conflict/dirty state
+- Docker availability and compose service state
+- API and compatibility health endpoints
+- PostgreSQL port availability
+- Ollama reachability
+- Shared lock and dump metadata files
+
+It also prints:
+- the expected solution for each failed or warning condition
+- an explicit recommended command for each actionable issue
+- a prioritized `Recommended Next Actions` section at the end
+
+Optional modes:
+
+```powershell
+.\scripts\troubleshoot_platform.ps1 -ShowEvidence
+.\scripts\troubleshoot_platform.ps1 -AsJson
+.\scripts\troubleshoot_platform.ps1 -RunSmokeTest
+```
+
+Use `-RunSmokeTest` after the platform is up when you want the troubleshooter to validate the live workflow surface, not just prerequisites. It checks:
+- web root response
+- `/health`
+- `/api/health`
+- `/api/db/stats`
+- `/api/db/triage?limit=1`
+- `/api/db/notables?limit=1`
+
+It exits with:
+- `0` when all checks pass
+- `2` when only warnings are present
+- `1` when at least one hard failure is present
+
 ## If You Only Want The API Stack
 
 ```powershell
