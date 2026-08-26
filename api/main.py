@@ -646,7 +646,7 @@ def get_triage(
 
 
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
-def delete_triage_case(case_id: str):
+def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """Delete a triage case from the database.
 
     Intended mainly for removing test/development cases; this does not
@@ -654,7 +654,7 @@ def delete_triage_case(case_id: str):
     """
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult
+        from db.models import SessionLocal, TriageResult, AnalysisResult
 
         db = SessionLocal()
         case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
@@ -662,6 +662,10 @@ def delete_triage_case(case_id: str):
             raise HTTPException(status_code=404, detail=f"Triage case {case_id} not found")
 
         db.delete(case)
+
+        if delete_analysis:
+            db.query(AnalysisResult).filter(AnalysisResult.case_id == case_id).delete()
+
         db.commit()
 
         return {"success": True}
