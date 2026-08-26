@@ -457,6 +457,7 @@
                             class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
                         <select 
                             v-model="analysisCaseId"
+                            @change="onAnalysisCaseChanged"
                             class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
                             <option value="">-- Choose a case from the database --</option>
                             <option v-for="case_ in filteredAnalysisCases" :key="case_.case_id" :value="case_.case_id">
@@ -500,7 +501,7 @@
                             <div v-for="q in analysisRule.supportive_queries" :key="q.id" class="bg-gray-900 border border-gray-700 rounded p-3">
                                 <p class="text-xs font-semibold text-blue-300 mb-1">{{ q.title }}</p>
                                 <p class="text-xs text-gray-400 mb-2" v-if="q.description">{{ q.description }}</p>
-                                <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ q.spl_query }}</pre>
+                                <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ renderSupportiveQuery(q) }}</pre>
                             </div>
                             <p class="mt-2 text-[11px] text-gray-500">
                                 Run these queries in Splunk and store any results for this case before running AI analysis to give the model richer context.
@@ -903,6 +904,7 @@
                     analysisContext: '',
                     analysisRunning: false,
                     analysisResult: null,
+                    analysisSourceNotable: null,
 
                     // Closure Notes
                     availableRules: [],
@@ -1096,6 +1098,24 @@
                     } catch (err) {
                         console.error('Failed to load reports:', err);
                     }
+                },
+                onAnalysisCaseChanged() {
+                    this.analysisSourceNotable = null;
+
+                    const caseId = this.analysisCaseId;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.analysisSourceNotable = res.data;
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for analysis case:', err);
+                            this.analysisSourceNotable = null;
+                        });
                 },
                 async loadTriageData() {
                     try {
@@ -1454,6 +1474,7 @@
                 async analyzeCase(case_) {
                     this.analysisCaseId = case_.case_id;
                     this.currentTab = 'analysis';
+                    this.onAnalysisCaseChanged();
                 },
                 async runAnalysis() {
                     if (!this.analysisCaseId || !this.analysisModel) {
@@ -1474,6 +1495,65 @@
                     } finally {
                         this.analysisRunning = false;
                     }
+                },
+                renderSupportiveQuery(q) {
+                    const text = (q.spl_query || '').toString();
+                    if (!this.analysisSourceNotable || !this.analysisSourceNotable.fields) {
+                        return text;
+                    }
+
+                    const fields = this.analysisSourceNotable.fields || {};
+
+                    // Aliases for common investigative placeholders. These map
+                    // friendly names like $process$ onto one or more parsed
+                    // notable fields.
+                    const aliasMap = {
+                        host: ['host', 'destination_nt_hostname', 'destination', 'destination_ip'],
+                        dest: ['destination', 'destination_ip', 'host'],
+                        user: ['user', 'username', 'user_identity'],
+                        account: ['user', 'username', 'user_identity'],
+                        process: ['process', 'image', 'file_name', 'value'],
+                    };
+
+                    const placeholderRegex = /\$([A-Za-z0-9_]+)\$/g;
+
+                    const resolveValue = (name) => {
+                        const lower = name.toLowerCase();
+                        let value = '';
+
+                        // First, try alias mappings like host/dest/user/process.
+                        if (aliasMap[lower]) {
+                            for (const key of aliasMap[lower]) {
+                                if (fields[key]) {
+                                    value = fields[key];
+                                    break;
+                                }
+                            }
+                        }
+
+                        // If no alias hit, try direct field name matches.
+                        if (!value) {
+                            if (Object.prototype.hasOwnProperty.call(fields, name)) {
+                                value = fields[name];
+                            } else {
+                                // Case-insensitive field name match.
+                                const keys = Object.keys(fields);
+                                for (const key of keys) {
+                                    if (key.toLowerCase() === lower) {
+                                        value = fields[key];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        return value;
+                    };
+
+                    return text.replace(placeholderRegex, (match, name) => {
+                        const value = resolveValue(name);
+                        return value ? value : match;
+                    });
                 },
                 goToClosureFromAnalysis() {
                     if (!this.analysisCaseId) {
