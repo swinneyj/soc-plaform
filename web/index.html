@@ -1833,6 +1833,13 @@
                             }
                         }
 
+                        // Globally escape backslashes so literal Windows paths
+                        // like c:\windows\system32\certutil.exe render as
+                        // c\\windows\\system32\\certutil.exe in SPL,
+                        // which Splunk accepts inside quoted strings.
+                        if (typeof value === 'string' && value.includes('\\')) {
+                            return value.replace(/\\/g, '\\\\');
+                        }
                         return value;
                     };
 
