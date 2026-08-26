@@ -183,6 +183,13 @@
                             v-model="notablePasteText"
                             placeholder="Paste the notable block here..."
                             class="w-full h-56 px-4 py-3 bg-gray-900 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"></textarea>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableRedactionEnabled"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Apply tokenizer redaction when saving</span>
+                        </label>
                         <div class="flex items-center justify-between">
                             <p v-if="notablePasteResult" class="text-xs text-gray-400">
                                 Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
@@ -605,6 +612,7 @@
                     dbSearch: '',
                     dbVerdictFilter: '',
                     notablePasteText: '',
+                    notableRedactionEnabled: true,
                     notablePasteSaving: false,
                     notablePasteResult: null,
                     notablePromotingId: null,
@@ -774,7 +782,8 @@
                     this.notablePasteSaving = true;
                     try {
                         const res = await axios.post(this.apiUrl + '/db/notables/paste', {
-                            raw_text: this.notablePasteText
+                            raw_text: this.notablePasteText,
+                            redaction_enabled: this.notableRedactionEnabled
                         });
                         this.notablePasteResult = res.data;
                         this.notablePasteText = '';

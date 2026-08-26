@@ -72,6 +72,10 @@ class AnalyzeRequest(BaseModel):
 
 class PastedNotableRequest(BaseModel):
     raw_text: str = Field(..., description="Pasted notable text from Splunk Incident Review")
+    redaction_enabled: bool = Field(
+        True,
+        description="Whether to apply tokenizer-style redaction to the pasted notable",
+    )
 
 # Helper Functions
 def load_registry() -> List[Dict]:
@@ -151,6 +155,14 @@ NOTABLE_FIELD_ALIASES = [
     ("Correlation Search", "correlation_search"),
     ("Security Domain", "security_domain"),
     ("Destination", "destination"),
+    ("Destination Business Unit", "destination_business_unit"),
+    ("Destination Category", "destination_category"),
+    ("Destination DNS", "destination_dns"),
+    ("Destination Expected", "destination_expected"),
+    ("Destination IP Address", "destination_ip"),
+    ("Destination NT Hostname", "destination_nt_hostname"),
+    ("Destination PCI Domain", "destination_pci_domain"),
+    ("Destination Port", "destination_port"),
     ("Disposition", "disposition"),
     ("Username", "username"),
     ("File Name", "file_name"),
@@ -165,6 +177,13 @@ NOTABLE_FIELD_ALIASES = [
     ("Type", "type"),
     ("Time", "time"),
     ("Host", "host"),
+    ("Source IP Address", "source_ip"),
+    ("Source Port", "source_port"),
+    ("User Email", "user_email"),
+    ("User First Name", "user_first_name"),
+    ("User Last Name", "user_last_name"),
+    ("User Identity", "user_identity"),
+    ("User Category", "user_category"),
     ("User", "user"),
     ("Value", "value"),
 ]
@@ -180,8 +199,23 @@ NOTABLE_FIELD_LABELS = {
     "owner": "Owner",
     "host": "Host",
     "destination": "Destination",
+    "destination_business_unit": "Destination Business Unit",
+    "destination_category": "Destination Category",
+    "destination_dns": "Destination DNS",
+    "destination_expected": "Destination Expected",
+    "destination_ip": "Destination IP Address",
+    "destination_nt_hostname": "Destination NT Hostname",
+    "destination_pci_domain": "Destination PCI Domain",
+    "destination_port": "Destination Port",
     "user": "User",
     "username": "Username",
+    "user_email": "User Email",
+    "user_first_name": "User First Name",
+    "user_last_name": "User Last Name",
+    "user_identity": "User Identity",
+    "user_category": "User Category",
+    "source_ip": "Source IP Address",
+    "source_port": "Source Port",
     "actions": "Actions",
     "action": "Action",
     "additional_fields_value": "Additional FieldsValue",
@@ -626,11 +660,19 @@ def paste_notable(request: PastedNotableRequest):
         if not parsed_fields:
             parsed_fields = parse_pasted_notable(raw_text)
         structured_text = render_notable_fields(parsed_fields) or raw_text
-        sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
-        sanitized_text = sanitize_pii_phi(sanitized_text)
-        sanitized_fields = parse_structured_notable(sanitized_text)
-        if parsed_fields.get("time"):
-            sanitized_fields["time"] = parsed_fields["time"]
+        if request.redaction_enabled:
+            sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
+            sanitized_text = sanitize_pii_phi(sanitized_text)
+            sanitized_fields = parse_structured_notable(sanitized_text)
+            # preserve original time if we parsed it before masking
+            if parsed_fields.get("time"):
+                sanitized_fields["time"] = parsed_fields["time"]
+        else:
+            # no masking: keep parsed fields and structured text as-is
+            sanitized_text = structured_text
+            mapping = {}
+            sanitized_fields = parsed_fields.copy()
+
         artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
 
         payload = {
