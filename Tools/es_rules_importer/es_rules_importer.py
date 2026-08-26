@@ -36,6 +36,7 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
         return {"success": False, "error": f"File not found: {json_file}", "imported": 0}
     
     try:
+        from sqlalchemy import func  # type: ignore
         from db.models import SessionLocal, ESCorrelationRule, SupportiveQuery
         
         with open(json_file, 'r') as f:
@@ -57,6 +58,14 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
         supportive_updated = 0
         supportive_skipped = 0
         errors = []
+        # Track the next explicit ID to assign for new supportive queries.
+        # This avoids relying on a misaligned Postgres sequence and is safe
+        # for small, admin-driven imports.
+        try:
+            max_id = db.query(func.max(SupportiveQuery.id)).scalar() or 0
+        except Exception:
+            max_id = 0
+        next_supportive_id = int(max_id) + 1
         
         for rule_data in rules:
             try:
@@ -118,11 +127,13 @@ def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
                             continue
 
                         sq = SupportiveQuery(
+                            id=next_supportive_id,
                             rule_id=rule.rule_id,
                             title=title,
                             description=q.get("description", ""),
                             spl_query=spl_query
                         )
+                        next_supportive_id += 1
                         db.add(sq)
                         supportive_imported += 1
                     except Exception as sq_e:

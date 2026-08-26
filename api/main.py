@@ -70,6 +70,28 @@ class AnalyzeRequest(BaseModel):
     context: str = ""
 
 
+class SupportiveQueryPayload(BaseModel):
+    """Payload for creating/updating supportive SPL queries.
+
+    This is intentionally minimal so analysts can tune queries on the fly
+    without touching the underlying correlation rule definition.
+    """
+
+    rule_id: str = Field(..., description="Logical correlation rule identifier")
+    title: str = Field(..., description="Short name for this supportive query")
+    description: Optional[str] = Field("", description="What this query is used for")
+    spl_query: str = Field(..., description="SPL to run in Splunk or another system")
+
+
+class SupportiveQueryUpdatePayload(BaseModel):
+    """Partial update payload for supportive SPL queries."""
+
+    rule_id: Optional[str] = Field(None, description="Logical correlation rule identifier")
+    title: Optional[str] = Field(None, description="Short name for this supportive query")
+    description: Optional[str] = Field(None, description="What this query is used for")
+    spl_query: Optional[str] = Field(None, description="SPL to run in Splunk or another system")
+
+
 class PastedNotableRequest(BaseModel):
     raw_text: str = Field(..., description="Pasted notable text from Splunk Incident Review")
     redaction_enabled: bool = Field(
@@ -281,7 +303,10 @@ def split_pasted_notables(raw_text: str) -> List[str]:
     lines = normalized.split("\n")
 
     # Primary heuristic: each card contains a standalone "Notable" line near the top.
-    notable_pattern = re.compile(r"^\s*Notable\s*$", re.IGNORECASE)
+    # Use a case-sensitive match so we only pick up the top-of-card
+    # "Notable" heading, not the lower-case "notable" line under
+    # Event Details.
+    notable_pattern = re.compile(r"^\s*Notable\s*$")
     boundaries: List[int] = [
         index for index, line in enumerate(lines) if notable_pattern.match(line)
     ]
@@ -412,6 +437,31 @@ def parse_notable_timestamp(value: str):
             pass
 
     return datetime.datetime.utcnow()
+
+
+def build_historical_dedup_key(fields: Dict[str, str], sanitized_text: str) -> Optional[str]:
+    """Build a stable key for deduplicating closed/historical pasted notables.
+
+    We rely on a combination of correlation search/title, notable time, host,
+    and the sanitized text body. This is intentionally conservative and only
+    used for historical (closed) notables, so a match strongly suggests the
+    same incident has already been stored.
+    """
+    if not sanitized_text:
+        return None
+
+    title = (fields.get("title") or "").strip()
+    corr = (fields.get("correlation_search") or "").strip()
+    time_val = (fields.get("time") or "").strip()
+    host_val = (fields.get("host") or fields.get("destination") or "").strip()
+
+    anchor = corr or title
+    if not anchor:
+        return None
+
+    # Normalize whitespace in sanitized_text to reduce trivial diffs
+    normalized_text = re.sub(r"\s+", " ", sanitized_text).strip()
+    return "|".join([anchor, time_val, host_val, normalized_text]) or None
 
 
 def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dict[str, str], parsed_fields: Dict[str, str]) -> Dict[str, str]:
@@ -843,6 +893,36 @@ def paste_notable(request: PastedNotableRequest):
         events_info = []
         total_mapping_entries = 0
 
+        # For closed/historical notables, avoid creating duplicate rows when the
+        # same Incident Review export is pasted multiple times. We build a map
+        # of existing historical events keyed by a composite of
+        # correlation_search/title, time, host, and sanitized text.
+        existing_historical: Dict[str, Any] = {}
+        if request.historical:
+            existing_events = db.query(SplunkEvent).filter(
+                SplunkEvent.sourcetype == "splunk:notable:pasted"
+            ).order_by(SplunkEvent.ingested_at.desc()).all()
+
+            for event in existing_events:
+                try:
+                    payload = json.loads(event.raw) if event.raw else {}
+                except Exception:
+                    continue
+
+                if not payload.get("historical"):
+                    continue
+
+                fields = payload.get("fields", {}) or {}
+                sanitized_text_existing = payload.get("sanitized_text", "")
+                key = build_historical_dedup_key(fields, sanitized_text_existing)
+                if key and key not in existing_historical:
+                    existing_historical[key] = {
+                        "event": event,
+                        "payload": payload,
+                        "fields": fields,
+                        "artifact_paths": payload.get("artifact_paths") or {},
+                    }
+
         for index, segment_text in enumerate(segments):
             parsed_fields = parse_structured_notable(segment_text)
             if not parsed_fields:
@@ -870,40 +950,90 @@ def paste_notable(request: PastedNotableRequest):
 
             sanitized_history = extract_notable_history(sanitized_text)
 
-            artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+            # Deduplicate closed/historical notables to avoid duplicate rows
+            # when the same incident is pasted multiple times.
+            artifact_paths = None
+            event = None
 
-            payload = {
-                "record_type": "splunk_notable_paste",
-                "fields": sanitized_fields,
-                "sanitized_text": sanitized_text,
-                "history": sanitized_history,
-                "saved_at": datetime.datetime.utcnow().isoformat(),
-                "artifact_paths": artifact_paths,
-                "historical": request.historical,
-                "segment_index": index,
-                "segment_count": len(segments),
-            }
+            if request.historical:
+                key = build_historical_dedup_key(sanitized_fields, sanitized_text)
+                existing = existing_historical.get(key) if key else None
+                if existing:
+                    event = existing["event"]
+                    artifact_paths = existing.get("artifact_paths") or {}
+                else:
+                    artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+                    payload = {
+                        "record_type": "splunk_notable_paste",
+                        "fields": sanitized_fields,
+                        "sanitized_text": sanitized_text,
+                        "history": sanitized_history,
+                        "saved_at": datetime.datetime.utcnow().isoformat(),
+                        "artifact_paths": artifact_paths,
+                        "historical": request.historical,
+                        "segment_index": index,
+                        "segment_count": len(segments),
+                    }
 
-            source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
-            host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
-            timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
+                    source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
+                    host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
+                    timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
 
-            event = SplunkEvent(
-                sourcetype="splunk:notable:pasted",
-                source=source,
-                host=host,
-                raw=json.dumps(payload),
-                timestamp=timestamp,
-            )
-            db.add(event)
-            db.commit()
-            db.refresh(event)
+                    event = SplunkEvent(
+                        sourcetype="splunk:notable:pasted",
+                        source=source,
+                        host=host,
+                        raw=json.dumps(payload),
+                        timestamp=timestamp,
+                    )
+                    db.add(event)
+                    db.commit()
+                    db.refresh(event)
+
+                    # Cache this new historical event for any additional
+                    # segments that may match within the same paste.
+                    if key:
+                        existing_historical[key] = {
+                            "event": event,
+                            "payload": payload,
+                            "fields": sanitized_fields,
+                            "artifact_paths": artifact_paths,
+                        }
+            else:
+                artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+                payload = {
+                    "record_type": "splunk_notable_paste",
+                    "fields": sanitized_fields,
+                    "sanitized_text": sanitized_text,
+                    "history": sanitized_history,
+                    "saved_at": datetime.datetime.utcnow().isoformat(),
+                    "artifact_paths": artifact_paths,
+                    "historical": request.historical,
+                    "segment_index": index,
+                    "segment_count": len(segments),
+                }
+
+                source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
+                host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
+                timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
+
+                event = SplunkEvent(
+                    sourcetype="splunk:notable:pasted",
+                    source=source,
+                    host=host,
+                    raw=json.dumps(payload),
+                    timestamp=timestamp,
+                )
+                db.add(event)
+                db.commit()
+                db.refresh(event)
 
             events_info.append({
-                "event_id": event.id,
+                "event_id": event.id if event else None,
                 "parsed_fields": sanitized_fields,
-                "artifact_paths": artifact_paths,
+                "artifact_paths": artifact_paths or {},
                 "mapping_entries": len(mapping),
+                "deduplicated": bool(request.historical and key and existing),
             })
             total_mapping_entries += len(mapping)
 
@@ -1165,37 +1295,213 @@ def get_triage_source_notable(case_id: str):
 
 @app.post("/api/db/analyze", tags=["Database"])
 def analyze_case(request: AnalyzeRequest):
-    """Analyze a case using Ollama LLM."""
+    """Analyze a case using Ollama LLM.
+
+    Enhanced flow:
+    - Uses the triage case details as the primary anchor.
+    - Pulls the source pasted notable (sanitized text + history) for this case.
+    - Finds closed/historical pasted notables with matching correlation search/title
+      to serve as baselines.
+    - Includes any stored supportive query results for this case.
+    - Optionally appends analyst-provided context.
+
+    All of this is fused into a single composite prompt sent to the local
+    Ollama model.
+    """
     try:
         case_id = request.case_id
         model = request.model
         context = request.context
-        
+
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult
         from services.ollama_service import get_ollama_client
-        
+
         db = SessionLocal()
+
+        # Anchor on the triage case
         case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
-        db.close()
-        
         if not case:
+            db.close()
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-        
+
+        # Load all pasted-notable events once for both source and baselines
+        pasted_events = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).order_by(SplunkEvent.ingested_at.desc()).all()
+
+        # Identify the source pasted notable for this case (if any)
+        source_notable_payload = None
+        for event in pasted_events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
+
+            if payload.get("promoted_case_id") == case_id:
+                source_notable_payload = {
+                    "event_id": event.id,
+                    "fields": payload.get("fields", {}),
+                    "sanitized_text": payload.get("sanitized_text", ""),
+                    "history": payload.get("history"),
+                    "historical": payload.get("historical", False),
+                    "saved_at": payload.get("saved_at") or (
+                        event.ingested_at.isoformat() if event.ingested_at else None
+                    ),
+                }
+                break
+
+        # Build closed/historical baselines for the same rule/title
+        correlation_anchor = (case.rule_name or "").strip()
+        historical_baselines = []
+        if correlation_anchor:
+            for event in pasted_events:
+                try:
+                    payload = json.loads(event.raw) if event.raw else {}
+                except Exception:
+                    continue
+
+                if not payload.get("historical"):
+                    continue
+
+                fields = payload.get("fields", {})
+                title = fields.get("title") or event.source or ""
+                corr = fields.get("correlation_search") or ""
+
+                if correlation_anchor not in (title, corr):
+                    continue
+
+                historical_baselines.append({
+                    "event_id": event.id,
+                    "fields": fields,
+                    "sanitized_text": payload.get("sanitized_text", ""),
+                    "history": payload.get("history"),
+                    "saved_at": payload.get("saved_at") or (
+                        event.ingested_at.isoformat() if event.ingested_at else None
+                    ),
+                })
+
+        # Load supportive query results for this case
+        supportive_rows = db.query(SupportiveQueryResult).filter(
+            SupportiveQueryResult.case_id == case_id
+        ).order_by(SupportiveQueryResult.created_at.desc()).all()
+
+        supportive_results = []
+        for r in supportive_rows:
+            try:
+                raw = json.loads(r.raw_result) if r.raw_result else None
+            except Exception:
+                raw = r.raw_result
+
+            supportive_results.append({
+                "id": r.id,
+                "rule_id": r.rule_id,
+                "query_title": r.query_title,
+                "source_system": r.source_system,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "raw_result": raw,
+            })
+
+        db.close()
+
         client = get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
-        
-        event_data = f"Case ID: {case.case_id}\nRule: {case.rule_name}\nVerdict: {case.verdict}\nSummary: {case.analysis_summary}"
-        result = client.generate(event_data, model=model)
-        
+
+        # Build composite prompt
+        prompt_parts = []
+        prompt_parts.append(
+            "You are a SOC analyst reviewing a security case. "
+            "Use the current case, closed/historical baselines, and supportive query "
+            "results below to recommend a disposition, key investigative steps, and "
+            "concise closure notes."
+        )
+
+        # Current triage case
+        prompt_parts.append("\n\n=== CURRENT CASE ===")
+        prompt_parts.append(f"Case ID: {case.case_id}")
+        prompt_parts.append(f"Rule Name / Title: {case.rule_name}")
+        prompt_parts.append(f"Verdict: {case.verdict}")
+        prompt_parts.append(f"Analysis Summary: {case.analysis_summary}")
+        if case.remediation_steps:
+            prompt_parts.append(f"Remediation Steps: {case.remediation_steps}")
+        prompt_parts.append(f"Triaged At: {case.triaged_at.isoformat()}")
+
+        # Source pasted notable (open case)
+        if source_notable_payload:
+            prompt_parts.append("\n\n=== SOURCE PASTED NOTABLE (OPEN) ===")
+            prompt_parts.append(f"Event ID: {source_notable_payload['event_id']}")
+            fields = source_notable_payload.get("fields", {})
+            if fields:
+                prompt_parts.append("Fields:")
+                for key, value in fields.items():
+                    prompt_parts.append(f"- {key}: {value}")
+            history = source_notable_payload.get("history")
+            if history:
+                prompt_parts.append("\nHistory / closure notes:")
+                prompt_parts.append(history)
+            sanitized_text = source_notable_payload.get("sanitized_text")
+            if sanitized_text:
+                prompt_parts.append("\nSanitized text:")
+                prompt_parts.append(sanitized_text)
+
+        # Closed/historical baselines
+        if historical_baselines:
+            prompt_parts.append("\n\n=== CLOSED BASELINE NOTABLES (HISTORICAL) ===")
+            for idx, baseline in enumerate(historical_baselines, start=1):
+                prompt_parts.append(
+                    f"\n[Baseline {idx}] Event ID: {baseline['event_id']} "
+                    f"(saved at {baseline['saved_at']})"
+                )
+                fields = baseline.get("fields") or {}
+                if fields:
+                    prompt_parts.append("Fields:")
+                    for key, value in fields.items():
+                        prompt_parts.append(f"- {key}: {value}")
+                history = baseline.get("history")
+                if history:
+                    prompt_parts.append("History / closure notes:")
+                    prompt_parts.append(history)
+                sanitized_text = baseline.get("sanitized_text")
+                if sanitized_text:
+                    prompt_parts.append("Sanitized text:")
+                    prompt_parts.append(sanitized_text)
+
+        # Supportive query results
+        if supportive_results:
+            prompt_parts.append("\n\n=== SUPPORTIVE QUERY RESULTS ===")
+            for idx, result_row in enumerate(supportive_results, start=1):
+                prompt_parts.append(
+                    f"\n[Supportive Result {idx}] "
+                    f"Title: {result_row['query_title']} "
+                    f"(source: {result_row['source_system']}, rule_id: {result_row['rule_id']})"
+                )
+                raw = result_row.get("raw_result")
+                if raw is not None:
+                    prompt_parts.append("Raw result:")
+                    if isinstance(raw, (dict, list)):
+                        prompt_parts.append(json.dumps(raw, indent=2))
+                    else:
+                        prompt_parts.append(str(raw))
+
+        # Optional analyst-provided context
+        if context:
+            prompt_parts.append("\n\n=== ANALYST-PROVIDED CONTEXT ===")
+            prompt_parts.append(context)
+
+        composite_prompt = "\n".join(prompt_parts)
+
+        result = client.generate(composite_prompt, model=model)
+
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
-        
+
         return {
             "case_id": case_id,
             "model": model,
-            "analysis": result["response"]
+            "analysis": result["response"],
+            "baseline_notables_count": len(historical_baselines),
+            "supportive_results_count": len(supportive_results),
         }
     except HTTPException:
         raise
@@ -1235,6 +1541,161 @@ def get_supportive_results(case_id: str):
         # For now, surface a basic error instead of an empty list so we can debug
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/db/supportive-queries", tags=["Rules"])
+def list_supportive_queries(rule_id: Optional[str] = Query(default=None, description="Filter by logical rule_id")):
+    """List supportive SPL queries.
+
+    When a rule_id is provided, only queries for that rule are returned.
+    Otherwise, all supportive queries are listed. This API backs the
+    analyst-facing editor so supportive queries can be tuned on the fly
+    without touching JSON seed files.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SupportiveQuery
+
+        db = SessionLocal()
+        query = db.query(SupportiveQuery)
+        if rule_id:
+            query = query.filter(SupportiveQuery.rule_id == rule_id)
+        rows = query.order_by(SupportiveQuery.rule_id.asc(), SupportiveQuery.title.asc()).all()
+        db.close()
+
+        return [
+            {
+                "id": r.id,
+                "rule_id": r.rule_id,
+                "title": r.title,
+                "description": r.description,
+                "spl_query": r.spl_query,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/supportive-queries", tags=["Rules"])
+def create_supportive_query(payload: SupportiveQueryPayload):
+    """Create a new supportive SPL query for a correlation rule.
+
+    IDs are assigned explicitly based on the current max(id) to avoid
+    depending on a potentially misaligned Postgres sequence, mirroring
+    the import logic used by the ES rules importer.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from sqlalchemy import func  # type: ignore
+        from db.models import SessionLocal, SupportiveQuery
+
+        db = SessionLocal()
+        try:
+            max_id = db.query(func.max(SupportiveQuery.id)).scalar() or 0
+        except Exception:
+            max_id = 0
+        next_id = int(max_id) + 1
+
+        record = SupportiveQuery(
+            id=next_id,
+            rule_id=payload.rule_id.strip(),
+            title=payload.title.strip(),
+            description=(payload.description or "").strip(),
+            spl_query=payload.spl_query.strip(),
+        )
+        db.add(record)
+        db.commit()
+        db.refresh(record)
+        db.close()
+
+        return {
+            "id": record.id,
+            "rule_id": record.rule_id,
+            "title": record.title,
+            "description": record.description,
+            "spl_query": record.spl_query,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/db/supportive-queries/{query_id}", tags=["Rules"])
+def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload):
+    """Update an existing supportive SPL query.
+
+    Supports partial updates; any field omitted from the payload is left
+    unchanged. Rule IDs can be adjusted if needed when re-grouping
+    queries under a different logical rule.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SupportiveQuery
+
+        db = SessionLocal()
+        record = db.query(SupportiveQuery).filter(SupportiveQuery.id == query_id).first()
+        if not record:
+            db.close()
+            raise HTTPException(status_code=404, detail=f"Supportive query {query_id} not found")
+
+        if payload.rule_id is not None:
+            record.rule_id = payload.rule_id.strip()
+        if payload.title is not None:
+            record.title = payload.title.strip()
+        if payload.description is not None:
+            record.description = payload.description.strip()
+        if payload.spl_query is not None:
+            record.spl_query = payload.spl_query.strip()
+
+        db.commit()
+        db.refresh(record)
+        db.close()
+
+        return {
+            "id": record.id,
+            "rule_id": record.rule_id,
+            "title": record.title,
+            "description": record.description,
+            "spl_query": record.spl_query,
+            "created_at": record.created_at.isoformat() if record.created_at else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/db/supportive-queries/{query_id}", tags=["Rules"])
+def delete_supportive_query(query_id: int):
+    """Delete a supportive SPL query.
+
+    This does not touch stored supportive_query_results; those remain as
+    historical evidence even if the underlying query definition is
+    retired.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SupportiveQuery
+
+        db = SessionLocal()
+        record = db.query(SupportiveQuery).filter(SupportiveQuery.id == query_id).first()
+        if not record:
+            db.close()
+            raise HTTPException(status_code=404, detail=f"Supportive query {query_id} not found")
+
+        db.delete(record)
+        db.commit()
+        db.close()
+
+        return {"success": True, "deleted_id": query_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # Rules & Closure Notes Endpoints
 @app.get("/api/db/rules", tags=["Rules"])
 def list_rules():
@@ -1249,14 +1710,42 @@ def list_rules():
         all_supportive = db.query(SupportiveQuery).all()
         db.close()
 
-        by_rule = {}
+        by_rule: Dict[str, List[Dict[str, Any]]] = {}
         for sq in all_supportive:
             by_rule.setdefault(sq.rule_id, []).append({
                 "id": sq.id,
                 "title": sq.title,
                 "description": sq.description,
-                "spl_query": sq.spl_query
+                "spl_query": sq.spl_query,
             })
+
+        def supportive_for_rule(rule_obj) -> List[Dict[str, Any]]:
+            """Return supportive queries for a given rule.
+
+            In addition to queries explicitly keyed to this rule_id, we
+            support lightweight family sharing for LotL-style rules: any
+            rule whose ID starts with ``lotl_`` automatically inherits the
+            supportive queries defined under the canonical
+            ``lotl_outbound_connection`` family, unless duplicates exist.
+
+            This lets future LotL notables reuse the same investigation
+            SPL without duplicating query definitions in the database.
+            """
+
+            rule_id = (rule_obj.rule_id or "").strip()
+            base = list(by_rule.get(rule_id, []))
+
+            # LotL family sharing: treat any "lotl_*" rule as part of the
+            # same investigative family and reuse the canonical queries.
+            canonical_lotl_id = "lotl_outbound_connection"
+            if rule_id.startswith("lotl_") and rule_id != canonical_lotl_id:
+                extras = by_rule.get(canonical_lotl_id, []) or []
+                existing_titles = {q["title"] for q in base}
+                for q in extras:
+                    if q["title"] not in existing_titles:
+                        base.append(q)
+
+            return base
 
         return [
             {
@@ -1267,7 +1756,7 @@ def list_rules():
                 "severity": r.severity,
                 "drilldown_fields": json.loads(r.drilldown_fields) if r.drilldown_fields else [],
                 "required_closure_fields": json.loads(r.required_closure_fields) if r.required_closure_fields else [],
-                "supportive_queries": by_rule.get(r.rule_id, [])
+                "supportive_queries": supportive_for_rule(r),
             }
             for r in rules
         ]

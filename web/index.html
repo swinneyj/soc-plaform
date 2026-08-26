@@ -485,6 +485,32 @@
                             class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-24"></textarea>
                     </div>
 
+                    <div v-if="analysisRule" class="mt-2">
+                        <div class="flex items-center justify-between mb-1">
+                            <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
+                            <button
+                                type="button"
+                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
+                                @click="openSupportiveEditor(analysisRule)"
+                            >
+                                Manage
+                            </button>
+                        </div>
+                        <div v-if="analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-2">
+                            <div v-for="q in analysisRule.supportive_queries" :key="q.id" class="bg-gray-900 border border-gray-700 rounded p-3">
+                                <p class="text-xs font-semibold text-blue-300 mb-1">{{ q.title }}</p>
+                                <p class="text-xs text-gray-400 mb-2" v-if="q.description">{{ q.description }}</p>
+                                <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ q.spl_query }}</pre>
+                            </div>
+                            <p class="mt-2 text-[11px] text-gray-500">
+                                Run these queries in Splunk and store any results for this case before running AI analysis to give the model richer context.
+                            </p>
+                        </div>
+                        <p v-else class="text-[11px] text-amber-300 mt-1">
+                            No supportive queries defined yet for this rule. Use **Manage** to add some.
+                        </p>
+                    </div>
+
                     <button 
                         @click="runAnalysis"
                         :disabled="analysisRunning"
@@ -495,12 +521,26 @@
 
                 <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
                     <h3 class="text-xl font-bold text-blue-400 mb-4">Analysis Result</h3>
+                    <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.supportive_results_count">
+                        Included
+                        <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
+                        closed baseline notables and
+                        <span class="font-semibold">{{ analysisResult.supportive_results_count || 0 }}</span>
+                        supportive query result{{ (analysisResult.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
+                    </p>
                     <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                         <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
                     </div>
                     <div class="text-xs text-gray-400 space-y-1">
                         <p>Model: {{ analysisResult.model }}</p>
                         <p>Case: {{ analysisResult.case_id }}</p>
+                    </div>
+                    <div class="mt-4">
+                        <button
+                            @click="goToClosureFromAnalysis"
+                            class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded text-xs font-semibold transition">
+                            Move to Closure Notes for this Case
+                        </button>
                     </div>
                 </div>
             </div>
@@ -536,6 +576,12 @@
                                         {{ rule.rule_name }} ({{ rule.severity }})
                                     </option>
                                 </select>
+                                <p v-if="closureSuggestedRuleName || closureSuggestedDisposition" class="mt-1 text-[11px] text-gray-400">
+                                    Suggested rule from triage:
+                                    <span class="font-semibold">{{ closureSuggestedRuleName || 'none' }}</span>
+                                    • Suggested disposition:
+                                    <span class="font-semibold">{{ closureSuggestedDisposition || 'Undetermined' }}</span>
+                                </p>
                             </div>
 
                             <!-- Dynamic Field Inputs -->
@@ -565,17 +611,6 @@
                                             type="text"
                                             :placeholder="'Enter ' + field"
                                             class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 text-sm">
-                                    </div>
-                                </div>
-                                <!-- Supportive SPL Queries for this rule -->
-                                <div v-if="selectedRule.supportive_queries && selectedRule.supportive_queries.length" class="mt-4">
-                                    <p class="text-xs text-gray-400 font-semibold mb-2">Supportive SPL Queries for this Rule</p>
-                                    <div class="space-y-2">
-                                        <div v-for="q in selectedRule.supportive_queries" :key="q.id" class="bg-gray-900 border border-gray-700 rounded p-3">
-                                            <p class="text-xs font-semibold text-blue-300 mb-1">{{ q.title }}</p>
-                                            <p class="text-xs text-gray-400 mb-2" v-if="q.description">{{ q.description }}</p>
-                                            <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ q.spl_query }}</pre>
-                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -709,6 +744,115 @@
             </div>
         </main>
 
+        <!-- Supportive Query Editor Modal -->
+        <div
+            v-if="supportiveEditorOpen"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+        >
+            <div class="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-3xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <h3 class="text-sm font-bold text-blue-300">Manage Supportive Queries</h3>
+                        <p class="text-[11px] text-gray-400" v-if="supportiveEditorRuleId">
+                            Rule ID: <span class="font-mono">{{ supportiveEditorRuleId }}</span>
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class="text-gray-400 hover:text-white text-xl"
+                        @click="closeSupportiveEditor"
+                    >
+                        &times;
+                    </button>
+                </div>
+
+                <p v-if="supportiveEditorError" class="text-xs text-red-400 mb-2">
+                    {{ supportiveEditorError }}
+                </p>
+
+                <div class="space-y-3">
+                    <div
+                        v-for="(q, idx) in supportiveEditorQueries"
+                        :key="q.localKey || q.id || idx"
+                        class="border border-gray-700 rounded p-3 bg-gray-800"
+                    >
+                        <div class="flex items-center justify-between mb-2">
+                            <p class="text-[11px] text-gray-400">
+                                Query {{ idx + 1 }}
+                            </p>
+                            <button
+                                type="button"
+                                class="text-[11px] text-red-300 hover:text-red-400"
+                                @click="removeSupportiveQuery(idx, q)"
+                                :disabled="supportiveEditorBusy"
+                            >
+                                Remove
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            <div>
+                                <label class="text-[11px] text-gray-400">Title</label>
+                                <input
+                                    v-model="q.title"
+                                    type="text"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                    :disabled="supportiveEditorBusy"
+                                />
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-gray-400">Description (optional)</label>
+                                <input
+                                    v-model="q.description"
+                                    type="text"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                    :disabled="supportiveEditorBusy"
+                                />
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-gray-400">SPL Query</label>
+                                <textarea
+                                    v-model="q.spl_query"
+                                    rows="3"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[11px] text-gray-100 font-mono whitespace-pre-wrap"
+                                    :disabled="supportiveEditorBusy"
+                                ></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-2">
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] text-gray-100"
+                            @click="addSupportiveQueryRow"
+                            :disabled="supportiveEditorBusy"
+                        >
+                            + Add Query
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-4 flex items-center justify-end space-x-2">
+                    <button
+                        type="button"
+                        class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-200"
+                        @click="closeSupportiveEditor"
+                        :disabled="supportiveEditorBusy"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white"
+                        @click="saveSupportiveQueries"
+                        :disabled="supportiveEditorBusy"
+                    >
+                        {{ supportiveEditorBusy ? 'Saving...' : 'Save Changes' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
         <!-- Footer -->
         <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
             <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
@@ -763,6 +907,14 @@
                     // Closure Notes
                     availableRules: [],
                     selectedRule: null,
+                    closureSourceNotable: null,
+                    closureSuggestedRuleName: '',
+                    closureSuggestedDisposition: '',
+                    supportiveEditorOpen: false,
+                    supportiveEditorBusy: false,
+                    supportiveEditorQueries: [],
+                    supportiveEditorRuleId: '',
+                    supportiveEditorError: '',
                     closureForm: {
                         caseId: '',
                         ruleId: '',
@@ -843,6 +995,40 @@
                         return haystack.includes(searchTerm);
                     });
                 },
+                analysisRule() {
+                    if (!this.analysisCaseId) {
+                        return null;
+                    }
+
+                    const case_ = this.analysisCases.find(c => c.case_id === this.analysisCaseId);
+                    if (!case_) {
+                        return null;
+                    }
+
+                    const caseRule = (case_.rule_name || '').toLowerCase().trim();
+                    if (!caseRule) {
+                        return null;
+                    }
+
+                    // Prefer exact name match first
+                    let rule = this.availableRules.find(
+                        r => (r.rule_name || '').toLowerCase().trim() === caseRule
+                    );
+                    if (rule) {
+                        return rule;
+                    }
+
+                    // Fallback: many ES rules are wrapped like
+                    // "Endpoint - <Rule Name> - Rule". Use a relaxed
+                    // contains-based match so cases with that wrapped
+                    // name still map to the underlying correlation rule.
+                    rule = this.availableRules.find(r => {
+                        const name = (r.rule_name || '').toLowerCase().trim();
+                        return !!name && (caseRule.includes(name) || name.includes(caseRule));
+                    });
+
+                    return rule || null;
+                },
                 filteredRecentNotables() {
                     if (!this.showOpenNotablesOnly) {
                         return this.recentNotables;
@@ -857,7 +1043,8 @@
                     }
 
                     const lines = text.split('\n');
-                    const notablePattern = /^\s*Notable\s*$/i;
+                    // Match only the top-of-card "Notable" heading (capital N)
+                    const notablePattern = /^\s*Notable\s*$/;
                     let countNotable = 0;
 
                     for (const line of lines) {
@@ -1071,6 +1258,164 @@
                         this.availableRules = [];
                     }
                 },
+                async openSupportiveEditor(rule) {
+                    if (!rule || !rule.rule_id) {
+                        return;
+                    }
+
+                    this.supportiveEditorRuleId = rule.rule_id;
+                    this.supportiveEditorError = '';
+                    this.supportiveEditorBusy = false;
+                    this.supportiveEditorQueries = [];
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/supportive-queries', {
+                            params: { rule_id: this.supportiveEditorRuleId }
+                        });
+                        // Clone the array so edits don't mutate the live rule copy
+                        this.supportiveEditorQueries = (res.data || []).map(q => ({
+                            id: q.id,
+                            rule_id: q.rule_id,
+                            title: q.title,
+                            description: q.description || '',
+                            spl_query: q.spl_query,
+                        }));
+                    } catch (err) {
+                        console.error('Failed to load supportive queries for rule:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to load supportive queries.';
+                        this.supportiveEditorQueries = [];
+                    }
+
+                    if (this.supportiveEditorQueries.length === 0) {
+                        // Seed with an empty row to make the editor less blank
+                        this.supportiveEditorQueries.push({
+                            id: null,
+                            rule_id: this.supportiveEditorRuleId,
+                            title: '',
+                            description: '',
+                            spl_query: '',
+                            localKey: 'new-0',
+                        });
+                    } else {
+                        // Ensure each row has a stable local key
+                        this.supportiveEditorQueries = this.supportiveEditorQueries.map((q, index) => ({
+                            ...q,
+                            localKey: q.id ? `db-${q.id}` : `new-${index}`,
+                        }));
+                    }
+
+                    this.supportiveEditorOpen = true;
+                },
+                closeSupportiveEditor() {
+                    if (this.supportiveEditorBusy) {
+                        return;
+                    }
+                    this.supportiveEditorOpen = false;
+                    this.supportiveEditorQueries = [];
+                    this.supportiveEditorRuleId = '';
+                    this.supportiveEditorError = '';
+                },
+                addSupportiveQueryRow() {
+                    const index = this.supportiveEditorQueries.length;
+                    this.supportiveEditorQueries.push({
+                        id: null,
+                        rule_id: this.supportiveEditorRuleId,
+                        title: '',
+                        description: '',
+                        spl_query: '',
+                        localKey: `new-${index}`,
+                    });
+                },
+                async removeSupportiveQuery(index, q) {
+                    if (this.supportiveEditorBusy) {
+                        return;
+                    }
+
+                    const row = this.supportiveEditorQueries[index];
+                    if (!row) {
+                        return;
+                    }
+
+                    // If this row has not been persisted yet, just remove it locally
+                    if (!row.id) {
+                        this.supportiveEditorQueries.splice(index, 1);
+                        return;
+                    }
+
+                    const confirmed = window.confirm('Delete this supportive query from the database?');
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+                    try {
+                        await axios.delete(this.apiUrl + '/db/supportive-queries/' + row.id);
+                        this.supportiveEditorQueries.splice(index, 1);
+                        // Refresh rules so Analysis/Closure tabs reflect the change
+                        await this.loadRules();
+                    } catch (err) {
+                        console.error('Failed to delete supportive query:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to delete query.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
+                async saveSupportiveQueries() {
+                    if (!this.supportiveEditorRuleId) {
+                        return;
+                    }
+
+                    // Basic validation: every non-empty row needs title and SPL
+                    const rowsToApply = this.supportiveEditorQueries.filter(q =>
+                        (q.title && q.title.trim()) || (q.spl_query && q.spl_query.trim())
+                    );
+
+                    for (const q of rowsToApply) {
+                        if (!q.title || !q.title.trim() || !q.spl_query || !q.spl_query.trim()) {
+                            this.supportiveEditorError = 'Each query must have at least a title and SPL query.';
+                            return;
+                        }
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+
+                    try {
+                        // Persist each row individually; this is fine for the
+                        // small, analyst-driven counts typical of supportive queries.
+                        for (const q of rowsToApply) {
+                            const payload = {
+                                rule_id: this.supportiveEditorRuleId,
+                                title: q.title.trim(),
+                                description: (q.description || '').trim(),
+                                spl_query: q.spl_query.trim(),
+                            };
+
+                            if (q.id) {
+                                await axios.put(this.apiUrl + '/db/supportive-queries/' + q.id, payload);
+                            } else {
+                                const res = await axios.post(this.apiUrl + '/db/supportive-queries', payload);
+                                q.id = res.data.id;
+                            }
+                        }
+
+                        await this.loadRules();
+
+                        // If the currently selected rule matches, refresh its
+                        // reference so the updated queries show up immediately.
+                        if (this.selectedRule && this.selectedRule.rule_id === this.supportiveEditorRuleId) {
+                            this.selectedRule = this.availableRules.find(r => r.rule_id === this.supportiveEditorRuleId) || this.selectedRule;
+                        }
+
+                        this.closeSupportiveEditor();
+                    } catch (err) {
+                        console.error('Failed to save supportive queries:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to save queries.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
                 async checkOllama() {
                     try {
                         const res = await axios.get(this.apiUrl + '/db/ollama/health');
@@ -1130,17 +1475,114 @@
                         this.analysisRunning = false;
                     }
                 },
+                goToClosureFromAnalysis() {
+                    if (!this.analysisCaseId) {
+                        alert('Select a case to analyze first');
+                        return;
+                    }
+
+                    this.currentTab = 'closure';
+                    this.closureForm.caseId = this.analysisCaseId;
+                    this.onCaseSelected();
+                },
                 onCaseSelected() {
                     this.closureForm.ruleId = '';
                     this.closureForm.fieldValues = {};
                     this.selectedRule = null;
+                     this.closureSuggestedRuleName = '';
+                     this.closureSuggestedDisposition = '';
+
+                    // Load source notable details for this case so we can
+                    // prepopulate closure fields (e.g., host, user) from
+                    // the parsed notable fields.
+                    const caseId = this.closureForm.caseId;
+                    this.closureSourceNotable = null;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    // Suggest a default disposition based on the triage verdict.
+                    const triageCase = this.triageData.find(c => c.case_id === caseId);
+                    if (triageCase) {
+                        const verdict = (triageCase.verdict || '').toLowerCase();
+                        if (verdict === 'malicious') {
+                            this.closureForm.disposition = 'True Positive';
+                            this.closureSuggestedDisposition = 'True Positive';
+                        } else if (verdict === 'benign') {
+                            this.closureForm.disposition = 'Benign Positive';
+                            this.closureSuggestedDisposition = 'Benign Positive';
+                        } else {
+                            this.closureForm.disposition = 'Undetermined';
+                            this.closureSuggestedDisposition = 'Undetermined';
+                        }
+                    } else {
+                        this.closureForm.disposition = 'Undetermined';
+                        this.closureSuggestedDisposition = 'Undetermined';
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.closureSourceNotable = res.data;
+
+                            // Choose the most appropriate rule for closure based on
+                            // the triage case's rule_name when none is selected yet.
+                            if (!this.closureForm.ruleId && triageCase && this.availableRules.length) {
+                                const triageRuleName = (triageCase.rule_name || '').toLowerCase().trim();
+                                let matchingRule = this.availableRules.find(
+                                    r => (r.rule_name || '').toLowerCase().trim() === triageRuleName
+                                );
+                                if (!matchingRule && triageRuleName) {
+                                    matchingRule = this.availableRules.find(r => {
+                                        const name = (r.rule_name || '').toLowerCase().trim();
+                                        return !!name && (triageRuleName.includes(name) || name.includes(triageRuleName));
+                                    });
+                                }
+                                if (matchingRule) {
+                                    this.closureForm.ruleId = matchingRule.rule_id;
+                                    this.closureSuggestedRuleName = matchingRule.rule_name;
+                                    this.onRuleSelected();
+                                }
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for closure form:', err);
+                            this.closureSourceNotable = null;
+                        });
                 },
                 onRuleSelected() {
                     this.selectedRule = this.availableRules.find(r => r.rule_id === this.closureForm.ruleId) || null;
                     this.closureForm.fieldValues = {};
                     if (this.selectedRule) {
+                        const sourceFields = (this.closureSourceNotable && this.closureSourceNotable.fields) || {};
+
+                        const aliasMap = {
+                            host: ['host', 'destination_nt_hostname', 'destination'],
+                            destination: ['destination', 'destination_ip'],
+                            user: ['user', 'username', 'user_identity'],
+                            account: ['user', 'username', 'user_identity'],
+                        };
+
                         for (const field of this.selectedRule.required_closure_fields) {
-                            this.closureForm.fieldValues[field] = '';
+                            let value = '';
+
+                            // Direct match on field name
+                            if (Object.prototype.hasOwnProperty.call(sourceFields, field)) {
+                                value = sourceFields[field];
+                            } else {
+                                // Fallback to simple aliases for common closure fields
+                                const aliases = aliasMap[field] || [];
+                                for (const key of aliases) {
+                                    if (sourceFields[key]) {
+                                        value = sourceFields[key];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Leave fields like 'justification' empty when there
+                            // is no meaningful value in the source notable.
+                            this.closureForm.fieldValues[field] = value || '';
                         }
                     }
                 },

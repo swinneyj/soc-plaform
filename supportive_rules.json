@@ -89,6 +89,26 @@
           "spl_query": "index=auth sourcetype=pingfederate signature=$signature$ | stats count dc(user) as distinct_users by src_ip | where distinct_users>5 | sort -count"
         }
       ]
+    },
+    {
+      "rule_id": "lotl_outbound_connection",
+      "supportive_queries": [
+        {
+          "title": "Sysmon process creation with full command line and hashes",
+          "description": "Expand the LotL correlation by showing full command line, parent process, hashes, and metadata for suspicious LOLBin processes on the impacted host.",
+          "spl_query": "index=Windows (sourcetype=XmlWinEventLog:Microsoft-Windows-Sysmon/Operational OR sourcetype=WinEventLog:Microsoft-Windows-Sysmon/Operational) EventCode=1 (Image=\"*\\powershell.exe\" OR Image=\"*\\cmd.exe\" OR Image=\"*\\rundll32.exe\" OR Image=\"*\\regsvr32.exe\" OR Image=\"*\\certutil.exe\" OR Image=\"*\\wscript.exe\" OR Image=\"*\\cscript.exe\" OR Image=\"*\\mshta.exe\") | eval Host=coalesce(host, Computer) | eval User=coalesce(User, UserName) | search Host=$host$ | table _time, Host, User, Image, CommandLine, ParentImage, ParentCommandLine, ProcessId, ParentProcessId, Hashes, Company, Product, OriginalFileName, ProcessGuid, ParentProcessGuid | sort 0 -_time"
+        },
+        {
+          "title": "Sysmon file creation by LotL processes",
+          "description": "Show files created or modified by LotL processes on the affected host around the time of the notable, including hashes for payload/script identification.",
+          "spl_query": "index=Windows (sourcetype=XmlWinEventLog:Microsoft-Windows-Sysmon/Operational OR sourcetype=WinEventLog:Microsoft-Windows-Sysmon/Operational) EventCode IN (11, 15) (Image=\"*\\powershell.exe\" OR Image=\"*\\cmd.exe\" OR Image=\"*\\rundll32.exe\" OR Image=\"*\\regsvr32.exe\" OR Image=\"*\\certutil.exe\" OR Image=\"*\\wscript.exe\" OR Image=\"*\\cscript.exe\" OR Image=\"*\\mshta.exe\") | eval Host=coalesce(Computer, host) | search Host=$host$ | eval TargetFile=coalesce(TargetFilename, TargetFileName) | table _time, Host, Image, User, TargetFile, Hash, ProcessGuid | sort 0 -_time"
+        },
+        {
+          "title": "Sysmon network connections by LotL processes",
+          "description": "Use Sysmon EventCode=3 to enumerate all outbound connections made by LotL processes on the host, correlated by ProcessGuid for full process-instance visibility.",
+          "spl_query": "index=Windows (sourcetype=XmlWinEventLog:Microsoft-Windows-Sysmon/Operational OR sourcetype=WinEventLog:Microsoft-Windows-Sysmon/Operational) EventCode=3 (Image=\"*\\powershell.exe\" OR Image=\"*\\cmd.exe\" OR Image=\"*\\rundll32.exe\" OR Image=\"*\\regsvr32.exe\" OR Image=\"*\\certutil.exe\" OR Image=\"*\\wscript.exe\" OR Image=\"*\\cscript.exe\" OR Image=\"*\\mshta.exe\") | eval Host=coalesce(Computer, host) | search Host=$host$ | table _time, Host, Image, User, SourceIp, SourcePort, DestinationIp, DestinationPort, DestinationHostname, Protocol, ProcessGuid | sort 0 -_time"
+        }
+      ]
     }
   ]
 }
