@@ -76,6 +76,10 @@ class PastedNotableRequest(BaseModel):
         True,
         description="Whether to apply tokenizer-style redaction to the pasted notable",
     )
+    historical: bool = Field(
+        False,
+        description="Whether this pasted notable represents a closed/historical case",
+    )
 
 # Helper Functions
 def load_registry() -> List[Dict]:
@@ -262,6 +266,98 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     return parsed
 
 
+def split_pasted_notables(raw_text: str) -> List[str]:
+    """Split a bulk paste that may contain multiple notables into segments.
+
+    Heuristic: treat each line starting with a primary heading ("Title" or
+    "Correlation Search") as the beginning of a new notable block. This
+    matches the common Splunk Incident Review copy/paste format where each
+    notable starts with its own Title/Correlation Search section.
+    """
+    if not raw_text or not raw_text.strip():
+        return []
+
+    normalized = raw_text.replace("\r\n", "\n")
+    lines = normalized.split("\n")
+
+    # Primary heuristic: each card contains a standalone "Notable" line near the top.
+    notable_pattern = re.compile(r"^\s*Notable\s*$", re.IGNORECASE)
+    boundaries: List[int] = [
+        index for index, line in enumerate(lines) if notable_pattern.match(line)
+    ]
+
+    # Fallback heuristic: use Title/Correlation Search labels when the Notable pattern
+    # doesn't give us multiple segments.
+    if len(boundaries) <= 1:
+        heading_pattern = re.compile(r"^\s*(Title|Correlation Search)\b", re.IGNORECASE)
+        boundaries = [
+            index for index, line in enumerate(lines) if heading_pattern.match(line)
+        ]
+
+    # If we still didn't find multiple headings, treat the whole paste as a single notable.
+    if len(boundaries) <= 1:
+        single = normalized.strip()
+        return [single] if single else []
+
+    segments: List[str] = []
+    for i, start in enumerate(boundaries):
+        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
+        segment_lines = lines[start:end]
+        segment = "\n".join(segment_lines).strip()
+        if segment:
+            segments.append(segment)
+
+    # Fallback: if something went wrong, at least return the whole text once.
+    if not segments:
+        single = normalized.strip()
+        return [single] if single else []
+
+    return segments
+
+
+def extract_notable_history(raw_text: str) -> str:
+    """Extract the History/closure-notes section from a single notable block.
+
+    We look for a line that is exactly "History" (case-insensitive) and then
+    consume subsequent lines until we hit a known boundary marker such as
+    "View all review activity", "Drill-down Search", "Adaptive Responses",
+    or "Next Steps". This mirrors how Splunk ES renders review history in the
+    Incident Review UI.
+    """
+    if not raw_text:
+        return ""
+
+    normalized = raw_text.replace("\r\n", "\n")
+    lines = normalized.split("\n")
+
+    start_index = None
+    for index, line in enumerate(lines):
+        if line.strip().lower() == "history":
+            start_index = index
+            break
+
+    if start_index is None or start_index + 1 >= len(lines):
+        return ""
+
+    end_markers = (
+        "view all review activity",
+        "drill-down search",
+        "adaptive responses",
+        "next steps",
+    )
+
+    end_index = len(lines)
+    for index in range(start_index + 1, len(lines)):
+        lower = lines[index].strip().lower()
+        if any(lower.startswith(marker) for marker in end_markers):
+            end_index = index
+            break
+
+    history_lines = lines[start_index + 1:end_index]
+    history_text = "\n".join(history_lines).strip()
+    return history_text
+
+
 def parse_structured_notable(raw_text: str) -> Dict[str, str]:
     """Parse line-oriented notable text in the form `Label: value`."""
     alias_map = {alias.lower(): canonical for alias, canonical in NOTABLE_FIELD_ALIASES}
@@ -380,6 +476,8 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         "username": fields.get("username"),
         "actions": fields.get("actions") or fields.get("action"),
         "severity": fields.get("severity"),
+        "historical": payload.get("historical", False),
+        "history": payload.get("history"),
         "fields": fields,
         "sanitized_text": payload.get("sanitized_text", ""),
         "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
@@ -717,56 +815,90 @@ def paste_notable(request: PastedNotableRequest):
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SplunkEvent
         from text_sanitizer_pipeline.text_sanitizer_pipeline import sanitize_logs_with_tokens, sanitize_pii_phi
-
-        parsed_fields = parse_structured_notable(raw_text)
-        if not parsed_fields:
-            parsed_fields = parse_pasted_notable(raw_text)
-        structured_text = render_notable_fields(parsed_fields) or raw_text
-        if request.redaction_enabled:
-            sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
-            sanitized_text = sanitize_pii_phi(sanitized_text)
-            sanitized_fields = parse_structured_notable(sanitized_text)
-            # preserve original time if we parsed it before masking
-            if parsed_fields.get("time"):
-                sanitized_fields["time"] = parsed_fields["time"]
-        else:
-            # no masking: keep parsed fields and structured text as-is
-            sanitized_text = structured_text
-            mapping = {}
-            sanitized_fields = parsed_fields.copy()
-
-        artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
-
-        payload = {
-            "record_type": "splunk_notable_paste",
-            "fields": sanitized_fields,
-            "sanitized_text": sanitized_text,
-            "saved_at": datetime.datetime.utcnow().isoformat(),
-            "artifact_paths": artifact_paths,
-        }
-
-        source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
-        host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
-        timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
+        segments = split_pasted_notables(raw_text)
+        if not segments:
+            raise HTTPException(status_code=400, detail="Unable to detect any notable segments in the pasted text")
 
         db = SessionLocal()
-        event = SplunkEvent(
-            sourcetype="splunk:notable:pasted",
-            source=source,
-            host=host,
-            raw=json.dumps(payload),
-            timestamp=timestamp,
-        )
-        db.add(event)
-        db.commit()
-        db.refresh(event)
+
+        events_info = []
+        total_mapping_entries = 0
+
+        for index, segment_text in enumerate(segments):
+            parsed_fields = parse_structured_notable(segment_text)
+            if not parsed_fields:
+                parsed_fields = parse_pasted_notable(segment_text)
+
+            base_structured_text = render_notable_fields(parsed_fields) or segment_text
+            history_text = extract_notable_history(segment_text)
+            if history_text:
+                structured_text = f"{base_structured_text}\n\nHistory\n{history_text}"
+            else:
+                structured_text = base_structured_text
+
+            if request.redaction_enabled:
+                sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
+                sanitized_text = sanitize_pii_phi(sanitized_text)
+                sanitized_fields = parse_structured_notable(sanitized_text)
+                # preserve original time if we parsed it before masking
+                if parsed_fields.get("time"):
+                    sanitized_fields["time"] = parsed_fields["time"]
+            else:
+                # no masking: keep parsed fields and structured text as-is
+                sanitized_text = structured_text
+                mapping = {}
+                sanitized_fields = parsed_fields.copy()
+
+            sanitized_history = extract_notable_history(sanitized_text)
+
+            artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+
+            payload = {
+                "record_type": "splunk_notable_paste",
+                "fields": sanitized_fields,
+                "sanitized_text": sanitized_text,
+                "history": sanitized_history,
+                "saved_at": datetime.datetime.utcnow().isoformat(),
+                "artifact_paths": artifact_paths,
+                "historical": request.historical,
+                "segment_index": index,
+                "segment_count": len(segments),
+            }
+
+            source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
+            host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
+            timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
+
+            event = SplunkEvent(
+                sourcetype="splunk:notable:pasted",
+                source=source,
+                host=host,
+                raw=json.dumps(payload),
+                timestamp=timestamp,
+            )
+            db.add(event)
+            db.commit()
+            db.refresh(event)
+
+            events_info.append({
+                "event_id": event.id,
+                "parsed_fields": sanitized_fields,
+                "artifact_paths": artifact_paths,
+                "mapping_entries": len(mapping),
+            })
+            total_mapping_entries += len(mapping)
+
+        first_event = events_info[0]
 
         return {
             "success": True,
-            "event_id": event.id,
-            "parsed_fields": sanitized_fields,
-            "artifact_paths": artifact_paths,
-            "mapping_entries": len(mapping),
+            "segment_count": len(segments),
+            "events": events_info,
+            # Backwards-compatible single-event fields (use first segment)
+            "event_id": first_event["event_id"],
+            "parsed_fields": first_event["parsed_fields"],
+            "artifact_paths": first_event["artifact_paths"],
+            "mapping_entries": total_mapping_entries,
         }
     except HTTPException:
         raise
@@ -889,6 +1021,7 @@ def promote_notable_to_triage(event_id: int):
 
         fields = payload.get("fields", {})
         existing_case_id = payload.get("promoted_case_id")
+        is_historical = payload.get("historical", False)
         if existing_case_id:
             existing_case = db.query(TriageResult).filter(TriageResult.case_id == existing_case_id).first()
             if existing_case:
@@ -898,6 +1031,14 @@ def promote_notable_to_triage(event_id: int):
                     "case_id": existing_case.case_id,
                     "verdict": existing_case.verdict,
                 }
+
+        # Existing promoted cases are still returned, but new promotions for
+        # historical (closed) notables are blocked.
+        if is_historical and not existing_case_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Historical (closed) pasted notables are stored for reference but are not promoted into triage."
+            )
 
         case_id = existing_case_id or f"NOTABLE-{event.id}"
         if db.query(TriageResult).filter(TriageResult.case_id == case_id).first():
@@ -950,6 +1091,49 @@ def promote_notable_to_triage(event_id: int):
             "case_id": case_id,
             "verdict": verdict,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/db/triage/{case_id}/notable", tags=["Database"])
+def get_triage_source_notable(case_id: str):
+    """Return the source pasted notable details for a promoted triage case."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        events = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).order_by(SplunkEvent.ingested_at.desc()).all()
+
+        for event in events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
+
+            if payload.get("promoted_case_id") == case_id:
+                fields = payload.get("fields", {})
+                return {
+                    "event_id": event.id,
+                    "historical": payload.get("historical", False),
+                    "fields": fields,
+                    "sanitized_text": payload.get("sanitized_text", ""),
+                    "history": payload.get("history"),
+                    "saved_at": payload.get("saved_at") or (
+                        event.ingested_at.isoformat() if event.ingested_at else None
+                    ),
+                }
+
+        raise HTTPException(status_code=404, detail=f"Source pasted notable for case {case_id} not found")
     except HTTPException:
         raise
     except Exception as e:

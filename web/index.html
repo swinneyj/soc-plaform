@@ -183,6 +183,12 @@
                             v-model="notablePasteText"
                             placeholder="Paste the notable block here..."
                             class="w-full h-56 px-4 py-3 bg-gray-900 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"></textarea>
+                        <p
+                            v-if="notablePasteSegmentEstimate > 1"
+                            class="text-xs text-amber-300 mt-1"
+                        >
+                            Detected {{ notablePasteSegmentEstimate }} notables in this paste; each will be saved separately.
+                        </p>
                         <label class="flex items-center text-xs text-gray-300 space-x-2">
                             <input
                                 type="checkbox"
@@ -190,9 +196,21 @@
                                 class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
                             <span>Apply tokenizer redaction when saving</span>
                         </label>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableHistorical"
+                                class="form-checkbox h-3 w-3 text-amber-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Mark as closed historical notable</span>
+                        </label>
                         <div class="flex items-center justify-between">
                             <p v-if="notablePasteResult" class="text-xs text-gray-400">
-                                Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
+                                <span v-if="(notablePasteResult.segment_count || 1) === 1">
+                                    Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
+                                </span>
+                                <span v-else>
+                                    Saved {{ notablePasteResult.segment_count }} notables (first event {{ notablePasteResult.event_id }}) with {{ notablePasteResult.mapping_entries }} total token mappings.
+                                </span>
                             </p>
                             <p v-else class="text-xs text-gray-500">Redaction stays local-first: sanitized text goes to the DB, mapping stays in Active_Workspace.</p>
                             <button
@@ -210,14 +228,23 @@
                                 <h3 class="text-xl font-bold text-blue-400">Recent Pasted Notables</h3>
                                 <p class="text-sm text-gray-400">Sanitized notable records saved from copy/paste workflow.</p>
                             </div>
-                            <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                            <div class="flex items-center space-x-3">
+                                <label class="flex items-center text-[11px] text-gray-300 space-x-1">
+                                    <input
+                                        type="checkbox"
+                                        v-model="showOpenNotablesOnly"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span>Show open pasted notables only</span>
+                                </label>
+                                <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                            </div>
                         </div>
 
-                        <div v-if="recentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
+                        <div v-if="filteredRecentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
                             No pasted notables saved yet.
                         </div>
 
-                        <div v-for="notable in recentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
+                        <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
                             <div class="flex items-start justify-between gap-4">
                                 <div>
                                     <h4 class="font-bold text-blue-300">{{ notable.title || 'Untitled notable' }}</h4>
@@ -236,6 +263,7 @@
                             </div>
                             <p v-if="notable.promoted_case_id" class="text-xs text-green-400">Promoted to triage as {{ notable.promoted_case_id }}</p>
                             <div class="flex flex-wrap gap-2 text-xs text-gray-300">
+                                <span v-if="notable.historical" class="bg-gray-800 px-2 py-1 rounded border border-amber-500 text-amber-300">Historical (closed)</span>
                                 <span v-if="notable.disposition" class="bg-gray-800 px-2 py-1 rounded">Disposition: {{ notable.disposition }}</span>
                                 <span v-if="notable.host" class="bg-gray-800 px-2 py-1 rounded">Host: {{ notable.host }}</span>
                                 <span v-if="notable.destination" class="bg-gray-800 px-2 py-1 rounded">Destination: {{ notable.destination }}</span>
@@ -262,15 +290,19 @@
                                     <div v-if="notable.fields">
                                         <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
                                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-                                            <div v-for="(value, key) in notable.fields" :key="key" class="flex">
+                                            <div v-for="(value, key) in notable.fields" :key="key" class="flex flex-col">
                                                 <span class="text-gray-500 mr-1">{{ key }}:</span>
-                                                <span class="text-gray-200">{{ value }}</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
                                             </div>
                                         </div>
                                     </div>
                                     <div>
                                         <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
                                         <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.sanitized_text }}</pre>
+                                    </div>
+                                    <div v-if="notable.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.history }}</pre>
                                     </div>
                                 </div>
                             </details>
@@ -311,13 +343,21 @@
                                 <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
                                 <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
                             </div>
-                            <span :class="{
-                                'bg-red-900 text-red-200': case_.verdict === 'malicious',
-                                'bg-yellow-900 text-yellow-200': case_.verdict === 'suspicious',
-                                'bg-green-900 text-green-200': case_.verdict === 'benign'
-                            }" class="px-3 py-1 rounded text-xs font-semibold">
-                                {{ case_.verdict.toUpperCase() }}
-                            </span>
+                            <div class="flex flex-col items-end space-y-1">
+                                <span :class="{
+                                    'bg-red-900 text-red-200': case_.verdict === 'malicious',
+                                    'bg-yellow-900 text-yellow-200': case_.verdict === 'suspicious',
+                                    'bg-green-900 text-green-200': case_.verdict === 'benign'
+                                }" class="px-3 py-1 rounded text-xs font-semibold">
+                                    {{ case_.verdict.toUpperCase() }}
+                                </span>
+                                <span
+                                    v-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-blue-200 border border-blue-500"
+                                >
+                                    From pasted notable
+                                </span>
+                            </div>
                         </div>
                         <p class="text-sm text-gray-300 mb-2">{{ case_.analysis_summary }}</p>
                         <div class="text-xs text-gray-400 flex space-x-4">
@@ -336,6 +376,61 @@
                                 Delete case
                             </button>
                         </div>
+                        <details class="mt-2 text-xs text-gray-300">
+                            <summary
+                                class="cursor-pointer text-blue-400"
+                                @click.stop="loadTriageNotableDetails(case_)"
+                            >
+                                Show source notable details
+                            </summary>
+                            <div class="mt-2">
+                                <p v-if="triageNotableDetails[case_.case_id]?.loading">Loading...</p>
+                                <p v-else-if="triageNotableDetails[case_.case_id]?.error" class="text-red-400">
+                                    {{ triageNotableDetails[case_.case_id].error }}
+                                </p>
+                                <div
+                                    v-else-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="space-y-2"
+                                >
+                                    <div class="flex items-center justify-between">
+                                        <div v-if="triageNotableDetails[case_.case_id].data.historical" class="text-amber-300">
+                                            Historical (closed pasted notable)
+                                        </div>
+                                        <button
+                                            @click="copyTriageNotableFields(case_)"
+                                            class="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-200 border border-gray-600"
+                                        >
+                                            Copy fields
+                                        </button>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div
+                                                v-for="(value, key) in triageNotableDetails[case_.case_id].data.fields"
+                                                :key="key"
+                                                class="flex flex-col"
+                                            >
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.sanitized_text }}
+                                        </pre>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.history }}
+                                        </pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </div>
@@ -647,8 +742,11 @@
                     dbVerdictFilter: '',
                     triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
+                    triageNotableDetails: {},
+                    showOpenNotablesOnly: false,
                     notablePasteText: '',
                     notableRedactionEnabled: true,
+                    notableHistorical: false,
                     notablePasteSaving: false,
                     notablePasteResult: null,
                     notablePromotingId: null,
@@ -744,6 +842,47 @@
 
                         return haystack.includes(searchTerm);
                     });
+                },
+                filteredRecentNotables() {
+                    if (!this.showOpenNotablesOnly) {
+                        return this.recentNotables;
+                    }
+
+                    return this.recentNotables.filter(n => !n.historical);
+                },
+                notablePasteSegmentEstimate() {
+                    const text = (this.notablePasteText || '').replace(/\r\n/g, '\n');
+                    if (!text.trim()) {
+                        return 0;
+                    }
+
+                    const lines = text.split('\n');
+                    const notablePattern = /^\s*Notable\s*$/i;
+                    let countNotable = 0;
+
+                    for (const line of lines) {
+                        if (notablePattern.test(line)) {
+                            countNotable++;
+                        }
+                    }
+
+                    if (countNotable >= 2) {
+                        return countNotable;
+                    }
+
+                    // Fallback: approximate based on Title/Correlation Search labels
+                    const headingPattern = /^\s*(Title|Correlation Search)\b/i;
+                    let countHeadings = 0;
+                    for (const line of lines) {
+                        if (headingPattern.test(line)) {
+                            countHeadings++;
+                        }
+                    }
+
+                    if (countHeadings <= 0) {
+                        return 1;
+                    }
+                    return countHeadings;
                 }
             },
             methods: {
@@ -826,13 +965,19 @@
                     try {
                         const res = await axios.post(this.apiUrl + '/db/notables/paste', {
                             raw_text: this.notablePasteText,
-                            redaction_enabled: this.notableRedactionEnabled
+                            redaction_enabled: this.notableRedactionEnabled,
+                            historical: this.notableHistorical
                         });
                         this.notablePasteResult = res.data;
                         this.notablePasteText = '';
                         this.loadRecentNotables();
                         this.loadDbStats();
-                        alert('Pasted notable saved and sanitized successfully');
+                        const count = res.data.segment_count || 1;
+                        if (count > 1) {
+                            alert('Saved ' + count + ' notables from this paste');
+                        } else {
+                            alert('Pasted notable saved and sanitized successfully');
+                        }
                     } catch (err) {
                         alert('Error: ' + (err.response?.data?.detail || err.message));
                     } finally {
@@ -894,6 +1039,27 @@
                         await this.loadDbStats();
                     } catch (err) {
                         alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async loadTriageNotableDetails(case_) {
+                    const caseId = case_.case_id;
+                    const existing = this.triageNotableDetails[caseId];
+
+                    if (existing && (existing.loading || existing.data)) {
+                        return;
+                    }
+
+                    this.triageNotableDetails[caseId] = { loading: true, error: null, data: null };
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable');
+                        this.triageNotableDetails[caseId] = { loading: false, error: null, data: res.data };
+                    } catch (err) {
+                        this.triageNotableDetails[caseId] = {
+                            loading: false,
+                            error: err.response?.data?.detail || err.message,
+                            data: null
+                        };
                     }
                 },
                 async loadRules() {
@@ -1013,6 +1179,33 @@
                     document.body.appendChild(element);
                     element.click();
                     document.body.removeChild(element);
+                },
+                copyTriageNotableFields(case_) {
+                    const caseId = case_.case_id;
+                    const details = this.triageNotableDetails[caseId];
+
+                    if (!details || !details.data || !details.data.fields) {
+                        alert('No source-notable fields loaded yet for this case');
+                        return;
+                    }
+
+                    const fields = details.data.fields;
+                    const lines = Object.entries(fields).map(([key, value]) => `${key}: ${value}`);
+                    const text = lines.join('\n');
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .then(() => {
+                            alert('Source notable fields copied to clipboard');
+                        })
+                        .catch(err => {
+                            console.error('Failed to copy fields:', err);
+                            alert('Failed to copy fields to clipboard');
+                        });
                 },
                 selectToolForExecution(tool) {
                     this.selectedToolForExecution = tool;
