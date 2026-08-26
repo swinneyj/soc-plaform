@@ -603,17 +603,18 @@ def get_triage(
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import or_
-        from db.models import SessionLocal, TriageResult
+        from db.models import SessionLocal, TriageResult, AnalysisResult
 
         db = SessionLocal()
 
-        # Optional delete step
+        # Optional delete step using the same session
         if delete_case_id:
-            try:
-                delete_triage_case(case_id=delete_case_id, delete_analysis=delete_analysis)
-            except HTTPException:
-                # Surface delete errors via empty list; UI will already show alert
-                pass
+            case = db.query(TriageResult).filter(TriageResult.case_id == delete_case_id).first()
+            if case:
+                db.delete(case)
+                if delete_analysis:
+                    db.query(AnalysisResult).filter(AnalysisResult.case_id == delete_case_id).delete()
+                db.commit()
 
         query = db.query(TriageResult)
 
@@ -790,13 +791,15 @@ def list_recent_notables(
 
         db = SessionLocal()
 
-        # Optional delete step
+        # Optional delete step using the same session
         if delete_event_id is not None:
-            try:
-                delete_pasted_notable(delete_event_id)
-            except HTTPException:
-                # Ignore delete errors here; UI will already show alert
-                pass
+            event = db.query(SplunkEvent).filter(
+                SplunkEvent.id == delete_event_id,
+                SplunkEvent.sourcetype == "splunk:notable:pasted",
+            ).first()
+            if event:
+                db.delete(event)
+                db.commit()
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
         ).order_by(SplunkEvent.ingested_at.desc()).limit(limit).all()
