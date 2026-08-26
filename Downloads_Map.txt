@@ -1,0 +1,183 @@
+Directory Map for: /app
+Generated: 2026-08-26 12:58:39
+==================================================
+
+[DIR] app/
+    .dockerignore
+    .env.example
+    .gitattributes
+    .gitignore
+    apply_closure_fix.py
+    BUILD_SUMMARY.md
+    closure_form_snippet.html
+    closure_note_endpoint.py
+    commander.py
+    Commander_Registry.json
+    CONTAINERIZATION.md
+    docker-compose.yml
+    Dockerfile
+    Downloads_Map.txt
+    fix_closure_endpoint.py
+    fix_endpoint.py
+    fix_schema.py
+    git-menu.ps1
+    git-pull-latest.ps1
+    git-sync.ps1
+    ingest_notables.py
+    inspect_db.py
+    Launch_Commander.bat
+    OPERATOR_CHEAT_SHEET.md
+    PROJECT_SPEC.md
+    README.txt
+    requirements.txt
+    RUNBOOK.md
+    sample_rules.json
+    seed_supportive_results.py
+    seed_test_cases.py
+    Start_SOC_Platform.bat
+    supportive_rules.json
+    Sync_To_Git.bat
+    updated_rules.json
+    update_api.py
+    update_closure_endpoint.py
+    update_tools_table.py
+    update_web_ui.py
+    [DIR] api/
+        db_routes.py
+        main.py
+        __init__.py
+    [DIR] Data/
+        [DIR] Active_Workspace/
+            Pasted_Notable_20260825_202947.fields.json
+            Pasted_Notable_20260825_202947.map.json
+            Pasted_Notable_20260825_202947.txt
+            Pasted_Notable_latest.fields.json
+            Pasted_Notable_latest.map.json
+            Pasted_Notable_latest.txt
+    [DIR] db/
+        models.py
+        __init__.py
+    [DIR] docs/
+        DAILY_WORKFLOW.md
+        REPO_MAP.md
+        RESTART.md
+        SETUP.md
+        SHARED_LOGIC_MODEL.md
+    [DIR] local-backups/
+        current_soc_platform_dump.sql
+    [DIR] Playbooks/
+        ai_analysis_pipeline.json
+        deep_artifact_analysis.json
+        incident_case_bundle.json
+        splunk_mde_triage_pipeline.json
+        splunk_notable_ai_sanitized_pipeline.json
+        text_sanitizer_workflow.json
+        threat_intel_ai_pipeline.json
+        zero_touch_triage.json
+    [DIR] Reports/
+    [DIR] scripts/
+        bootstrap_new_user.ps1
+        check_shared_logic_drift.py
+        export_db_dump_to_share.ps1
+        export_postgres_dump.ps1
+        export_shared_logic_from_db.py
+        migrate_sqlite_to_postgres.py
+        restore_db_dump_from_share.ps1
+        restore_postgres_dump.ps1
+        start_platform.ps1
+        status_platform.ps1
+        stop_platform.ps1
+        sync_shared_logic_to_db.ps1
+        sync_upstream_safe.ps1
+    [DIR] services/
+        ollama_service.py
+        __init__.py
+    [DIR] Tools/
+        [DIR] ai_analyst_engine/
+            ai_analyst_engine.py
+            ai_response_rehydrator.py
+            splunk_notable_ai_helper.py
+        [DIR] ai_context_exporter/
+            ai_context_exporter.py
+        [DIR] ai_skill_browser/
+            ai_skill_browser.py
+        [DIR] ai_skill_harvester/
+            ai_skill_harvester.py
+        [DIR] ai_tool_manifest/
+            AI_Tool_Manifest.json
+        [DIR] automated_reporter/
+            automated_reporter.py
+        [DIR] base64_decoder/
+            base64_decoder.py
+        [DIR] bulk_rule_matcher/
+            bulk_rule_matcher.py
+        [DIR] case_bundle_builder/
+            case_bundle_builder.py
+        [DIR] chat_language_models_2/
+            chatLanguageModels 2.json
+        [DIR] chat_language_models_2_-_staging_copy/
+            chatLanguageModels 2 - staging copy.json
+        [DIR] closure_notes_generator/
+            closure_notes_generator.py
+        [DIR] core_lib/
+            smart_router.py
+            utils.py
+        [DIR] cve_intel_fetcher/
+            cve_intel_fetcher.py
+        [DIR] data_ingestor_pipeline/
+            data_ingestor_pipeline.py
+        [DIR] dir_mapper/
+            dir_mapper.py
+        [DIR] es_rules_importer/
+            es_rules_importer.py
+        [DIR] filecheck/
+            filecheck.py
+        [DIR] git_sync/
+            git_sync.py
+        [DIR] global_config/
+            global_config.json
+            splunk_env_profile.json
+            splunk_env_profile_builder.py
+            splunk_env_profile_editor.py
+        [DIR] intel_pipeline/
+            Intel_Pipeline.json
+        [DIR] ioc_extractor/
+            ioc_extractor.py
+        [DIR] knowledge_pack_schema/
+            knowledge_pack_schema.json
+        [DIR] maintenance_suite/
+            maintenance_suite.py
+        [DIR] mde_triage_aggregator/
+            mde_triage_aggregator.py
+        [DIR] pki_cert_decoder/
+            pki_cert_decoder.py
+        [DIR] platform_blueprint/
+            platform_blueprint.py
+        [DIR] platform_health_check/
+            platform_health_check.py
+        [DIR] playbook_runner/
+            playbook_runner.py
+        [DIR] splunk_csv_ingestor/
+            splunk_csv_ingestor.py
+        [DIR] splunk_folder_watcher/
+            splunk_folder_watcher.py
+        [DIR] splunk_notable_parser/
+            splunk_notable_parser.py
+        [DIR] system_downloads_mapper/
+            system_downloads_mapper.py
+        [DIR] text_reformatter/
+            text_reformatter.py
+        [DIR] text_sanitizer_pipeline/
+            text_sanitizer_pipeline.py
+        [DIR] threat_intel_fetcher/
+            threat_intel_fetcher.py
+        [DIR] tool_indexer/
+            tool_indexer.py
+        [DIR] tool_manifest/
+            tool_manifest.json
+        [DIR] tool_packager/
+            tool_packager.py
+        [DIR] workspace_cleaner/
+            workspace_cleaner.py
+    [DIR] web/
+        index.html

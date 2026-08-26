@@ -610,6 +610,34 @@ def get_triage(
             pass
 
 
+@app.get("/api/db/triage/{case_id}", tags=["Database"])
+def get_triage_case(case_id: str):
+    """Get a specific triage case by case ID."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult
+
+        db = SessionLocal()
+        result = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not result:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        return {
+            "case_id": result.case_id,
+            "rule_name": result.rule_name,
+            "verdict": result.verdict,
+            "confidence_score": result.confidence_score,
+            "analysis_summary": result.analysis_summary,
+            "remediation_steps": result.remediation_steps,
+            "triaged_at": result.triaged_at.isoformat()
+        }
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""

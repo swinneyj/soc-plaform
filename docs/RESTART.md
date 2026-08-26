@@ -10,6 +10,8 @@ The clean supported way to bring the project back up is:
 
 Run that from the repo root.
 
+For the current machine-level operating model, also see `docs/CURRENT_OPERATING_MODEL.md`.
+
 What it does:
 1. checks whether Docker is running and attempts to start Docker Desktop if it is not
 2. optionally starts Ollama if it is not already listening on `127.0.0.1:11434`
@@ -37,6 +39,18 @@ Launch_Commander.bat
 ```
 
 Both wrappers now call the PowerShell startup script without auto-starting Commander.
+
+On this machine, the cleaner Desktop-level wrappers are:
+
+```text
+..\..\Start_SOC.bat
+..\..\Restore_SOC_From_Handoff.bat
+..\..\Force_Restore_SOC_From_Handoff.bat
+```
+
+Use `Start_SOC.bat` for normal resume behavior.
+Use `Restore_SOC_From_Handoff.bat` when you want to export current local runtime state first and then refresh from the shared handoff dump.
+Use `Force_Restore_SOC_From_Handoff.bat` only when you intentionally want to overwrite local runtime state without exporting it first.
 
 ## If You Want Commander
 
@@ -82,6 +96,16 @@ It also reports the latest shared dump metadata when present.
 .\scripts\start_platform.ps1 -EnsureOllama
 ```
 
+## Daily Resume Mode
+
+For local day-to-day work where you want to preserve local runtime state, start with:
+
+```powershell
+.\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser -SkipSharedDumpRestore
+```
+
+That is the behavior used by the Desktop `Start_SOC.bat` wrapper.
+
 ## If You Do Not Care About Ollama Yet
 
 ```powershell
@@ -89,6 +113,17 @@ It also reports the latest shared dump metadata when present.
 ```
 
 The platform will still run. Only AI-analysis features will be unavailable until Ollama is started.
+
+## If `ollama pull` Is Reset By The Network
+
+Documented fallback path only, not currently kept active in the repo:
+
+1. Use PowerShell or .NET `HttpClient` to download the model weights directly, because that transport worked on this machine even when `ollama pull` and `curl` were reset by the network policy.
+2. Save the weights locally as a GGUF file.
+3. Create a `Modelfile` whose `FROM` line points at that local GGUF path.
+4. Run `ollama create <local-model-name> -f <Modelfile>` to register the model with the local Ollama service.
+
+This worked in testing with a small `llama3.2:1b` model, but the model and helper script were intentionally removed afterward.
 
 ## Default Ports
 
@@ -117,3 +152,13 @@ Override the project PostgreSQL port and optionally the API port:
 ```powershell
 .\scripts\start_platform.ps1 -PostgresHostPort 5434 -ApiPort 8006 -EnsureOllama -OpenBrowser
 ```
+
+## Local DB Repro
+
+To prepare a local-only DB repro environment without re-restoring from the shared dump:
+
+```powershell
+.\scripts\start_local_db_repro.ps1 -OpenBrowser
+```
+
+That helper starts the platform in resume mode if needed, then seeds synthetic triage and supportive test data for local testing.
