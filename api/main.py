@@ -72,6 +72,10 @@ class AnalyzeRequest(BaseModel):
 
 class PastedNotableRequest(BaseModel):
     raw_text: str = Field(..., description="Pasted notable text from Splunk Incident Review")
+    redaction_enabled: bool = Field(
+        True,
+        description="Whether to apply tokenizer-style redaction to the pasted notable",
+    )
 
 # Helper Functions
 def load_registry() -> List[Dict]:
@@ -151,6 +155,14 @@ NOTABLE_FIELD_ALIASES = [
     ("Correlation Search", "correlation_search"),
     ("Security Domain", "security_domain"),
     ("Destination", "destination"),
+    ("Destination Business Unit", "destination_business_unit"),
+    ("Destination Category", "destination_category"),
+    ("Destination DNS", "destination_dns"),
+    ("Destination Expected", "destination_expected"),
+    ("Destination IP Address", "destination_ip"),
+    ("Destination NT Hostname", "destination_nt_hostname"),
+    ("Destination PCI Domain", "destination_pci_domain"),
+    ("Destination Port", "destination_port"),
     ("Disposition", "disposition"),
     ("Username", "username"),
     ("File Name", "file_name"),
@@ -165,6 +177,13 @@ NOTABLE_FIELD_ALIASES = [
     ("Type", "type"),
     ("Time", "time"),
     ("Host", "host"),
+    ("Source IP Address", "source_ip"),
+    ("Source Port", "source_port"),
+    ("User Email", "user_email"),
+    ("User First Name", "user_first_name"),
+    ("User Last Name", "user_last_name"),
+    ("User Identity", "user_identity"),
+    ("User Category", "user_category"),
     ("User", "user"),
     ("Value", "value"),
 ]
@@ -180,8 +199,23 @@ NOTABLE_FIELD_LABELS = {
     "owner": "Owner",
     "host": "Host",
     "destination": "Destination",
+    "destination_business_unit": "Destination Business Unit",
+    "destination_category": "Destination Category",
+    "destination_dns": "Destination DNS",
+    "destination_expected": "Destination Expected",
+    "destination_ip": "Destination IP Address",
+    "destination_nt_hostname": "Destination NT Hostname",
+    "destination_pci_domain": "Destination PCI Domain",
+    "destination_port": "Destination Port",
     "user": "User",
     "username": "Username",
+    "user_email": "User Email",
+    "user_first_name": "User First Name",
+    "user_last_name": "User Last Name",
+    "user_identity": "User Identity",
+    "user_category": "User Category",
+    "source_ip": "Source IP Address",
+    "source_port": "Source Port",
     "actions": "Actions",
     "action": "Action",
     "additional_fields_value": "Additional FieldsValue",
@@ -346,6 +380,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         "username": fields.get("username"),
         "actions": fields.get("actions") or fields.get("action"),
         "severity": fields.get("severity"),
+        "fields": fields,
         "sanitized_text": payload.get("sanitized_text", ""),
         "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
     }
@@ -560,15 +595,26 @@ def db_stats():
 def get_triage(
     limit: int = Query(50, ge=1, le=1000),
     search: str = Query("", description="Search case ID, rule name, or summary"),
-    verdict: str = Query("", description="Filter by verdict")
+    verdict: str = Query("", description="Filter by verdict"),
+    delete_case_id: Optional[str] = Query(None, description="If provided, delete this case before listing"),
+    delete_analysis: bool = Query(False, description="Also delete analysis results for this case when deleting"),
 ):
-    """Get triaged cases from database."""
+    """Get triaged cases from database (optionally deleting one first)."""
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import or_
-        from db.models import SessionLocal, TriageResult
+        from db.models import SessionLocal, TriageResult, AnalysisResult
 
         db = SessionLocal()
+
+        # Optional delete step using the same session
+        if delete_case_id:
+            case = db.query(TriageResult).filter(TriageResult.case_id == delete_case_id).first()
+            if case:
+                db.delete(case)
+                if delete_analysis:
+                    db.query(AnalysisResult).filter(AnalysisResult.case_id == delete_case_id).delete()
+                db.commit()
 
         query = db.query(TriageResult)
 
@@ -631,6 +677,36 @@ def get_triage_case(case_id: str):
             "remediation_steps": result.remediation_steps,
             "triaged_at": result.triaged_at.isoformat()
         }
+
+
+@app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
+def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
+    """Delete a triage case from the database.
+
+    Intended mainly for removing test/development cases; this does not
+    automatically delete any related analysis results.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, AnalysisResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Triage case {case_id} not found")
+
+        db.delete(case)
+
+        if delete_analysis:
+            db.query(AnalysisResult).filter(AnalysisResult.case_id == case_id).delete()
+
+        db.commit()
+
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
     finally:
         try:
             db.close()
@@ -638,6 +714,10 @@ def get_triage_case(case_id: str):
             pass
 
 
+@app.get("/api/db/triage/{case_id}/delete", tags=["Database"])
+def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
+    """GET wrapper for delete_triage_case for environments that disallow POST."""
+    return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -654,11 +734,19 @@ def paste_notable(request: PastedNotableRequest):
         if not parsed_fields:
             parsed_fields = parse_pasted_notable(raw_text)
         structured_text = render_notable_fields(parsed_fields) or raw_text
-        sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
-        sanitized_text = sanitize_pii_phi(sanitized_text)
-        sanitized_fields = parse_structured_notable(sanitized_text)
-        if parsed_fields.get("time"):
-            sanitized_fields["time"] = parsed_fields["time"]
+        if request.redaction_enabled:
+            sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
+            sanitized_text = sanitize_pii_phi(sanitized_text)
+            sanitized_fields = parse_structured_notable(sanitized_text)
+            # preserve original time if we parsed it before masking
+            if parsed_fields.get("time"):
+                sanitized_fields["time"] = parsed_fields["time"]
+        else:
+            # no masking: keep parsed fields and structured text as-is
+            sanitized_text = structured_text
+            mapping = {}
+            sanitized_fields = parsed_fields.copy()
+
         artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
 
         payload = {
@@ -704,13 +792,26 @@ def paste_notable(request: PastedNotableRequest):
 
 
 @app.get("/api/db/notables", tags=["Database"])
-def list_recent_notables(limit: int = Query(20, ge=1, le=200)):
-    """List recently pasted sanitized Splunk notables from the database."""
+def list_recent_notables(
+    limit: int = Query(20, ge=1, le=200),
+    delete_event_id: Optional[int] = Query(None, description="If provided, delete this pasted notable before listing"),
+):
+    """List recently pasted sanitized Splunk notables (optionally deleting one first)."""
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SplunkEvent
 
         db = SessionLocal()
+
+        # Optional delete step using the same session
+        if delete_event_id is not None:
+            event = db.query(SplunkEvent).filter(
+                SplunkEvent.id == delete_event_id,
+                SplunkEvent.sourcetype == "splunk:notable:pasted",
+            ).first()
+            if event:
+                db.delete(event)
+                db.commit()
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
         ).order_by(SplunkEvent.ingested_at.desc()).limit(limit).all()
@@ -723,6 +824,58 @@ def list_recent_notables(limit: int = Query(20, ge=1, le=200)):
             db.close()
         except Exception:
             pass
+
+
+@app.delete("/api/db/notables/{event_id}", tags=["Database"])
+def delete_pasted_notable(event_id: int):
+    """Delete a pasted Splunk notable from the database.
+
+    This removes the stored sanitized text and metadata for the pasted notable
+    but does not delete any triage cases that may have been created from it.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        event = db.query(SplunkEvent).filter(
+            SplunkEvent.id == event_id,
+            SplunkEvent.sourcetype == "splunk:notable:pasted",
+        ).first()
+
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
+
+        db.delete(event)
+        db.commit()
+
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/notables/{event_id}/delete", tags=["Database"])
+def delete_pasted_notable_post(event_id: int):
+    """Compatibility endpoint to delete a pasted notable via POST.
+
+    Some environments or proxies may not allow DELETE from the browser UI,
+    so the frontend can call this POST variant instead. Logic is delegated
+    to the main delete_pasted_notable handler above.
+    """
+    return delete_pasted_notable(event_id)
+
+
+@app.get("/api/db/notables/{event_id}/delete", tags=["Database"])
+def delete_pasted_notable_get(event_id: int):
+    """GET wrapper for delete_pasted_notable for environments that disallow POST/DELETE."""
+    return delete_pasted_notable(event_id)
 
 
 @app.post("/api/db/notables/{event_id}/promote", tags=["Database"])
@@ -776,6 +929,12 @@ def promote_notable_to_triage(event_id: int):
             summary_parts.append(f"Status: {fields['status']}")
         if notable_time:
             summary_parts.append(f"Time: {notable_time}")
+        if fields.get("host"):
+            summary_parts.append(f"Host: {fields['host']}")
+        if fields.get("destination"):
+            summary_parts.append(f"Destination: {fields['destination']}")
+        if fields.get("user") or fields.get("username"):
+            summary_parts.append(f"User: {fields.get('user') or fields.get('username')}")
 
         remediation_steps = "Review the sanitized notable evidence, validate disposition, and gather any supporting host/user activity before closure."
 
