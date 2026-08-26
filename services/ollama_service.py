@@ -11,6 +11,14 @@ import os
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 DEFAULT_MODEL = 'llama2'  # Can be overridden
 
+# Allow the request timeout to be tuned via environment; default to a
+# generous window so larger models (e.g., 8B variants) can complete.
+try:
+    _timeout_env = os.environ.get('OLLAMA_TIMEOUT')
+    OLLAMA_REQUEST_TIMEOUT = int(_timeout_env) if _timeout_env else 300
+except ValueError:
+    OLLAMA_REQUEST_TIMEOUT = 300
+
 class OllamaClient:
     """Simple Ollama client for local LLM inference."""
     
@@ -70,7 +78,7 @@ class OllamaClient:
             r = requests.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
-                timeout=60
+                timeout=OLLAMA_REQUEST_TIMEOUT
             )
             
             if r.status_code == 200:
@@ -92,7 +100,7 @@ class OllamaClient:
         except requests.Timeout:
             return {
                 "success": False,
-                "error": "Ollama request timed out (60s). Model inference took too long.",
+                "error": f"Ollama request timed out ({OLLAMA_REQUEST_TIMEOUT}s). Model inference took too long.",
                 "response": None
             }
         except Exception as e:

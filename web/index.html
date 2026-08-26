@@ -1773,9 +1773,6 @@
                     }
 
                     navigator.clipboard.writeText(text)
-                        .then(() => {
-                            alert('Supportive SPL query copied to clipboard');
-                        })
                         .catch(err => {
                             console.error('Failed to copy SPL:', err);
                             alert('Failed to copy SPL query to clipboard');
