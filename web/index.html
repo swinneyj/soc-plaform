@@ -845,10 +845,10 @@
                     }
 
                     try {
-                        await axios.get(this.apiUrl + '/db/notables', {
+                        const res = await axios.get(this.apiUrl + '/db/notables', {
                             params: { delete_event_id: notable.id }
                         });
-                        await this.loadRecentNotables();
+                        this.recentNotables = res.data;
                         await this.loadDbStats();
                     } catch (err) {
                         alert('Error: ' + (err.response?.data?.detail || err.message));
@@ -883,13 +883,13 @@
                     }
 
                     try {
-                        await axios.get(this.apiUrl + '/db/triage', {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
                             params: {
                                 delete_case_id: case_.case_id,
                                 delete_analysis: this.deleteAnalysisWithCase
                             }
                         });
-                        await this.loadTriageData();
+                        this.triageData = res.data;
                         await this.loadAnalysisCases();
                         await this.loadDbStats();
                     } catch (err) {
