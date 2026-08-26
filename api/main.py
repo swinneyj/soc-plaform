@@ -680,6 +680,12 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
             pass
 
 
+@app.get("/api/db/triage/{case_id}/delete", tags=["Database"])
+def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
+    """GET wrapper for delete_triage_case for environments that disallow POST."""
+    return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
+
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -818,6 +824,12 @@ def delete_pasted_notable_post(event_id: int):
     so the frontend can call this POST variant instead. Logic is delegated
     to the main delete_pasted_notable handler above.
     """
+    return delete_pasted_notable(event_id)
+
+
+@app.get("/api/db/notables/{event_id}/delete", tags=["Database"])
+def delete_pasted_notable_get(event_id: int):
+    """GET wrapper for delete_pasted_notable for environments that disallow POST/DELETE."""
     return delete_pasted_notable(event_id)
 
 

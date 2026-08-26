@@ -845,7 +845,7 @@
                     }
 
                     try {
-                        await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/delete');
+                        await axios.get(this.apiUrl + '/db/notables/' + notable.id + '/delete');
                         await this.loadRecentNotables();
                         await this.loadDbStats();
                     } catch (err) {
@@ -881,9 +881,8 @@
                     }
 
                     try {
-                        await axios.post(
+                        await axios.get(
                             this.apiUrl + '/db/triage/' + encodeURIComponent(case_.case_id) + '/delete',
-                            null,
                             { params: { delete_analysis: this.deleteAnalysisWithCase } }
                         );
                         await this.loadTriageData();
