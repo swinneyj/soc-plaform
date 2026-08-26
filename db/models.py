@@ -135,6 +135,25 @@ class SupportiveQueryResult(Base):
     raw_result = Column(Text)  # JSON or text blob of the query output
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+
+class PlaceholderAlias(Base):
+    """Dynamic placeholder aliases for supportive SPL templates.
+
+    Each alias maps a short logical name (e.g., "host", "dest", "user")
+    to a list of candidate notable fields that can supply values when
+    rendering supportive queries with $placeholder$ tokens.
+
+    The `fields` column is stored as a JSON-encoded list of strings to keep
+    the schema simple and portable across Postgres/SQLite.
+    """
+
+    __tablename__ = "placeholder_aliases"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alias = Column(String, unique=True, index=True)
+    fields = Column(Text)  # JSON-encoded ["field1", "field2", ...]
+    description = Column(Text)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 

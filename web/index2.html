@@ -760,14 +760,6 @@
                     </div>
                     <button
                         type="button"
-                        class="ml-3 text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-gray-300"
-                        @click="openPlaceholderAliasEditor"
-                        title="Manage dynamic placeholder aliases ($host$, $process$, etc.)"
-                    >
-                        Manage Placeholder Aliases
-                    </button>
-                    <button
-                        type="button"
                         class="text-gray-400 hover:text-white text-xl"
                         @click="closeSupportiveEditor"
                     >
@@ -862,76 +854,6 @@
             </div>
         </div>
 
-        <!-- Placeholder Alias Editor Modal (dynamic, no-code management) -->
-        <div
-            v-if="placeholderAliasEditorOpen"
-            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
-        >
-            <div class="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-2xl w-full mx-4 max-h-[85vh] overflow-y-auto">
-                <div class="flex items-center justify-between mb-4">
-                    <div>
-                        <h3 class="text-lg font-bold text-blue-300">Manage Placeholder Aliases</h3>
-                        <p class="text-xs text-gray-400">Add or edit mappings so $alias$ in supportive SPL resolves automatically from source notables.</p>
-                    </div>
-                    <button type="button" class="text-gray-400 hover:text-white text-2xl leading-none" @click="closePlaceholderAliasEditor">&times;</button>
-                </div>
-
-                <p v-if="placeholderAliasEditorError" class="text-xs text-red-400 mb-3">{{ placeholderAliasEditorError }}</p>
-
-                <!-- Add / Edit Form -->
-                <div class="bg-gray-800 border border-gray-700 rounded p-4 mb-4">
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        <div>
-                            <label class="text-xs text-gray-400">Alias Name (e.g. url, signature, parent_process)</label>
-                            <input v-model="newAliasForm.alias" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url">
-                        </div>
-                        <div>
-                            <label class="text-xs text-gray-400">Source Fields (comma-separated, order = priority)</label>
-                            <input v-model="newAliasForm.fields" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url, request_url, destination_url">
-                        </div>
-                    </div>
-                    <div class="mt-3">
-                        <label class="text-xs text-gray-400">Description (optional)</label>
-                        <input v-model="newAliasForm.description" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="URL involved in the event">
-                    </div>
-
-                    <div class="mt-3 flex gap-2">
-                        <button @click="savePlaceholderAlias" :disabled="placeholderAliasEditorBusy"
-                            class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold">
-                            {{ placeholderAliasEditorBusy ? 'Saving...' : (editingAliasId ? 'Update Alias' : 'Add Alias') }}
-                        </button>
-                        <button v-if="editingAliasId" @click="() => { editingAliasId = null; newAliasForm = { alias: '', fields: '', description: '' }; }"
-                            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
-                            Cancel Edit
-                        </button>
-                    </div>
-                </div>
-
-                <!-- Existing Aliases List -->
-                <div v-if="placeholderAliasList.length" class="space-y-2">
-                    <p class="text-xs text-gray-400 mb-1">Current Aliases (used automatically in Analysis tab)</p>
-                    <div v-for="a in placeholderAliasList" :key="a.id" class="bg-gray-800 border border-gray-700 rounded p-3 flex justify-between items-start">
-                        <div class="flex-1 min-w-0">
-                            <div class="flex items-center gap-2">
-                                <span class="font-mono text-blue-300 text-sm">${{ a.alias }}$</span>
-                                <span v-if="a.description" class="text-xs text-gray-400">— {{ a.description }}</span>
-                            </div>
-                            <div class="text-xs text-gray-400 mt-0.5">Fields: <span class="font-mono text-gray-300">{{ (a.fields || []).join(', ') || '(none)' }}</span></div>
-                        </div>
-                        <div class="flex gap-1 ml-3 flex-shrink-0">
-                            <button @click="editPlaceholderAlias(a)" class="text-xs px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded">Edit</button>
-                            <button @click="deletePlaceholderAlias(a.id)" class="text-xs px-2 py-0.5 bg-red-900/60 hover:bg-red-800 rounded text-red-300">Delete</button>
-                        </div>
-                    </div>
-                </div>
-                <p v-else class="text-xs text-gray-500 italic">No custom aliases defined yet. Default aliases (host, dest, process, user) are always available.</p>
-
-                <div class="mt-4 pt-3 border-t border-gray-700 flex justify-end">
-                    <button @click="closePlaceholderAliasEditor" class="px-4 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded">Close</button>
-                </div>
-            </div>
-        </div>
-
         <!-- Footer -->
         <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
             <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
@@ -983,7 +905,6 @@
                     analysisRunning: false,
                     analysisResult: null,
                     analysisSourceNotable: null,
-                    placeholderAliases: {},
 
                     // Closure Notes
                     availableRules: [],
@@ -996,14 +917,6 @@
                     supportiveEditorQueries: [],
                     supportiveEditorRuleId: '',
                     supportiveEditorError: '',
-
-                    // Placeholder Alias Management (dynamic, no-code)
-                    placeholderAliasEditorOpen: false,
-                    placeholderAliasEditorBusy: false,
-                    placeholderAliasList: [],
-                    placeholderAliasEditorError: '',
-                    newAliasForm: { alias: '', fields: '', description: '' },
-                    editingAliasId: null,
                     closureForm: {
                         caseId: '',
                         ruleId: '',
@@ -1422,94 +1335,6 @@
                     this.supportiveEditorRuleId = '';
                     this.supportiveEditorError = '';
                 },
-
-                // === Placeholder Alias Management (dynamic, no-code) ===
-                async openPlaceholderAliasEditor() {
-                    this.placeholderAliasEditorOpen = true;
-                    this.placeholderAliasEditorError = '';
-                    this.newAliasForm = { alias: '', fields: '', description: '' };
-                    this.editingAliasId = null;
-                    await this.loadPlaceholderAliasList();
-                },
-                closePlaceholderAliasEditor() {
-                    if (this.placeholderAliasEditorBusy) return;
-                    this.placeholderAliasEditorOpen = false;
-                    this.placeholderAliasList = [];
-                    this.newAliasForm = { alias: '', fields: '', description: '' };
-                    this.editingAliasId = null;
-                    this.placeholderAliasEditorError = '';
-                },
-                async loadPlaceholderAliasList() {
-                    this.placeholderAliasEditorBusy = true;
-                    try {
-                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
-                        this.placeholderAliasList = res.data || [];
-                    } catch (err) {
-                        console.error('Failed to load placeholder aliases:', err);
-                        this.placeholderAliasEditorError = 'Failed to load aliases from server.';
-                    } finally {
-                        this.placeholderAliasEditorBusy = false;
-                    }
-                },
-                async savePlaceholderAlias() {
-                    if (!this.newAliasForm.alias.trim()) {
-                        this.placeholderAliasEditorError = 'Alias name is required (e.g. url, signature).';
-                        return;
-                    }
-                    this.placeholderAliasEditorBusy = true;
-                    this.placeholderAliasEditorError = '';
-
-                    const payload = {
-                        alias: this.newAliasForm.alias.trim().toLowerCase(),
-                        fields: this.newAliasForm.fields.split(',').map(f => f.trim()).filter(Boolean),
-                        description: this.newAliasForm.description.trim()
-                    };
-
-                    try {
-                        if (this.editingAliasId) {
-                            await axios.put(`${this.apiUrl}/db/placeholder-aliases/${this.editingAliasId}`, payload);
-                        } else {
-                            await axios.post(this.apiUrl + '/db/placeholder-aliases', payload);
-                        }
-                        await this.loadPlaceholderAliasList();
-                        // Reset form
-                        this.newAliasForm = { alias: '', fields: '', description: '' };
-                        this.editingAliasId = null;
-                    } catch (err) {
-                        console.error('Failed to save placeholder alias:', err);
-                        this.placeholderAliasEditorError = err.response?.data?.detail || 'Failed to save alias.';
-                    } finally {
-                        this.placeholderAliasEditorBusy = false;
-                    }
-                },
-                editPlaceholderAlias(alias) {
-                    this.editingAliasId = alias.id;
-                    this.newAliasForm = {
-                        alias: alias.alias,
-                        fields: (alias.fields || []).join(', '),
-                        description: alias.description || ''
-                    };
-                    this.placeholderAliasEditorError = '';
-                },
-                async deletePlaceholderAlias(id) {
-                    if (!confirm('Delete this placeholder alias? Supportive queries using it will fall back to direct field matching.')) {
-                        return;
-                    }
-                    this.placeholderAliasEditorBusy = true;
-                    try {
-                        await axios.delete(`${this.apiUrl}/db/placeholder-aliases/${id}`);
-                        await this.loadPlaceholderAliasList();
-                        if (this.editingAliasId === id) {
-                            this.editingAliasId = null;
-                            this.newAliasForm = { alias: '', fields: '', description: '' };
-                        }
-                    } catch (err) {
-                        console.error('Failed to delete placeholder alias:', err);
-                        this.placeholderAliasEditorError = 'Failed to delete alias.';
-                    } finally {
-                        this.placeholderAliasEditorBusy = false;
-                    }
-                },
                 addSupportiveQueryRow() {
                     const index = this.supportiveEditorQueries.length;
                     this.supportiveEditorQueries.push({
@@ -1622,19 +1447,6 @@
                         this.ollamaHealth = { available: false, models: [] };
                     }
                 },
-                async loadPlaceholderAliases() {
-                    try {
-                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
-                        const map = {};
-                        for (const item of res.data || []) {
-                            map[item.alias.toLowerCase()] = item.fields || [];
-                        }
-                        this.placeholderAliases = map;
-                    } catch (err) {
-                        console.warn('Could not load placeholder aliases, using defaults:', err);
-                        // Keep built-in defaults in renderSupportiveQuery
-                    }
-                },
                 async executeTool(tool) {
                     const args = {};
                     if (tool.arguments) {
@@ -1692,17 +1504,16 @@
 
                     const fields = this.analysisSourceNotable.fields || {};
 
-                    // Dynamic alias map loaded from backend (placeholder_aliases table + JSON seed).
-                    // Falls back to built-in defaults if not yet loaded.
-                    const aliasMap = Object.keys(this.placeholderAliases || {}).length > 0
-                        ? this.placeholderAliases
-                        : {
-                            host: ['host', 'destination_nt_hostname', 'destination', 'destination_ip'],
-                            dest: ['destination', 'destination_ip', 'host'],
-                            user: ['user', 'username', 'user_identity'],
-                            account: ['user', 'username', 'user_identity'],
-                            process: ['process', 'image', 'file_name', 'value'],
-                        };
+                    // Aliases for common investigative placeholders. These map
+                    // friendly names like $process$ onto one or more parsed
+                    // notable fields.
+                    const aliasMap = {
+                        host: ['host', 'destination_nt_hostname', 'destination', 'destination_ip'],
+                        dest: ['destination', 'destination_ip', 'host'],
+                        user: ['user', 'username', 'user_identity'],
+                        account: ['user', 'username', 'user_identity'],
+                        process: ['process', 'image', 'file_name', 'value'],
+                    };
 
                     const placeholderRegex = /\$([A-Za-z0-9_]+)\$/g;
 
@@ -1942,7 +1753,6 @@
                 this.loadRecentNotables();
                 this.loadDbStats();
                 this.loadRules();
-                this.loadPlaceholderAliases();
                 this.checkOllama();
                 this.checkHealth();
                 

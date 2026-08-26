@@ -4,7 +4,6 @@ Exposes tools as REST endpoints with async job queuing and long-running executio
 Serves web UI at root path. Includes database and AI analysis endpoints.
 """
 
-from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -26,16 +25,8 @@ sys.path.insert(0, tools_dir)
 
 from core_lib.utils import get_platform_root, get_reports_dir, get_archive_dir, get_logs_dir
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Create any missing tables on application startup."""
-    from db.models import Base, engine
-    Base.metadata.create_all(bind=engine)
-    yield
-
 app = FastAPI(
     title="SOC Platform API",
-    lifespan=lifespan,
     description="REST API for SOC Orchestration Platform tools and workflows with local AI analysis",
     version="1.0.0",
 )
@@ -99,28 +90,6 @@ class SupportiveQueryUpdatePayload(BaseModel):
     title: Optional[str] = Field(None, description="Short name for this supportive query")
     description: Optional[str] = Field(None, description="What this query is used for")
     spl_query: Optional[str] = Field(None, description="SPL to run in Splunk or another system")
-
-
-class PlaceholderAliasPayload(BaseModel):
-    """Payload for creating/updating placeholder aliases.
-
-    Aliases let analysts define logical names (e.g., "host", "dest",
-    "user") that map to one or more notable fields without touching
-    code. These are consumed by the frontend when rendering supportive
-    queries with $placeholder$ tokens.
-    """
-
-    alias: str = Field(..., description="Logical placeholder name (e.g., host, dest, user)")
-    fields: List[str] = Field(..., description="Candidate field names to resolve values from")
-    description: Optional[str] = Field("", description="Human-readable description of this alias")
-
-
-class PlaceholderAliasUpdatePayload(BaseModel):
-    """Partial update payload for placeholder aliases."""
-
-    alias: Optional[str] = Field(None, description="Logical placeholder name (e.g., host, dest, user)")
-    fields: Optional[List[str]] = Field(None, description="Candidate field names to resolve values from")
-    description: Optional[str] = Field(None, description="Human-readable description of this alias")
 
 
 class PastedNotableRequest(BaseModel):
@@ -223,7 +192,6 @@ NOTABLE_FIELD_ALIASES = [
     ("Disposition", "disposition"),
     ("Username", "username"),
     ("File Name", "file_name"),
-    ("Process", "process"),
     ("Risk Score", "risk_score"),
     ("Severity", "severity"),
     ("Urgency", "urgency"),
@@ -279,7 +247,6 @@ NOTABLE_FIELD_LABELS = {
     "additional_fields_value": "Additional FieldsValue",
     "value": "Value",
     "file_name": "File Name",
-    "process": "Process",
     "risk_score": "Risk Score",
     "security_domain": "Security Domain",
     "severity": "Severity",
@@ -290,18 +257,12 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     """Extract common Splunk notable key/value pairs from pasted text."""
     matches = []
     normalized = raw_text.replace("\r\n", "\n")
-    # Prefer label occurrences at the beginning of lines (how Splunk renders
-    # the Additional Fields grid), to avoid matching words inside long
-    # sentences such as correlation rule names.
+
     for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
-        pattern = re.compile(rf"(^|\n)[ \t]*({re.escape(alias)})\b", flags=re.IGNORECASE)
-        for match in pattern.finditer(normalized):
-            # Capture just the alias span, not the leading newline/whitespace.
-            alias_start = match.start(2)
-            alias_end = match.end(2)
+        for match in re.finditer(re.escape(alias), normalized, flags=re.IGNORECASE):
             matches.append({
-                "start": alias_start,
-                "end": alias_end,
+                "start": match.start(),
+                "end": match.end(),
                 "canonical": canonical,
             })
 
@@ -325,31 +286,6 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
             parsed[match["canonical"]] = value
 
     return parsed
-
-
-def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
-    """Apply small, conservative fix-ups to parsed notable fields.
-
-    Current behaviors:
-    - If Destination NT Hostname is present and Destination looks merged or
-      empty, prefer Destination NT Hostname as the Destination value. This
-      compensates for copy/paste glitches where the Destination row is
-      concatenated with the next label (e.g., "Destination NDC56-10Risk Score").
-    """
-
-    # Normalize destination from destination_nt_hostname when appropriate.
-    dest_nt = (fields.get("destination_nt_hostname") or "").strip()
-    if dest_nt:
-        dest = (fields.get("destination") or "").strip()
-        dest_nt_norm = dest_nt.lower()
-        dest_norm = dest.lower()
-        # If destination is missing OR clearly contains the NT hostname with
-        # extra suffix characters (case-insensitive), prefer the cleaner
-        # hostname value.
-        if not dest or (dest_nt_norm in dest_norm and len(dest) > len(dest_nt)):
-            fields["destination"] = dest_nt
-
-    return fields
 
 
 def split_pasted_notables(raw_text: str) -> List[str]:
@@ -992,10 +928,6 @@ def paste_notable(request: PastedNotableRequest):
             if not parsed_fields:
                 parsed_fields = parse_pasted_notable(segment_text)
 
-            # Apply small normalization tweaks (e.g., Destination from
-            # Destination NT Hostname) before rendering/sanitizing.
-            parsed_fields = normalize_notable_fields(parsed_fields)
-
             base_structured_text = render_notable_fields(parsed_fields) or segment_text
             history_text = extract_notable_history(segment_text)
             if history_text:
@@ -1010,12 +942,11 @@ def paste_notable(request: PastedNotableRequest):
                 # preserve original time if we parsed it before masking
                 if parsed_fields.get("time"):
                     sanitized_fields["time"] = parsed_fields["time"]
-                sanitized_fields = normalize_notable_fields(sanitized_fields)
             else:
                 # no masking: keep parsed fields and structured text as-is
                 sanitized_text = structured_text
                 mapping = {}
-                sanitized_fields = normalize_notable_fields(parsed_fields.copy())
+                sanitized_fields = parsed_fields.copy()
 
             sanitized_history = extract_notable_history(sanitized_text)
 
@@ -1642,173 +1573,6 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
             }
             for r in rows
         ]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/db/placeholder-aliases", tags=["Rules"])
-def list_placeholder_aliases():
-    """List all defined placeholder aliases.
-
-    Response shape matches what the frontend expects:
-    [{"id", "alias", "fields", "description"}, ...]
-    """
-    try:
-        sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, PlaceholderAlias
-
-        db = SessionLocal()
-        rows = db.query(PlaceholderAlias).order_by(PlaceholderAlias.alias.asc()).all()
-        db.close()
-
-        aliases: List[Dict[str, Any]] = []
-        for row in rows:
-            try:
-                fields = json.loads(row.fields) if row.fields else []
-            except Exception:
-                fields = []
-
-            aliases.append({
-                "id": row.id,
-                "alias": (row.alias or "").strip(),
-                "fields": fields,
-                "description": row.description or "",
-            })
-
-        return aliases
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/api/db/placeholder-aliases", tags=["Rules"])
-def create_placeholder_alias(payload: PlaceholderAliasPayload):
-    """Create a new placeholder alias.
-
-    Alias names are normalized to lowercase and must be unique.
-    """
-    try:
-        sys.path.insert(0, get_platform_root())
-        from sqlalchemy import func  # type: ignore
-        from db.models import SessionLocal, PlaceholderAlias
-
-        db = SessionLocal()
-        alias_normalized = payload.alias.strip().lower()
-        if not alias_normalized:
-            db.close()
-            raise HTTPException(status_code=400, detail="Alias name cannot be empty")
-
-        # Enforce uniqueness at the application level for clearer errors.
-        existing = db.query(PlaceholderAlias).filter(
-            func.lower(PlaceholderAlias.alias) == alias_normalized
-        ).first()
-        if existing:
-            db.close()
-            raise HTTPException(status_code=400, detail=f"Alias '{alias_normalized}' already exists")
-
-        cleaned_fields = [f.strip() for f in (payload.fields or []) if f and f.strip()]
-        record = PlaceholderAlias(
-            alias=alias_normalized,
-            fields=json.dumps(cleaned_fields),
-            description=(payload.description or "").strip(),
-        )
-
-        db.add(record)
-        db.commit()
-        db.refresh(record)
-        db.close()
-
-        return {
-            "id": record.id,
-            "alias": record.alias,
-            "fields": cleaned_fields,
-            "description": record.description or "",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.put("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
-def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePayload):
-    """Update an existing placeholder alias.
-
-    Supports partial updates for alias, fields, and description.
-    """
-    try:
-        sys.path.insert(0, get_platform_root())
-        from sqlalchemy import func  # type: ignore
-        from db.models import SessionLocal, PlaceholderAlias
-
-        db = SessionLocal()
-        record = db.query(PlaceholderAlias).filter(PlaceholderAlias.id == alias_id).first()
-        if not record:
-            db.close()
-            raise HTTPException(status_code=404, detail=f"Placeholder alias {alias_id} not found")
-
-        if payload.alias is not None:
-            new_alias = payload.alias.strip().lower()
-            if not new_alias:
-                db.close()
-                raise HTTPException(status_code=400, detail="Alias name cannot be empty")
-
-            existing = db.query(PlaceholderAlias).filter(
-                func.lower(PlaceholderAlias.alias) == new_alias,
-                PlaceholderAlias.id != alias_id,
-            ).first()
-            if existing:
-                db.close()
-                raise HTTPException(status_code=400, detail=f"Alias '{new_alias}' already exists")
-            record.alias = new_alias
-
-        if payload.fields is not None:
-            cleaned_fields = [f.strip() for f in payload.fields if f and f.strip()]
-            record.fields = json.dumps(cleaned_fields)
-
-        if payload.description is not None:
-            record.description = payload.description.strip()
-
-        db.commit()
-        db.refresh(record)
-        db.close()
-
-        try:
-            fields = json.loads(record.fields) if record.fields else []
-        except Exception:
-            fields = []
-
-        return {
-            "id": record.id,
-            "alias": record.alias,
-            "fields": fields,
-            "description": record.description or "",
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.delete("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
-def delete_placeholder_alias(alias_id: int):
-    """Delete a placeholder alias definition."""
-    try:
-        sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, PlaceholderAlias
-
-        db = SessionLocal()
-        record = db.query(PlaceholderAlias).filter(PlaceholderAlias.id == alias_id).first()
-        if not record:
-            db.close()
-            raise HTTPException(status_code=404, detail=f"Placeholder alias {alias_id} not found")
-
-        db.delete(record)
-        db.commit()
-        db.close()
-
-        return {"success": True, "deleted_id": alias_id}
-    except HTTPException:
-        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
