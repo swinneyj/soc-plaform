@@ -912,8 +912,27 @@
                             <input v-model="newAliasForm.alias" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url">
                         </div>
                         <div>
-                            <label class="text-xs text-gray-400">Source Fields (comma-separated, order = priority)</label>
+                            <label class="text-xs text-gray-400 flex items-center justify-between">
+                                <span>Source Fields (comma-separated, order = priority)</span>
+                                <button type="button" class="text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded ml-2"
+                                    @click="loadPlaceholderAliasSuggestions" :disabled="placeholderAliasSuggestionsBusy">
+                                    {{ placeholderAliasSuggestionsBusy ? 'Loading…' : 'Suggest from recent notables' }}
+                                </button>
+                            </label>
                             <input v-model="newAliasForm.fields" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url, request_url, destination_url">
+                            <div v-if="placeholderAliasSuggestions.length" class="mt-2 flex flex-wrap gap-1">
+                                <span class="text-[10px] text-gray-500 mr-1">Suggestions:</span>
+                                <button
+                                    v-for="s in placeholderAliasSuggestions"
+                                    :key="s.field"
+                                    type="button"
+                                    class="text-[10px] px-2 py-0.5 rounded border"
+                                    :class="isAliasFieldSelected(s.field) ? 'bg-blue-700 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-200'"
+                                    @click="toggleAliasFieldCandidate(s.field)"
+                                >
+                                    {{ s.field }}<span class="text-[9px] text-gray-400" v-if="s.count"> ({{ s.count }})</span>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <div class="mt-3">
@@ -1029,6 +1048,8 @@
                     placeholderAliasEditorBusy: false,
                     placeholderAliasList: [],
                     placeholderAliasEditorError: '',
+                    placeholderAliasSuggestions: [],
+                    placeholderAliasSuggestionsBusy: false,
                     newAliasForm: { alias: '', fields: '', description: '' },
                     editingAliasId: null,
                     closureForm: {
@@ -1463,6 +1484,7 @@
                     this.placeholderAliasEditorError = '';
                     this.newAliasForm = { alias: '', fields: '', description: '' };
                     this.editingAliasId = null;
+                    this.placeholderAliasSuggestions = [];
                     await this.loadPlaceholderAliasList();
                 },
                 closePlaceholderAliasEditor() {
@@ -1472,6 +1494,7 @@
                     this.newAliasForm = { alias: '', fields: '', description: '' };
                     this.editingAliasId = null;
                     this.placeholderAliasEditorError = '';
+                    this.placeholderAliasSuggestions = [];
                 },
                 async loadPlaceholderAliasList() {
                     this.placeholderAliasEditorBusy = true;
@@ -1524,6 +1547,42 @@
                         description: alias.description || ''
                     };
                     this.placeholderAliasEditorError = '';
+                },
+                async loadPlaceholderAliasSuggestions() {
+                    if (this.placeholderAliasSuggestionsBusy) {
+                        return;
+                    }
+                    this.placeholderAliasSuggestionsBusy = true;
+                    this.placeholderAliasEditorError = '';
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases/suggestions', {
+                            params: { limit_events: 50 }
+                        });
+                        this.placeholderAliasSuggestions = (res.data && res.data.candidates) || [];
+                    } catch (err) {
+                        console.error('Failed to load alias field suggestions:', err);
+                        this.placeholderAliasEditorError = 'Failed to load field suggestions from recent notables.';
+                        this.placeholderAliasSuggestions = [];
+                    } finally {
+                        this.placeholderAliasSuggestionsBusy = false;
+                    }
+                },
+                isAliasFieldSelected(fieldName) {
+                    const raw = this.newAliasForm.fields || '';
+                    const parts = raw.split(',').map(f => f.trim()).filter(Boolean);
+                    return parts.some(f => f.toLowerCase() === String(fieldName).toLowerCase());
+                },
+                toggleAliasFieldCandidate(fieldName) {
+                    const raw = this.newAliasForm.fields || '';
+                    let parts = raw.split(',').map(f => f.trim()).filter(Boolean);
+                    const normalized = String(fieldName).trim();
+                    const idx = parts.findIndex(f => f.toLowerCase() === normalized.toLowerCase());
+                    if (idx >= 0) {
+                        parts.splice(idx, 1);
+                    } else {
+                        parts.push(normalized);
+                    }
+                    this.newAliasForm.fields = parts.join(', ');
                 },
                 async deletePlaceholderAlias(id) {
                     if (!confirm('Delete this placeholder alias? Supportive queries using it will fall back to direct field matching.')) {

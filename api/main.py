@@ -135,6 +135,47 @@ class PastedNotableRequest(BaseModel):
     )
 
 
+def _rebuild_placeholder_aliases_file() -> None:
+    """Persist current placeholder aliases into placeholder_aliases.json.
+
+    This mirrors the DB state into a repo-backed JSON file so alias
+    definitions can survive DB restores when sync_shared_logic_to_db.ps1
+    re-imports shared logic.
+    """
+    try:
+        from db.models import SessionLocal, PlaceholderAlias  # type: ignore
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(PlaceholderAlias)
+                .order_by(PlaceholderAlias.alias.asc())
+                .all()
+            )
+            aliases: List[Dict[str, Any]] = []
+            for row in rows:
+                try:
+                    fields = json.loads(row.fields) if row.fields else []
+                except Exception:
+                    fields = []
+                aliases.append(
+                    {
+                        "alias": (row.alias or "").strip(),
+                        "fields": fields,
+                        "description": row.description or "",
+                    }
+                )
+
+            payload = {"aliases": aliases}
+            output_path = os.path.join(get_platform_root(), "placeholder_aliases.json")
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        finally:
+            db.close()
+    except Exception as e:
+        print(f"[placeholder_aliases.json sync] Failed to rebuild file: {e}", file=sys.stderr)
+
+
 def _rebuild_supportive_rules_file() -> None:
     """Persist current supportive queries from DB into supportive_rules.json.
 
@@ -1718,6 +1759,57 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/db/placeholder-aliases/suggestions", tags=["Rules"])
+def suggest_placeholder_alias_fields(limit_events: int = 50) -> Dict[str, Any]:
+    """Suggest candidate notable fields that could be aliased.
+
+    Scans recent pasted-notable events (splunk:notable:pasted) and returns
+    field names with simple frequency counts, so the frontend can suggest
+    alias mappings dynamically instead of relying only on manual entry.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent  # type: ignore
+
+        db = SessionLocal()
+        try:
+            events = (
+                db.query(SplunkEvent)
+                .filter(SplunkEvent.sourcetype == "splunk:notable:pasted")
+                .order_by(SplunkEvent.ingested_at.desc())
+                .limit(limit_events)
+                .all()
+            )
+        finally:
+            db.close()
+
+        field_counts: Dict[str, int] = {}
+        for event in events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
+
+            fields = payload.get("fields") or {}
+            if not isinstance(fields, dict):
+                continue
+            for key in fields.keys():
+                normalized = str(key).strip()
+                if not normalized:
+                    continue
+                field_counts[normalized] = field_counts.get(normalized, 0) + 1
+
+        sorted_candidates = sorted(
+            ({"field": name, "count": count} for name, count in field_counts.items()),
+            key=lambda x: x["count"],
+            reverse=True,
+        )
+
+        return {"candidates": sorted_candidates}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/db/placeholder-aliases", tags=["Rules"])
 def list_placeholder_aliases():
     """List all defined placeholder aliases.
@@ -1787,6 +1879,10 @@ def create_placeholder_alias(payload: PlaceholderAliasPayload):
         db.add(record)
         db.commit()
         db.refresh(record)
+
+        # Mirror alias definitions to placeholder_aliases.json (best-effort)
+        _rebuild_placeholder_aliases_file()
+
         db.close()
 
         return {
@@ -1842,6 +1938,10 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
 
         db.commit()
         db.refresh(record)
+
+        # Mirror alias definitions to placeholder_aliases.json (best-effort)
+        _rebuild_placeholder_aliases_file()
+
         db.close()
 
         try:
@@ -1876,6 +1976,10 @@ def delete_placeholder_alias(alias_id: int):
 
         db.delete(record)
         db.commit()
+
+        # Mirror alias definitions to placeholder_aliases.json (best-effort)
+        _rebuild_placeholder_aliases_file()
+
         db.close()
 
         return {"success": True, "deleted_id": alias_id}

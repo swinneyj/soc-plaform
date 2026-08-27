@@ -1,5 +1,5 @@
 param (
-    [string]$Message = "Automated updates",
+    [string]$Message = "",  # auto-filled below if not provided
     [string]$Branch = "main",
     [switch]$All
 )
@@ -28,6 +28,12 @@ try {
     $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
     if ($currentBranch -ne $Branch) {
         throw "Refusing to sync from branch '$currentBranch'. Expected '$Branch'. Use -Branch to override."
+    }
+
+    # If no commit message was provided, generate a timestamped default.
+    if (-not $PSBoundParameters.ContainsKey('Message') -or -not $Message) {
+        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+        $Message = "SOC sync - $timestamp"
     }
 
     # Optionally limit staged files in the future; for now, stage all tracked + new files
