@@ -376,6 +376,16 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     """Extract common Splunk notable key/value pairs from pasted text."""
     matches = []
     normalized = raw_text.replace("\r\n", "\n")
+
+    # Many Splunk Incident Review exports append an "Event Details" section
+    # after the Additional Fields grid. That section can contain label-like
+    # text (e.g., "event_hash", "notable" markers) that we do NOT want
+    # treated as key/value pairs. Trim the raw text at the first occurrence
+    # of "Event Details" so field extraction only considers the top-of-card
+    # Additional Fields area.
+    event_details_idx = normalized.find("Event Details")
+    if event_details_idx != -1:
+        normalized = normalized[:event_details_idx]
     # Prefer label occurrences at the beginning of lines (how Splunk renders
     # the Additional Fields grid), to avoid matching words inside long
     # sentences such as correlation rule names.
@@ -418,9 +428,12 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
 
     Current behaviors:
     - If Destination NT Hostname is present and Destination looks merged or
-      empty, prefer Destination NT Hostname as the Destination value. This
-      compensates for copy/paste glitches where the Destination row is
-      concatenated with the next label (e.g., "Destination NDC56-10Risk Score").
+      empty, prefer Destination NT Hostname as the Destination value.
+    - If a field value accidentally captured the "Event Details" section,
+      trim everything from the first "Event Details" occurrence onward.
+    - If Destination's value still contains "Risk Score" (e.g.,
+      "Destination NDC56-10Risk Score"), trim at that marker to recover
+      the hostname.
     """
 
     # Normalize destination from destination_nt_hostname when appropriate.
@@ -434,6 +447,22 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
         # hostname value.
         if not dest or (dest_nt_norm in dest_norm and len(dest) > len(dest_nt)):
             fields["destination"] = dest_nt
+
+    # Trim any accidental inclusion of "Event Details" noise from values.
+    for key, value in list(fields.items()):
+        if not isinstance(value, str):
+            continue
+        idx = value.find("Event Details")
+        if idx != -1:
+            cleaned = value[:idx].strip()
+            fields[key] = cleaned
+
+    # If destination still contains a concatenated "Risk Score" label,
+    # trim it off to recover the hostname.
+    dest_val = fields.get("destination") or ""
+    rs_idx = dest_val.lower().find("risk score")
+    if rs_idx != -1:
+        fields["destination"] = dest_val[:rs_idx].strip()
 
     return fields
 
@@ -1025,6 +1054,52 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
 def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """GET wrapper for delete_triage_case for environments that disallow POST."""
     return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
+
+
+@app.post("/api/db/triage/batch-delete", tags=["Database"])
+def batch_delete_triage_cases(payload: Dict[str, Any]):
+    """Delete multiple triage cases in one call.
+
+    Expects JSON payload:
+    {"case_ids": ["CASE-1", "CASE-2", ...], "delete_analysis": true/false}
+    """
+    try:
+        case_ids = payload.get("case_ids") or []
+        delete_analysis = bool(payload.get("delete_analysis"))
+
+        if not isinstance(case_ids, list) or not case_ids:
+            raise HTTPException(status_code=400, detail="case_ids list is required")
+
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, AnalysisResult
+
+        db = SessionLocal()
+        deleted: List[str] = []
+        missing: List[str] = []
+
+        try:
+            for case_id in case_ids:
+                cid = (case_id or "").strip()
+                if not cid:
+                    continue
+                case = db.query(TriageResult).filter(TriageResult.case_id == cid).first()
+                if not case:
+                    missing.append(cid)
+                    continue
+                db.delete(case)
+                if delete_analysis:
+                    db.query(AnalysisResult).filter(AnalysisResult.case_id == cid).delete()
+                deleted.append(cid)
+
+            db.commit()
+        finally:
+            db.close()
+
+        return {"success": True, "deleted": deleted, "missing": missing}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -1302,6 +1377,52 @@ def delete_pasted_notable_post(event_id: int):
 def delete_pasted_notable_get(event_id: int):
     """GET wrapper for delete_pasted_notable for environments that disallow POST/DELETE."""
     return delete_pasted_notable(event_id)
+
+
+@app.post("/api/db/notables/batch-delete", tags=["Database"])
+def batch_delete_pasted_notables(payload: Dict[str, Any]):
+    """Delete multiple pasted notables in one call.
+
+    Expects JSON payload:
+    {"event_ids": [1, 2, 3, ...]}
+    """
+    try:
+        event_ids = payload.get("event_ids") or []
+        if not isinstance(event_ids, list) or not event_ids:
+            raise HTTPException(status_code=400, detail="event_ids list is required")
+
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        deleted: List[int] = []
+        missing: List[int] = []
+
+        try:
+            for raw_id in event_ids:
+                try:
+                    eid = int(raw_id)
+                except Exception:
+                    continue
+                event = db.query(SplunkEvent).filter(
+                    SplunkEvent.id == eid,
+                    SplunkEvent.sourcetype == "splunk:notable:pasted",
+                ).first()
+                if not event:
+                    missing.append(eid)
+                    continue
+                db.delete(event)
+                deleted.append(eid)
+
+            db.commit()
+        finally:
+            db.close()
+
+        return {"success": True, "deleted": deleted, "missing": missing}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/api/db/notables/{event_id}/promote", tags=["Database"])

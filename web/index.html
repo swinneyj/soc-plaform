@@ -237,6 +237,12 @@
                                     <span>Show open pasted notables only</span>
                                 </label>
                                 <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                                <button
+                                    @click="deleteSelectedPastedNotables"
+                                    :disabled="!selectedNotableIds.length"
+                                    class="px-3 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    Delete selected
+                                </button>
                             </div>
                         </div>
 
@@ -246,9 +252,18 @@
 
                         <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
                             <div class="flex items-start justify-between gap-4">
-                                <div>
-                                    <h4 class="font-bold text-blue-300">{{ notable.title || 'Untitled notable' }}</h4>
-                                    <p class="text-xs text-gray-400">{{ notable.correlation_search || 'No correlation search parsed' }}</p>
+                                <div class="flex items-start gap-2">
+                                    <div class="pt-1">
+                                        <input
+                                            type="checkbox"
+                                            class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded"
+                                            v-model="selectedNotableIds"
+                                            :value="notable.id" />
+                                    </div>
+                                    <div>
+                                        <h4 class="font-bold text-blue-300">{{ notable.title || 'Untitled notable' }}</h4>
+                                        <p class="text-xs text-gray-400">{{ notable.correlation_search || 'No correlation search parsed' }}</p>
+                                    </div>
                                 </div>
                                 <div class="text-right text-xs text-gray-400">
                                     <button
@@ -331,6 +346,12 @@
                             <span>From pasted notables only</span>
                         </label>
                         <button @click="loadTriageData" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
+                        <button
+                            @click="deleteSelectedTriageCases"
+                            :disabled="!selectedTriageCaseIds.length"
+                            class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-sm font-semibold transition">
+                            Delete selected
+                        </button>
                     </div>
 
                     <div v-if="filteredTriageData.length === 0" class="text-gray-400 text-center py-8">
@@ -339,9 +360,18 @@
 
                     <div v-for="case_ in filteredTriageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
                         <div class="flex items-start justify-between mb-2">
-                            <div>
-                                <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
-                                <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
+                            <div class="flex items-start gap-2">
+                                <div class="pt-1">
+                                    <input
+                                        type="checkbox"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded"
+                                        v-model="selectedTriageCaseIds"
+                                        :value="case_.case_id" />
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
+                                    <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
+                                </div>
                             </div>
                             <div class="flex flex-col items-end space-y-1">
                                 <span :class="{
@@ -1011,6 +1041,7 @@
                     triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
                     triageNotableDetails: {},
+                    selectedTriageCaseIds: [],
                     showOpenNotablesOnly: false,
                     notablePasteText: '',
                     notableRedactionEnabled: true,
@@ -1018,6 +1049,7 @@
                     notablePasteSaving: false,
                     notablePasteResult: null,
                     notablePromotingId: null,
+                    selectedNotableIds: [],
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
@@ -1351,6 +1383,26 @@
                         alert('Error: ' + (err.response?.data?.detail || err.message));
                     }
                 },
+                async deleteSelectedPastedNotables() {
+                    if (!this.selectedNotableIds.length) {
+                        return;
+                    }
+
+                    if (!confirm('Delete ' + this.selectedNotableIds.length + ' pasted notable(s)? This will not delete any triage cases created from them.')) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/notables/batch-delete', {
+                            event_ids: this.selectedNotableIds,
+                        });
+                        this.selectedNotableIds = [];
+                        await this.loadRecentNotables();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
                 async promoteNotableToTriage(notable) {
                     this.notablePromotingId = notable.id;
                     try {
@@ -1387,6 +1439,30 @@
                             }
                         });
                         this.triageData = res.data;
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async deleteSelectedTriageCases() {
+                    if (!this.selectedTriageCaseIds.length) {
+                        return;
+                    }
+
+                    const count = this.selectedTriageCaseIds.length;
+                    const msg = 'Delete ' + count + ' triage case(s) from the database?' + (this.deleteAnalysisWithCase ? ' This will also delete any AI analysis for these cases.' : '');
+                    if (!confirm(msg)) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/triage/batch-delete', {
+                            case_ids: this.selectedTriageCaseIds,
+                            delete_analysis: this.deleteAnalysisWithCase,
+                        });
+                        this.selectedTriageCaseIds = [];
+                        await this.loadTriageData();
                         await this.loadAnalysisCases();
                         await this.loadDbStats();
                     } catch (err) {

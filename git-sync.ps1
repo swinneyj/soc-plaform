@@ -24,10 +24,19 @@ try {
         throw "This folder is not a Git repository."
     }
 
-    # Check current branch
+    # Determine branch: if not explicitly provided, default to current branch
     $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
+    if (-not $PSBoundParameters.ContainsKey('Branch') -or -not $Branch) {
+        $inputBranch = Read-Host "Branch to sync (default: $currentBranch)"
+        if ([string]::IsNullOrWhiteSpace($inputBranch)) {
+            $Branch = $currentBranch
+        } else {
+            $Branch = $inputBranch.Trim()
+        }
+    }
+
     if ($currentBranch -ne $Branch) {
-        throw "Refusing to sync from branch '$currentBranch'. Expected '$Branch'. Use -Branch to override."
+        throw "Refusing to sync from branch '$currentBranch'. Expected '$Branch'. Switch branches or use -Branch to override intentionally."
     }
 
     # If no commit message was provided, generate a timestamped default.

@@ -1,0 +1,25 @@
+{
+  "aliases": [
+    {
+      "alias": "host",
+      "fields": [
+        "$host$"
+      ],
+      "description": ""
+    },
+    {
+      "alias": "process",
+      "fields": [
+        "$process$"
+      ],
+      "description": ""
+    },
+    {
+      "alias": "source_ip",
+      "fields": [
+        "source_ip"
+      ],
+      "description": ""
+    }
+  ]
+}
