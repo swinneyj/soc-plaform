@@ -1855,7 +1855,18 @@ def analyze_case(request: AnalyzeRequest):
         start_idx = response_text.find(start_marker)
         end_idx = response_text.find(end_marker)
         if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            json_block = response_text[start_idx + len(start_marker):end_idx].strip()
+            # Extract the region between the markers and then trim down to the
+            # JSON array itself so we are resilient to markdown decorations
+            # like "**PHASE2_QUERIES_JSON_START**".
+            raw_block = response_text[start_idx + len(start_marker):end_idx]
+            # Look for the first '[' and the last ']' within this region.
+            arr_start = raw_block.find("[")
+            arr_end = raw_block.rfind("]")
+            json_block = ""
+            if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
+                json_block = raw_block[arr_start:arr_end + 1].strip()
+            else:
+                json_block = raw_block.strip()
             try:
                 parsed_block = json.loads(json_block)
                 if isinstance(parsed_block, list):
