@@ -16,6 +16,7 @@ Write-Host "[*] DATABASE_URL=$DatabaseUrl"
 
 $sampleRules = Join-Path $RepoRoot "sample_rules.json"
 $supportiveRules = Join-Path $RepoRoot "supportive_rules.json"
+$exportedSupportiveRules = Join-Path $RepoRoot "local-backups\shared-logic-export\supportive_rules.exported.json"
 
 if (Test-Path $sampleRules) {
     python .\Tools\es_rules_importer\es_rules_importer.py --import $sampleRules
@@ -24,6 +25,12 @@ if (Test-Path $sampleRules) {
 
 if (Test-Path $supportiveRules) {
     python .\Tools\es_rules_importer\es_rules_importer.py --import $supportiveRules
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+}
+
+if (Test-Path $exportedSupportiveRules) {
+    Write-Host "[*] Importing exported supportive queries snapshot from $exportedSupportiveRules"
+    python .\Tools\es_rules_importer\es_rules_importer.py --import $exportedSupportiveRules
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

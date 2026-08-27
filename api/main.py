@@ -134,6 +134,51 @@ class PastedNotableRequest(BaseModel):
         description="Whether this pasted notable represents a closed/historical case",
     )
 
+
+def _rebuild_supportive_rules_file() -> None:
+    """Persist current supportive queries from DB into supportive_rules.json.
+
+    This keeps the repo-backed supportive_rules.json in sync with DB edits
+    made via the API/UI so that a later DB restore followed by
+    sync_shared_logic_to_db.ps1 can automatically reapply supportive
+    queries without manual JSON editing.
+    """
+    try:
+        from db.models import SessionLocal, SupportiveQuery  # type: ignore
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(SupportiveQuery)
+                .order_by(SupportiveQuery.rule_id.asc(), SupportiveQuery.title.asc())
+                .all()
+            )
+
+            grouped: Dict[str, List[Dict[str, Any]]] = {}
+            for row in rows:
+                grouped.setdefault(row.rule_id, []).append(
+                    {
+                        "title": row.title,
+                        "description": row.description or "",
+                        "spl_query": row.spl_query,
+                    }
+                )
+
+            payload = {
+                "rules": [
+                    {"rule_id": rule_id, "supportive_queries": queries}
+                    for rule_id, queries in grouped.items()
+                ]
+            }
+
+            output_path = os.path.join(get_platform_root(), "supportive_rules.json")
+            with open(output_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+        finally:
+            db.close()
+    except Exception as e:  # best-effort only; never break API on failure
+        print(f"[supportive_rules.json sync] Failed to rebuild file: {e}", file=sys.stderr)
+
 # Helper Functions
 def load_registry() -> List[Dict]:
     """Load tool registry from JSON."""
@@ -1870,6 +1915,10 @@ def create_supportive_query(payload: SupportiveQueryPayload):
         db.add(record)
         db.commit()
         db.refresh(record)
+
+        # Best-effort persist of updated supportive queries to supportive_rules.json
+        _rebuild_supportive_rules_file()
+
         db.close()
 
         return {
@@ -1915,6 +1964,10 @@ def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload
 
         db.commit()
         db.refresh(record)
+
+        # Best-effort persist of updated supportive queries to supportive_rules.json
+        _rebuild_supportive_rules_file()
+
         db.close()
 
         return {
@@ -1951,6 +2004,10 @@ def delete_supportive_query(query_id: int):
 
         db.delete(record)
         db.commit()
+        
+        # Best-effort persist of updated supportive queries to supportive_rules.json
+        _rebuild_supportive_rules_file()
+
         db.close()
 
         return {"success": True, "deleted_id": query_id}

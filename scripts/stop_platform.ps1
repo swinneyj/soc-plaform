@@ -71,6 +71,23 @@ Write-Host "[*] Repo root: $RepoRoot"
 
 $exportSucceeded = $true
 
+try {
+    $exportSharedLogicScript = Join-Path $PSScriptRoot "export_shared_logic_from_db.py"
+    if (Test-Path $exportSharedLogicScript) {
+        Write-Host "[*] Exporting shared rule/supportive logic snapshot from database..."
+        python $exportSharedLogicScript
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "Shared logic export script exited with non-zero code $LASTEXITCODE. Continuing with shutdown."
+        } else {
+            Write-Host "[+] Shared logic export complete."
+        }
+    } else {
+        Write-Host "[*] Shared logic export script not found; skipping export."
+    }
+} catch {
+    Write-Warning "Shared logic export failed: $($_.Exception.Message)"
+}
+
 if (-not $SkipSharedDumpExport) {
     if (-not (Acquire-ShareLock)) {
         exit 1
