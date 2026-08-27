@@ -572,6 +572,21 @@
                         class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
                         {{ analysisRunning ? 'Running Analysis...' : 'Run Analysis' }}
                     </button>
+                    <button
+                        type="button"
+                        class="mt-2 w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100 transition"
+                        @click="saveAnalysisState"
+                    >
+                        Save Analysis State
+                    </button>
+                    <button
+                        v-if="analysisRunning"
+                        type="button"
+                        class="mt-2 w-full px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100 transition"
+                        @click="cancelAnalysis"
+                    >
+                        Cancel Analysis
+                    </button>
                 </div>
 
                 <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
@@ -585,6 +600,77 @@
                     </p>
                     <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                         <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
+                    </div>
+                    <div v-if="analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="mt-4 space-y-3">
+                        <div class="flex items-center justify-between mb-1">
+                            <h4 class="text-sm font-semibold text-blue-300">Phase 2 SPL Recommendations</h4>
+                            <button
+                                type="button"
+                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
+                                @click="openPlaceholderAliasEditor"
+                            >
+                                Manage Placeholder Aliases
+                            </button>
+                        </div>
+                        <p class="text-[11px] text-gray-400">
+                            Run these queries in Splunk, paste key results below, then click
+                            <span class="font-semibold">Move to Phase 2 analysis</span> to feed them back into a second analysis.
+                        </p>
+                        <div
+                            v-for="q in analysisResult.phase2_queries"
+                            :key="getPhase2Key(q)"
+                            class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2"
+                        >
+                            <div class="flex items-start justify-between gap-2">
+                                <div>
+                                    <p class="text-xs font-semibold text-blue-300 mb-0.5">{{ q.title }}</p>
+                                    <p class="text-xs text-gray-400" v-if="q.description">{{ q.description }}</p>
+                                </div>
+                                <div class="flex gap-1 ml-2 flex-shrink-0">
+                                    <button
+                                        type="button"
+                                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200"
+                                        @click="copyPhase2SPL(q)"
+                                    >
+                                        Copy SPL
+                                    </button>
+                                    <button
+                                        type="button"
+                                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-purple-500 rounded text-[10px] text-purple-200"
+                                        @click="promotePhase2Query(q)"
+                                    >
+                                        Save as Supportive
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mt-1">
+                                <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
+                                <textarea
+                                    :value="getPhase2Template(q)"
+                                    @input="onPhase2TemplateInput(q, $event.target.value)"
+                                    rows="4"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+                                    placeholder="Edit the suggested SPL here before running or saving..."
+                                ></textarea>
+                            </div>
+                            <div class="mt-1">
+                                <label class="text-[11px] text-gray-400">Results / notes for this query (optional)</label>
+                                <textarea
+                                    v-model="phase2ManualResults[getPhase2Key(q)]"
+                                    rows="3"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
+                                    placeholder="Paste key rows or a short summary from this query's results..."
+                                ></textarea>
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            class="mt-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white"
+                            :disabled="analysisRunning"
+                            @click="runPhase2Analysis"
+                        >
+                            {{ analysisRunning ? 'Running Phase 2 Analysis...' : 'Move to Phase 2 analysis' }}
+                        </button>
                     </div>
                     <div class="text-xs text-gray-400 space-y-1">
                         <p>Model: {{ analysisResult.model }}</p>
@@ -1058,10 +1144,13 @@
                     analysisModel: '',
                     analysisContext: '',
                     analysisRunning: false,
+                    analysisRequestId: 0,
                     analysisResult: null,
                     analysisSourceNotable: null,
                     placeholderAliases: {},
                     supportiveManualResults: {},
+                    phase2EditedQueries: {},
+                    phase2ManualResults: {},
 
                     // Closure Notes
                     availableRules: [],
@@ -1831,6 +1920,8 @@
                 async analyzeCase(case_) {
                     this.analysisCaseId = case_.case_id;
                     this.currentTab = 'analysis';
+                    // Restore any saved analysis state for this case (context, pasted results, phase 2 edits).
+                    this.loadAnalysisState(case_.case_id);
                     this.onAnalysisCaseChanged();
                 },
                 async runAnalysis() {
@@ -1839,6 +1930,7 @@
                         return;
                     }
 
+                    const requestId = ++this.analysisRequestId;
                     this.analysisRunning = true;
                     try {
                         // Build composite context that includes freeform notes
@@ -1878,12 +1970,193 @@
                             model: this.analysisModel,
                             context: combinedContext
                         });
-                        this.analysisResult = res.data;
+                        // Ignore stale responses if a newer analysis has been started or cancelled.
+                        if (requestId === this.analysisRequestId) {
+                            const newResult = res.data;
+                            // If the new response lacks phase2_queries but we previously had
+                            // them, preserve the existing list so phase 2 cards do not vanish.
+                            if (
+                                (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
+                            ) {
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                            }
+                            this.analysisResult = newResult;
+                        }
                     } catch (err) {
-                        alert('Error: ' + err.response?.data?.detail || err.message);
+                        if (requestId === this.analysisRequestId) {
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
+                        }
                     } finally {
-                        this.analysisRunning = false;
+                        if (requestId === this.analysisRequestId) {
+                            this.analysisRunning = false;
+                        }
                     }
+                },
+                getPhase2Key(q) {
+                    const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
+                    if (!title) {
+                        return 'phase2:title:unknown';
+                    }
+                    return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getPhase2Template(q) {
+                    const key = this.getPhase2Key(q);
+                    const existing = this.phase2EditedQueries[key];
+                    if (existing !== undefined && existing !== null && existing !== '') {
+                        return existing;
+                    }
+                    return (q && q.spl ? q.spl : '').toString();
+                },
+                onPhase2TemplateInput(q, value) {
+                    const key = this.getPhase2Key(q);
+                    this.phase2EditedQueries[key] = value;
+                },
+                copyPhase2SPL(q) {
+                    const key = this.getPhase2Key(q);
+                    const template = (this.phase2EditedQueries[key] || q.spl || '').toString();
+                    const text = this.renderPhase2Query(template);
+                    if (!text) {
+                        alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard API not available; copy manually from the card.');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text).catch(err => {
+                        console.error('Failed to copy SPL:', err);
+                        alert('Failed to copy SPL to clipboard');
+                    });
+                },
+                async runPhase2Analysis() {
+                    if (!this.analysisCaseId || !this.analysisModel) {
+                        alert('Please select a case ID and model');
+                        return;
+                    }
+
+                    const requestId = ++this.analysisRequestId;
+                    this.analysisRunning = true;
+                    try {
+                        let combinedContext = this.analysisContext || '';
+
+                        const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
+                        if (phase2Queries.length) {
+                            const pieces = [];
+                            let idx = 0;
+                            for (const q of phase2Queries) {
+                                const key = this.getPhase2Key(q);
+                                const text = (this.phase2ManualResults[key] || '').trim();
+                                if (!text) {
+                                    continue;
+                                }
+                                idx += 1;
+                                const title = q.title || 'Unnamed phase 2 query';
+                                pieces.push(
+                                    `[#${idx}] ${title}\n` +
+                                    `Phase 2 Results (analyst paste):\n${text}`
+                                );
+                            }
+
+                            if (pieces.length) {
+                                if (combinedContext) {
+                                    combinedContext += '\n\n';
+                                }
+                                combinedContext +=
+                                    '=== PHASE 2 SUPPORTIVE QUERY RESULTS (MANUAL PASTE) ===\n\n' +
+                                    pieces.join('\n\n');
+                            }
+                        }
+
+                        const res = await axios.post(this.apiUrl + '/db/analyze', {
+                            case_id: this.analysisCaseId,
+                            model: this.analysisModel,
+                            context: combinedContext
+                        });
+                        if (requestId === this.analysisRequestId) {
+                            const newResult = res.data;
+                            if (
+                                (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
+                            ) {
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                            }
+                            this.analysisResult = newResult;
+                        }
+                    } catch (err) {
+                        if (requestId === this.analysisRequestId) {
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
+                        }
+                    } finally {
+                        if (requestId === this.analysisRequestId) {
+                            this.analysisRunning = false;
+                        }
+                    }
+                },
+                saveAnalysisState() {
+                    if (!this.analysisCaseId) {
+                        alert('Select a case before saving analysis state');
+                        return;
+                    }
+
+                    const key = 'analysis_state:' + this.analysisCaseId;
+                    const snapshot = {
+                        analysisContext: this.analysisContext,
+                        analysisModel: this.analysisModel,
+                        supportiveManualResults: this.supportiveManualResults,
+                        phase2EditedQueries: this.phase2EditedQueries,
+                        phase2ManualResults: this.phase2ManualResults,
+                    };
+
+                    try {
+                        window.localStorage.setItem(key, JSON.stringify(snapshot));
+                        alert('Analysis state saved for case ' + this.analysisCaseId);
+                    } catch (err) {
+                        console.error('Failed to save analysis state:', err);
+                        alert('Failed to save analysis state: ' + (err.message || err));
+                    }
+                },
+                loadAnalysisState(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    const key = 'analysis_state:' + caseId;
+                    try {
+                        const raw = window.localStorage.getItem(key);
+                        if (!raw) {
+                            return;
+                        }
+                        const snapshot = JSON.parse(raw);
+                        if (snapshot.analysisContext !== undefined) {
+                            this.analysisContext = snapshot.analysisContext;
+                        }
+                        if (snapshot.analysisModel) {
+                            this.analysisModel = snapshot.analysisModel;
+                        }
+                        if (snapshot.supportiveManualResults) {
+                            this.supportiveManualResults = snapshot.supportiveManualResults;
+                        }
+                        if (snapshot.phase2EditedQueries) {
+                            this.phase2EditedQueries = snapshot.phase2EditedQueries;
+                        }
+                        if (snapshot.phase2ManualResults) {
+                            this.phase2ManualResults = snapshot.phase2ManualResults;
+                        }
+                    } catch (err) {
+                        console.error('Failed to load analysis state:', err);
+                    }
+                },
+                cancelAnalysis() {
+                    // Invalidate any in-flight analysis responses and clear the running flag.
+                    this.analysisRequestId += 1;
+                    this.analysisRunning = false;
                 },
                 getSupportiveKey(q) {
                     if (q && q.id != null) {
@@ -1912,6 +2185,41 @@
                             console.error('Failed to copy SPL:', err);
                             alert('Failed to copy SPL query to clipboard');
                         });
+                },
+                renderPhase2Query(template) {
+                    const synthetic = { spl_query: template };
+                    return this.renderSupportiveQuery(synthetic);
+                },
+                async promotePhase2Query(q) {
+                    const rule = this.analysisRule;
+                    if (!rule || !rule.rule_id) {
+                        alert('Cannot save: no analysis rule selected for this case');
+                        return;
+                    }
+
+                    const key = this.getPhase2Key(q);
+                    const template = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+                    if (!template) {
+                        alert('Cannot save: SPL query is empty');
+                        return;
+                    }
+
+                    const title = (q.title || '').toString().trim() || 'Phase 2 Query';
+                    const description = (q.description || '').toString().trim();
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/supportive-queries', {
+                            rule_id: rule.rule_id,
+                            title,
+                            description,
+                            spl_query: template,
+                        });
+                        await this.loadRules();
+                        alert('Saved phase 2 query as a supportive query for this rule.');
+                    } catch (err) {
+                        console.error('Failed to save phase 2 query as supportive:', err);
+                        alert('Error saving supportive query: ' + (err.response?.data?.detail || err.message));
+                    }
                 },
                 renderSupportiveQuery(q) {
                     const text = (q.spl_query || '').toString();

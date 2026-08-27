@@ -464,6 +464,17 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     if rs_idx != -1:
         fields["destination"] = dest_val[:rs_idx].strip()
 
+    # Defensive fallback: if Destination looks like a hostname followed by a
+    # bare integer (e.g., "NDC45-790 80" where 80 is actually a risk score
+    # or some other numeric suffix), drop the trailing number and keep just
+    # the host portion. This helps when the "Risk Score" label itself was
+    # not captured but its numeric value was appended into the same cell.
+    dest_val = fields.get("destination") or ""
+    stripped = dest_val.strip()
+    host_num_match = re.match(r"^([A-Za-z0-9._-]+)\s+\d{1,3}$", stripped)
+    if host_num_match:
+        fields["destination"] = host_num_match.group(1)
+
     return fields
 
 
@@ -1744,10 +1755,26 @@ def analyze_case(request: AnalyzeRequest):
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 
-        # 3. Assemble Prompt with Detection Science
+        # 3. Assemble Prompt with Detection Science and explicit response structure
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
-            "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.",
+            (
+                "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
+                "Your response MUST be structured into the following sections (in order):\n"
+                "1. Initial Thoughts\n"
+                "2. Key Questions\n"
+                "3. Investigative Analysis\n"
+                "4. Supportive Query Recommendations (Phase 2 SPL)\n"
+                "5. Triage Verdict\n"
+                "6. Structured Closure Notes\n\n"
+                "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
+                "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface.\n\n"
+                "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
+                "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
+                "PHASE2_QUERIES_JSON_START\n"
+                "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
+                "PHASE2_QUERIES_JSON_END\n"
+            ),
         ]
 
         if detection_rule:
@@ -1817,10 +1844,41 @@ def analyze_case(request: AnalyzeRequest):
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
 
+        # Attempt to extract a structured JSON block of phase-2 SPL
+        # recommendations from the model's response. This block is delimited
+        # by the PHASE2_QUERIES_JSON_START/END markers we instructed the
+        # model to emit.
+        response_text = result["response"] or ""
+        phase2_queries: List[Dict[str, Any]] = []
+        start_marker = "PHASE2_QUERIES_JSON_START"
+        end_marker = "PHASE2_QUERIES_JSON_END"
+        start_idx = response_text.find(start_marker)
+        end_idx = response_text.find(end_marker)
+        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+            json_block = response_text[start_idx + len(start_marker):end_idx].strip()
+            try:
+                parsed_block = json.loads(json_block)
+                if isinstance(parsed_block, list):
+                    for item in parsed_block:
+                        if not isinstance(item, dict):
+                            continue
+                        title = (item.get("title") or "").strip()
+                        spl = (item.get("spl") or "").strip()
+                        desc = (item.get("description") or "").strip()
+                        if title and spl:
+                            phase2_queries.append({
+                                "title": title,
+                                "spl": spl,
+                                "description": desc,
+                            })
+            except Exception:
+                # If parsing fails, we silently ignore and leave phase2_queries empty.
+                phase2_queries = []
+
         return {
             "case_id": case_id,
             "model": model,
-            "analysis": result["response"],
+            "analysis": response_text,
             "detection_science_applied": bool(detection_rule),
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
@@ -1834,6 +1892,7 @@ def analyze_case(request: AnalyzeRequest):
                 for q in supportive_query_defs
             ],
             "prior_closures": prior_closures,
+            "phase2_queries": phase2_queries,
         }
     except HTTPException:
         raise
@@ -2016,6 +2075,41 @@ def delete_placeholder_alias(alias_id: int):
         return {"success": True, "deleted_id": alias_id}
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/db/supportive-queries", tags=["Rules"])
+def list_supportive_queries(rule_id: Optional[str] = Query(default=None, description="Filter by logical rule_id")):
+    """List supportive SPL queries.
+
+    When a rule_id is provided, only queries for that rule are returned.
+    Otherwise, all supportive queries are listed. This API backs the
+    analyst-facing editor so supportive queries can be tuned on the fly
+    without touching JSON seed files.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SupportiveQuery
+
+        db = SessionLocal()
+        query = db.query(SupportiveQuery)
+        if rule_id:
+            query = query.filter(SupportiveQuery.rule_id == rule_id)
+        rows = query.order_by(SupportiveQuery.rule_id.asc(), SupportiveQuery.title.asc()).all()
+        db.close()
+
+        return [
+            {
+                "id": r.id,
+                "rule_id": r.rule_id,
+                "title": r.title,
+                "description": r.description,
+                "spl_query": r.spl_query,
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
