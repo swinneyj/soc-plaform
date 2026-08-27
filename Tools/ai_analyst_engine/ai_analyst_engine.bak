@@ -27,51 +27,48 @@ def list_available_skills(kb_dir):
             skills.append(file)
     return sorted(skills)
 
-def generate_prompt(skill_path, evidence_path, output_dir, detection_science_path=None, silent=False):
-    """Combines the skill, detection science logic, and evidence into a single prompt file."""
+def generate_prompt(skill_path, evidence_path, output_dir, silent=False):
+    """Combines the skill and evidence into a single prompt file."""
     try:
+        # Read the Skill
         with open(skill_path, 'r', encoding='utf-8', errors='ignore') as f:
             skill_content = f.read()
             
+        # Read the Evidence
         with open(evidence_path, 'r', encoding='utf-8', errors='ignore') as f:
             evidence_content = f.read()
-
-        detection_science_content = ""
-        if detection_science_path and os.path.exists(detection_science_path):
-            with open(detection_science_path, 'r', encoding='utf-8', errors='ignore') as f:
-                detection_science_content = f.read()
             
     except Exception as e:
         if not silent: print(f"{Colors.FAIL}[!] Error reading files: {e}{Colors.ENDC}")
         return
 
+    # Construct the fused prompt
     timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
     skill_name = os.path.basename(skill_path).replace('_SKILL.md', '')
     evidence_name = os.path.basename(evidence_path)
     
-    sections = [
-        "You are acting as an expert SOC Analyst. Please apply the specialized methodology, detection science, and evidence below.",
-        f"\n==================================================\n[ANALYST SKILL]: {skill_name}\n==================================================\n{skill_content}"
-    ]
+    prompt = f"""You are acting as an expert SOC Analyst. Please apply the specialized methodology defined in the [ANALYST SKILL] section below to thoroughly analyze the data provided in the [RAW EVIDENCE] section.
 
-    if detection_science_content:
-        sections.append(
-            f"\n==================================================\n[DETECTION SCIENCE & RULE LOGIC]\n==================================================\n{detection_science_content}"
-        )
+==================================================
+[ANALYST SKILL]: {skill_name}
+==================================================
+{skill_content}
 
-    sections.append(
-        f"\n==================================================\n[RAW EVIDENCE]: {evidence_name}\n==================================================\n{evidence_content}"
-    )
-    sections.append(
-        "\n==================================================\nPlease generate your analysis now based strictly on the methodology, detection science, and evidence above."
-    )
+==================================================
+[RAW EVIDENCE]: {evidence_name}
+==================================================
+{evidence_content}
 
-    prompt = "\n".join(sections)
+==================================================
+Please generate your analysis now based strictly on the evidence and methodology above.
+"""
+
     out_file = os.path.join(output_dir, f"AI_Prompt_{skill_name}_{timestamp}.txt")
     
     with open(out_file, 'w', encoding='utf-8') as f:
         f.write(prompt)
 
+    # Also maintain a stable alias for automation pipelines
     latest_path = os.path.join(output_dir, 'AI_Prompt_latest.txt')
     try:
         shutil.copy2(out_file, latest_path)
@@ -79,7 +76,7 @@ def generate_prompt(skill_path, evidence_path, output_dir, detection_science_pat
         pass
 
     if not silent:
-        print(f"\n{Colors.GREEN}[+] AI Analysis Prompt with Detection Science successfully generated!{Colors.ENDC}")
+        print(f"\n{Colors.GREEN}[+] AI Analysis Prompt successfully generated!{Colors.ENDC}")
         print(f"[*] Saved to: {out_file}")
         print(f"\n{Colors.CYAN}[i] Next Step: Copy the contents of this text file and paste it into your approved IL5 LLM.{Colors.ENDC}")
 
@@ -143,9 +140,7 @@ def main():
             if 0 <= skill_idx < len(skills):
                 selected_skill = skills[skill_idx]
                 skill_path = os.path.join(kb_dir, selected_skill)
-                # Use keyword arguments so the detection_science_path parameter
-                # remains optional and the silent flag is correctly applied.
-                generate_prompt(skill_path, evidence_path, output_dir, silent=args.silent)
+                generate_prompt(skill_path, evidence_path, output_dir, args.silent)
             else:
                 print(f"{Colors.FAIL}[!] Invalid selection.{Colors.ENDC}")
         except ValueError:

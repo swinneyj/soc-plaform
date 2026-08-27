@@ -51,7 +51,7 @@
         {
           "title": "Test 1",
           "description": "",
-          "spl_query": "index=Windows sourcetype=XmlWinEventLog source=\"*Sysmon*\"\nEventCode=1\nImage=\"$process$\"\n| search host=\"$host$\"\n| table _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine, Hashes, ProcessGuid\n| sort 0 -_time"
+          "spl_query": "index=Windows sourcetype=XmlWinEventLog source=\"*Sysmon*\"\nEventCode=1\nImage=\"$destination$\"\n| search host=\"$host$\"\n| table _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine, Hashes, ProcessGuid\n| sort 0 -_time"
         },
         {
           "title": "Test 2",

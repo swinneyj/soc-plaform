@@ -1,9 +1,16 @@
 {
   "aliases": [
     {
+      "alias": "destination",
+      "fields": [
+        "host"
+      ],
+      "description": ""
+    },
+    {
       "alias": "host",
       "fields": [
-        "$host$"
+        "destination"
       ],
       "description": ""
     },

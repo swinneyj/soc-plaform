@@ -2,13 +2,11 @@
 # DESC: Guided helper that takes a sanitized Splunk ES Incident Review notable export and builds an AI prompt asking for SPL, disposition, and a two-sentence closing comment.
 # CATEGORY: Reporting
 # ARG: --evidence | Evidence File | Path to the sanitized notable text or export (optional; will prompt if omitted) | False
-# ARG: --detection-science | Detection Science File | Path to detection science / supportive rules JSON/MD (optional) | False
 
 import os
 import sys
 import argparse
 import datetime
-import json
 
 # Ensure both the Tools directory and this folder are on sys.path so we can
 # import core_lib and the ai_analyst_engine module.
@@ -49,29 +47,6 @@ def resolve_skill_path(platform_root: str) -> str:
         return generic_skill
 
     raise FileNotFoundError(f"No Splunk notable investigation SKILL found in {kb_dir}.")
-
-
-def resolve_detection_science(platform_root: str, explicit_path: str = "") -> str:
-    """Locates detection science / supportive rule logic if available.
-
-    Checks:
-    1) Explicit path passed via CLI / parameter.
-    2) supportive_rules.json in platform root.
-    3) Detection science profiles in Data/AI_Knowledge_Base.
-    """
-    if explicit_path:
-        candidate = explicit_path.strip('"').strip("'")
-        if not os.path.isabs(candidate):
-            candidate = os.path.join(platform_root, candidate)
-        if os.path.exists(candidate):
-            return candidate
-
-    # Auto-discovery fallback: supportive_rules.json in repo root
-    default_supportive = os.path.join(platform_root, 'supportive_rules.json')
-    if os.path.exists(default_supportive):
-        return default_supportive
-
-    return ""
 
 
 def prompt_for_evidence_file(platform_root: str) -> str:
@@ -116,8 +91,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Splunk Notable AI Helper")
     parser.add_argument('--evidence', type=str, required=False,
                         help="Path to the sanitized notable text/export (TXT/MD/CSV)")
-    parser.add_argument('--detection-science', type=str, required=False, default="",
-                        help="Path to detection science / supportive rules (JSON/MD)")
     parser.add_argument('--silent', action='store_true', help="Suppress UI output")
     args = parser.parse_args()
 
@@ -155,9 +128,6 @@ def main() -> None:
             print(f"{Colors.FAIL}[!] {e}{Colors.ENDC}")
         return
 
-    # Resolve detection science context
-    detection_science_path = resolve_detection_science(platform_root, args.detection_science)
-
     # For transparency, echo what we are about to do
     if not args.silent:
         clear_screen()
@@ -166,20 +136,10 @@ def main() -> None:
         print("=" * 80 + f"{Colors.ENDC}")
         print(f"\n{Colors.GREEN}[+] Using skill:{Colors.ENDC} {os.path.basename(skill_path)}")
         print(f"{Colors.GREEN}[+] Evidence file:{Colors.ENDC} {evidence_path}")
-        if detection_science_path:
-            print(f"{Colors.GREEN}[+] Detection Science:{Colors.ENDC} {os.path.basename(detection_science_path)}")
-        else:
-            print(f"{Colors.WARNING}[!] Detection Science:{Colors.ENDC} None (using general methodology)")
 
-    # Generate the fused prompt file (passing detection science)
+    # Generate the fused prompt file
     try:
-        generate_prompt(
-            skill_path, 
-            evidence_path, 
-            output_dir, 
-            detection_science_path=detection_science_path, 
-            silent=args.silent
-        )
+        generate_prompt(skill_path, evidence_path, output_dir, silent=args.silent)
     except Exception as e:
         if not args.silent:
             print(f"{Colors.FAIL}[!] Error generating AI prompt: {e}{Colors.ENDC}")
@@ -228,6 +188,7 @@ def main() -> None:
         if os.path.exists(map_path):
             try:
                 with open(map_path, 'r', encoding='utf-8') as mf:
+                    import json
                     mapping = json.load(mf)
             except Exception as e:
                 print(f"{Colors.WARNING}[!] Could not read mapping file {map_path}: {e}{Colors.ENDC}")
@@ -241,6 +202,7 @@ def main() -> None:
         if os.path.exists(env_profile_path):
             try:
                 with open(env_profile_path, 'r', encoding='utf-8') as epf:
+                    import json
                     env_profile = json.load(epf)
             except Exception as e:
                 print(f"{Colors.WARNING}[!] Could not read Splunk env profile {env_profile_path}: {e}{Colors.ENDC}")
