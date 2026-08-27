@@ -2112,6 +2112,7 @@
                         supportiveManualResults: this.supportiveManualResults,
                         phase2EditedQueries: this.phase2EditedQueries,
                         phase2ManualResults: this.phase2ManualResults,
+                        analysisResult: this.analysisResult,
                     };
 
                     try {
@@ -2148,6 +2149,9 @@
                         }
                         if (snapshot.phase2ManualResults) {
                             this.phase2ManualResults = snapshot.phase2ManualResults;
+                        }
+                        if (snapshot.analysisResult) {
+                            this.analysisResult = snapshot.analysisResult;
                         }
                     } catch (err) {
                         console.error('Failed to load analysis state:', err);
