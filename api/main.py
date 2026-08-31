@@ -1870,16 +1870,43 @@ def analyze_case(request: AnalyzeRequest):
             try:
                 parsed_block = json.loads(json_block)
                 if isinstance(parsed_block, list):
-                    for item in parsed_block:
-                        if not isinstance(item, dict):
-                            continue
-                        title = (item.get("title") or "").strip()
-                        spl = (item.get("spl") or "").strip()
-                        desc = (item.get("description") or "").strip()
-                        if title and spl:
+                    for idx, item in enumerate(parsed_block, 1):
+                        # Accept either dict-style entries or bare strings.
+                        title = ""
+                        spl_value = ""
+                        desc = ""
+
+                        if isinstance(item, dict):
+                            # Be lenient about key names: handle common variants.
+                            title_keys = ["title", "name", "query_name"]
+                            spl_keys = ["spl", "query", "sql", "code"]
+                            desc_keys = ["description", "desc", "notes"]
+
+                            for k in title_keys:
+                                if k in item and (item.get(k) or "").strip():
+                                    title = str(item.get(k)).strip()
+                                    break
+
+                            for k in spl_keys:
+                                if k in item and (item.get(k) or "").strip():
+                                    spl_value = str(item.get(k)).strip()
+                                    break
+
+                            for k in desc_keys:
+                                if k in item and (item.get(k) or "").strip():
+                                    desc = str(item.get(k)).strip()
+                                    break
+                        elif isinstance(item, str):
+                            # Treat bare strings as SPL bodies with a generic title.
+                            spl_value = item.strip()
+                            title = f"Phase 2 Query {idx}"
+
+                        title = title or f"Phase 2 Query {idx}"
+
+                        if spl_value:
                             phase2_queries.append({
                                 "title": title,
-                                "spl": spl,
+                                "spl": spl_value,
                                 "description": desc,
                             })
             except Exception:
@@ -1941,6 +1968,65 @@ def list_placeholder_aliases():
             })
 
         return aliases
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/db/placeholder-aliases/suggestions", tags=["Rules"])
+def suggest_placeholder_alias_fields(
+    limit_events: int = Query(50, ge=1, le=500, description="Number of recent pasted notables to scan"),
+):
+    """Suggest candidate field names for placeholder aliases from recent pasted notables.
+
+    Scans recent SplunkEvent rows with sourcetype="splunk:notable:pasted", extracts the
+    "fields" dict from each event's raw JSON payload, and returns a frequency-ranked
+    list of field names observed. This backs the UI's "Suggest from recent notables"
+    button in the alias editor.
+
+    Response shape:
+        {"candidates": [{"field": "host", "count": N}, ...]}
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        try:
+            rows = (
+                db.query(SplunkEvent)
+                .filter(SplunkEvent.sourcetype == "splunk:notable:pasted")
+                .order_by(SplunkEvent.ingested_at.desc())
+                .limit(limit_events)
+                .all()
+            )
+        finally:
+            db.close()
+
+        field_counts: Dict[str, int] = {}
+        for row in rows:
+            try:
+                payload = json.loads(row.raw) if row.raw else {}
+            except Exception:
+                continue
+
+            fields = payload.get("fields") or {}
+            if not isinstance(fields, dict):
+                continue
+
+            for name in fields.keys():
+                if not name:
+                    continue
+                key = str(name).strip()
+                if not key:
+                    continue
+                field_counts[key] = field_counts.get(key, 0) + 1
+
+        candidates = [
+            {"field": name, "count": count}
+            for name, count in sorted(field_counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+        return {"candidates": candidates}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

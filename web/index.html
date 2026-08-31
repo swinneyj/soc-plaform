@@ -643,6 +643,9 @@
                                     </button>
                                 </div>
                             </div>
+                            <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap mt-1">
+                                {{ renderPhase2Query(getPhase2Template(q)) }}
+                            </pre>
                             <div class="mt-1">
                                 <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
                                 <textarea
@@ -2008,7 +2011,13 @@
                     if (existing !== undefined && existing !== null && existing !== '') {
                         return existing;
                     }
-                    return (q && q.spl ? q.spl : '').toString();
+                    const raw = (q && q.spl ? q.spl : '').toString();
+                    // Resolve placeholders once so the editable SPL shows the concrete
+                    // value (e.g., src_ip) for this case. Subsequent edits operate on
+                    // the hard-coded version, matching the initial supportive queries.
+                    const resolved = this.renderPhase2Query(raw);
+                    this.phase2EditedQueries[key] = resolved;
+                    return resolved;
                 },
                 onPhase2TemplateInput(q, value) {
                     const key = this.getPhase2Key(q);
@@ -2243,6 +2252,10 @@
                             user: ['user', 'username', 'user_identity'],
                             account: ['user', 'username', 'user_identity'],
                             process: ['process', 'image', 'file_name', 'value'],
+                            // Fallback IP aliases so src_ip/source_ip still resolve even
+                            // if the dynamic placeholderAliases map has not yet loaded.
+                            src_ip: ['src_ip', 'source_ip'],
+                            source_ip: ['source_ip', 'src_ip'],
                         };
 
                     const placeholderRegex = /\$([A-Za-z0-9_]+)\$/g;

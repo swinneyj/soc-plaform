@@ -1,32 +1,52 @@
 {
   "aliases": [
     {
-      "alias": "destination",
-      "fields": [
-        "host"
-      ],
-      "description": ""
-    },
-    {
       "alias": "host",
       "fields": [
-        "destination"
+        "host",
+        "destination_nt_hostname",
+        "destination",
+        "destination_ip"
       ],
-      "description": ""
+      "description": "Primary host for the notable (host/destination/destination_ip)."
+    },
+    {
+      "alias": "destination",
+      "fields": [
+        "destination",
+        "destination_ip",
+        "host"
+      ],
+      "description": "Destination host or IP for the connection."
     },
     {
       "alias": "process",
       "fields": [
-        "$process$"
+        "ProcessName",
+        "process_name",
+        "Image",
+        "image",
+        "process",
+        "file_name",
+        "value"
       ],
-      "description": ""
+      "description": "Process or binary name (ProcessName/Image/process_name/etc.)."
     },
     {
       "alias": "source_ip",
       "fields": [
+        "source_ip",
+        "src_ip"
+      ],
+      "description": "Source IP field (source_ip or src_ip)."
+    },
+    {
+      "alias": "src_ip",
+      "fields": [
+        "src_ip",
         "source_ip"
       ],
-      "description": ""
+      "description": "Source IP field (src_ip or source_ip)."
     }
   ]
 }

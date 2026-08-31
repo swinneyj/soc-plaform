@@ -53,6 +53,7 @@ This gives the model examples of how similar alerts have been dispositioned and 
   - Lets analysts add/edit/delete individual supportive SPL snippets.
   - Persists changes via `POST/PUT/DELETE /api/db/supportive-queries`.
   - Refreshes rule metadata so supportive cards stay in sync.
+  - **Ordering:** cards are rendered in alphabetical order by *title* for a given rule. To enforce a specific sequence, prefix titles with numbers such as `1.`, `2.`, `3.` (e.g., `1. Primary drill-down`, `2. Raw evidence`, `3. Enrichment summary`).
 
 ### Placeholder Aliases
 
