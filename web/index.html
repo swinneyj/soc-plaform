@@ -998,6 +998,47 @@
                             This narrows "Code to Review" to the region around the first match of your search term, so the model works on the exact section you care about.
                         </p>
                     </div>
+                    <div class="mb-4">
+                        <label class="text-xs font-bold text-gray-300 mb-2 block">Detected Sections (auto from current code)</label>
+                        <div class="flex gap-2 items-center mb-2">
+                            <button
+                                type="button"
+                                class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100 disabled:bg-gray-800 disabled:text-gray-500"
+                                :disabled="codeReviewSectionsBusy || !(codeReviewForm.codeSnippet && codeReviewForm.codeSnippet.trim())"
+                                @click="detectCodeReviewSections"
+                            >
+                                {{ codeReviewSectionsBusy ? 'Detecting Sections...' : 'Detect Sections' }}
+                            </button>
+                            <span v-if="codeReviewSections.length" class="text-[11px] text-gray-500">
+                                {{ codeReviewSections.length }} section(s) found. Click one below to focus.
+                            </span>
+                        </div>
+                        <div v-if="codeReviewSections.length" class="max-h-40 overflow-y-auto bg-gray-900/40 border border-gray-700 rounded">
+                            <button
+                                v-for="section in codeReviewSections"
+                                :key="section.id"
+                                type="button"
+                                class="w-full text-left px-3 py-2 text-[11px] border-b border-gray-800 hover:bg-gray-800/70"
+                                @click="focusCodeReviewOnSection(section)"
+                            >
+                                <div class="flex justify-between gap-2">
+                                    <span class="font-mono text-gray-200">
+                                        {{ (section.kind || 'section') }}
+                                        <span v-if="section.name">{{ ' ' + section.name }}</span>
+                                    </span>
+                                    <span class="text-gray-500" v-if="section.start_line && section.end_line">
+                                        L{{ section.start_line }}-L{{ section.end_line }}
+                                    </span>
+                                </div>
+                                <div class="mt-1 text-gray-400 truncate">
+                                    {{ section.preview }}
+                                </div>
+                            </button>
+                        </div>
+                        <p class="mt-1 text-[11px] text-gray-500">
+                            Automatically breaks the loaded file into functions/classes so you can review one at a time without typing a search term.
+                        </p>
+                    </div>
                     
                     <div class="mb-4">
                         <label class="text-xs font-bold text-gray-300 mb-2 block">Code to Review</label>
@@ -1383,7 +1424,9 @@
                     codeReviewRunning: false,
                     codeReviewsList: [],
                     codeReviewDragActive: false,
-                    codeReviewSearchTerm: ''
+                    codeReviewSearchTerm: '',
+                    codeReviewSections: [],
+                    codeReviewSectionsBusy: false
                 };
             },
             computed: {
@@ -2721,10 +2764,12 @@
                 handleCodeReviewFile(file) {
                     if (!file) {
                         this.codeReviewForm.uploadedFile = null;
+                        this.codeReviewSections = [];
                         return;
                     }
 
                     this.codeReviewForm.uploadedFile = file;
+                    this.codeReviewSections = [];
                     const name = file.name || '';
                     const lowerName = name.toLowerCase();
                     const ext = lowerName.includes('.') ? lowerName.substring(lowerName.lastIndexOf('.') + 1) : '';
@@ -2786,6 +2831,40 @@
 
                     this.codeReviewForm.codeSnippet = snippet;
                     alert('Focused on a smaller section around the first match. You can refine further or run the review now.');
+                },
+                async detectCodeReviewSections() {
+                    const fullText = this.codeReviewForm.codeSnippet || '';
+                    if (!fullText.trim()) {
+                        alert('No code loaded yet. Upload a file, paste code, or aggregate a folder first.');
+                        return;
+                    }
+
+                    this.codeReviewSectionsBusy = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/code-review/sections', {
+                            code_snippet: fullText,
+                            language: this.codeReviewForm.language
+                        });
+                        const sections = (res.data && res.data.sections) || [];
+                        this.codeReviewSections = sections;
+                        if (!sections.length) {
+                            alert('No discrete functions/classes were detected. You can still use search-term focus.');
+                        }
+                    } catch (err) {
+                        console.error('Failed to detect code sections:', err);
+                        alert('Error detecting sections: ' + (err.response?.data?.detail || err.message));
+                    } finally {
+                        this.codeReviewSectionsBusy = false;
+                    }
+                },
+                focusCodeReviewOnSection(section) {
+                    if (!section || !section.preview) {
+                        return;
+                    }
+                    this.codeReviewForm.codeSnippet = section.preview;
+                    const kind = section.kind || 'section';
+                    const name = section.name ? ' "' + section.name + '"' : '';
+                    alert('Focused on ' + kind + name + '. You can refine further or run the review now.');
                 },
                 async handleFolderUpload(event) {
                     const fileList = event.target.files || [];
@@ -2856,6 +2935,7 @@
 
                     this.codeReviewForm.codeSnippet = chunks.join('\n');
                     this.codeReviewForm.uploadedFile = null;
+                    this.codeReviewSections = [];
                 },
                 onCodeReviewDragOver(event) {
                     if (!event.dataTransfer) {

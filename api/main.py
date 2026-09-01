@@ -19,6 +19,7 @@ import datetime
 import re
 import io
 import zipfile
+import ast
 from pathlib import Path
 from enum import Enum
 
@@ -176,6 +177,113 @@ def _rebuild_placeholder_aliases_file() -> None:
             db.close()
     except Exception as e:
         print(f"[placeholder_aliases.json sync] Failed to rebuild file: {e}", file=sys.stderr)
+
+
+def _extract_python_sections(code_snippet: str) -> List[Dict[str, Any]]:
+    """Extract functions/classes from Python code using the AST.
+
+    Returns a list of sections with stable IDs, line ranges, and
+    previews that the frontend can use for per-function review.
+    """
+    try:
+        tree = ast.parse(code_snippet)
+    except SyntaxError:
+        return []
+
+    lines = code_snippet.splitlines()
+    sections: List[Dict[str, Any]] = []
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef):
+            kind = "function"
+            name = node.name
+        elif isinstance(node, ast.AsyncFunctionDef):
+            kind = "async function"
+            name = node.name
+        elif isinstance(node, ast.ClassDef):
+            kind = "class"
+            name = node.name
+        else:
+            continue
+
+        start_line = getattr(node, "lineno", None) or 1
+        end_line = getattr(node, "end_lineno", None) or start_line
+
+        start_idx = max(0, start_line - 1)
+        end_idx = min(len(lines), end_line)
+        preview_lines = lines[start_idx:end_idx]
+        preview = "\n".join(preview_lines).strip()
+        if not preview:
+            continue
+
+        sections.append(
+            {
+                "id": f"{kind}:{name}:{start_line}",
+                "name": name,
+                "kind": kind,
+                "start_line": start_line,
+                "end_line": end_line,
+                "preview": preview,
+            }
+        )
+
+    sections.sort(key=lambda s: (s["start_line"], s["name"]))
+    return sections
+
+
+def _extract_code_sections(code_snippet: str, language: str) -> List[Dict[str, Any]]:
+    """Extract code sections (functions/classes) for the given language.
+
+    For Python this uses the AST for precise function/class ranges.
+    For other languages it falls back to lightweight regex heuristics.
+    """
+    language = (language or "").lower().strip()
+    if not code_snippet.strip():
+        return []
+
+    if language == "python":
+        return _extract_python_sections(code_snippet)
+
+    lines = code_snippet.splitlines()
+    sections: List[Dict[str, Any]] = []
+
+    def add_regex_sections(pattern: str, kind: str) -> None:
+        compiled = re.compile(pattern)
+        for idx, line in enumerate(lines, start=1):
+            match = compiled.search(line)
+            if not match:
+                continue
+            name = match.group(1).strip()
+            start_line = idx
+            # Capture a reasonable slice of the function/body below the definition.
+            end_line = min(len(lines), idx + 40)
+            preview_lines = lines[idx - 1:end_line]
+            preview = "\n".join(preview_lines).strip()
+            if not preview:
+                continue
+            sections.append(
+                {
+                    "id": f"{kind}:{name}:{start_line}",
+                    "name": name,
+                    "kind": kind,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "preview": preview,
+                }
+            )
+
+    if language in ("javascript", "js", "ts"):
+        add_regex_sections(r"\bfunction\s+([A-Za-z0-9_$]+)\s*\(", "function")
+        add_regex_sections(r"\bconst\s+([A-Za-z0-9_$]+)\s*=\s*\(", "function")
+    elif language == "go":
+        add_regex_sections(r"\bfunc\s+([A-Za-z0-9_]+)\s*\(", "function")
+    elif language == "bash":
+        add_regex_sections(r"\b([A-Za-z0-9_]+)\s*\(\)\s*\{", "function")
+    elif language == "sql":
+        add_regex_sections(r"\bCREATE\s+(?:FUNCTION|PROCEDURE)\s+([A-Za-z0-9_]+)", "procedure")
+
+    sections.sort(key=lambda s: (s["start_line"], s["name"]))
+    return sections
 
 
 def _rebuild_supportive_rules_file() -> None:
@@ -426,17 +534,16 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
 
 
 def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
-    """Apply small, conservative fix-ups to parsed notable fields.
+    """Apply small, conservative fix-ups to parsed notable fields."""
 
-    Current behaviors:
-    - If Destination NT Hostname is present and Destination looks merged or
-      empty, prefer Destination NT Hostname as the Destination value.
-    - If a field value accidentally captured the "Event Details" section,
-      trim everything from the first "Event Details" occurrence onward.
-    - If Destination's value still contains "Risk Score" (e.g.,
-      "Destination NDC56-10Risk Score"), trim at that marker to recover
-      the hostname.
-    """
+    # Current behaviors:
+    # - If Destination NT Hostname is present and Destination looks merged or
+    #   empty, prefer Destination NT Hostname as the Destination value.
+    # - If a field value accidentally captured the "Event Details" section,
+    #   trim everything from the first "Event Details" occurrence onward.
+    # - If Destination's value still contains "Risk Score" (e.g.,
+    #   "Destination NDC56-10Risk Score"), trim at that marker to recover
+    #   the hostname.
 
     # Normalize destination from destination_nt_hostname when appropriate.
     dest_nt = (fields.get("destination_nt_hostname") or "").strip()
@@ -1942,11 +2049,9 @@ def analyze_case(request: AnalyzeRequest):
 
 @app.get("/api/db/placeholder-aliases", tags=["Rules"])
 def list_placeholder_aliases():
-    """List all defined placeholder aliases.
-
-    Response shape matches what the frontend expects:
-    [{"id", "alias", "fields", "description"}, ...]
-    """
+    # List all defined placeholder aliases.
+    # Response shape matches what the frontend expects:
+    # [{"id", "alias", "fields", "description"}, ...]
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, PlaceholderAlias
@@ -1978,16 +2083,15 @@ def list_placeholder_aliases():
 def suggest_placeholder_alias_fields(
     limit_events: int = Query(50, ge=1, le=500, description="Number of recent pasted notables to scan"),
 ):
-    """Suggest candidate field names for placeholder aliases from recent pasted notables.
+    """Suggest candidate field names for placeholder aliases from recent pasted notables."""
 
-    Scans recent SplunkEvent rows with sourcetype="splunk:notable:pasted", extracts the
-    "fields" dict from each event's raw JSON payload, and returns a frequency-ranked
-    list of field names observed. This backs the UI's "Suggest from recent notables"
-    button in the alias editor.
-
-    Response shape:
-        {"candidates": [{"field": "host", "count": N}, ...]}
-    """
+    # Scans recent SplunkEvent rows with sourcetype="splunk:notable:pasted", extracts the
+    # "fields" dict from each event's raw JSON payload, and returns a frequency-ranked
+    # list of field names observed. This backs the UI's "Suggest from recent notables"
+    # button in the alias editor.
+    #
+    # Response shape:
+    #     {"candidates": [{"field": "host", "count": N}, ...]}
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SplunkEvent
@@ -2035,10 +2139,8 @@ def suggest_placeholder_alias_fields(
 
 @app.post("/api/db/placeholder-aliases", tags=["Rules"])
 def create_placeholder_alias(payload: PlaceholderAliasPayload):
-    """Create a new placeholder alias.
-
-    Alias names are normalized to lowercase and must be unique.
-    """
+    # Create a new placeholder alias.
+    # Alias names are normalized to lowercase and must be unique.
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import func  # type: ignore
@@ -2088,10 +2190,8 @@ def create_placeholder_alias(payload: PlaceholderAliasPayload):
 
 @app.put("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
 def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePayload):
-    """Update an existing placeholder alias.
-
-    Supports partial updates for alias, fields, and description.
-    """
+    # Update an existing placeholder alias.
+    # Supports partial updates for alias, fields, and description.
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import func  # type: ignore
@@ -2152,7 +2252,7 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
 
 @app.delete("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
 def delete_placeholder_alias(alias_id: int):
-    """Delete a placeholder alias definition."""
+    # Delete a placeholder alias definition.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, PlaceholderAlias
@@ -2180,13 +2280,11 @@ def delete_placeholder_alias(alias_id: int):
 
 @app.get("/api/db/supportive-queries", tags=["Rules"])
 def list_supportive_queries(rule_id: Optional[str] = Query(default=None, description="Filter by logical rule_id")):
-    """List supportive SPL queries.
-
-    When a rule_id is provided, only queries for that rule are returned.
-    Otherwise, all supportive queries are listed. This API backs the
-    analyst-facing editor so supportive queries can be tuned on the fly
-    without touching JSON seed files.
-    """
+    # List supportive SPL queries.
+    # When a rule_id is provided, only queries for that rule are returned.
+    # Otherwise, all supportive queries are listed. This API backs the
+    # analyst-facing editor so supportive queries can be tuned on the fly
+    # without touching JSON seed files.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
@@ -2215,12 +2313,10 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
 
 @app.post("/api/db/supportive-queries", tags=["Rules"])
 def create_supportive_query(payload: SupportiveQueryPayload):
-    """Create a new supportive SPL query for a correlation rule.
-
-    IDs are assigned explicitly based on the current max(id) to avoid
-    depending on a potentially misaligned Postgres sequence, mirroring
-    the import logic used by the ES rules importer.
-    """
+    # Create a new supportive SPL query for a correlation rule.
+    # IDs are assigned explicitly based on the current max(id) to avoid
+    # depending on a potentially misaligned Postgres sequence, mirroring
+    # the import logic used by the ES rules importer.
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import func  # type: ignore
@@ -2265,12 +2361,10 @@ def create_supportive_query(payload: SupportiveQueryPayload):
 
 @app.put("/api/db/supportive-queries/{query_id}", tags=["Rules"])
 def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload):
-    """Update an existing supportive SPL query.
-
-    Supports partial updates; any field omitted from the payload is left
-    unchanged. Rule IDs can be adjusted if needed when re-grouping
-    queries under a different logical rule.
-    """
+    # Update an existing supportive SPL query.
+    # Supports partial updates; any field omitted from the payload is left
+    # unchanged. Rule IDs can be adjusted if needed when re-grouping
+    # queries under a different logical rule.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
@@ -2314,12 +2408,10 @@ def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload
 
 @app.delete("/api/db/supportive-queries/{query_id}", tags=["Rules"])
 def delete_supportive_query(query_id: int):
-    """Delete a supportive SPL query.
-
-    This does not touch stored supportive_query_results; those remain as
-    historical evidence even if the underlying query definition is
-    retired.
-    """
+    # Delete a supportive SPL query.
+    # This does not touch stored supportive_query_results; those remain as
+    # historical evidence even if the underlying query definition is
+    # retired.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
@@ -2347,7 +2439,7 @@ def delete_supportive_query(query_id: int):
 # Rules & Closure Notes Endpoints
 @app.get("/api/db/rules", tags=["Rules"])
 def list_rules():
-    """List all available ES correlation rules, including any supportive queries."""
+    # List all available ES correlation rules, including any supportive queries.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, ESCorrelationRule, SupportiveQuery
@@ -2368,17 +2460,14 @@ def list_rules():
             })
 
         def supportive_for_rule(rule_obj) -> List[Dict[str, Any]]:
-            """Return supportive queries for a given rule.
-
-            In addition to queries explicitly keyed to this rule_id, we
-            support lightweight family sharing for LotL-style rules: any
-            rule whose ID starts with ``lotl_`` automatically inherits the
-            supportive queries defined under the canonical
-            ``lotl_outbound_connection`` family, unless duplicates exist.
-
-            This lets future LotL notables reuse the same investigation
-            SPL without duplicating query definitions in the database.
-            """
+            # Return supportive queries for a given rule.
+            # In addition to queries explicitly keyed to this rule_id, we
+            # support lightweight family sharing for LotL-style rules: any
+            # rule whose ID starts with ``lotl_`` automatically inherits the
+            # supportive queries defined under the canonical
+            # ``lotl_outbound_connection`` family, unless duplicates exist.
+            # This lets future LotL notables reuse the same investigation
+            # SPL without duplicating query definitions in the database.
 
             rule_id = (rule_obj.rule_id or "").strip()
             base = list(by_rule.get(rule_id, []))
@@ -2413,7 +2502,7 @@ def list_rules():
 
 @app.post("/api/db/closure-note", tags=["Rules"])
 def generate_closure_note(request: dict):
-    """Generate a closure note for a case based on rule template."""
+    # Generate a closure note for a case based on rule template.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, ESCorrelationRule, ClosureNote, TriageResult
@@ -2491,7 +2580,7 @@ def generate_closure_note(request: dict):
 
 @app.post("/api/code-review/fix", tags=["AI Analysis"])
 def fix_code(payload: dict):
-    """Generate fixed/improved version of code based on review."""
+    # Generate fixed/improved version of code based on review.
     try:
         sys.path.insert(0, get_platform_root())
         from services.ollama_service import get_ollama_client
@@ -2507,11 +2596,12 @@ def fix_code(payload: dict):
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
         
-        prompt = """Fix and improve this {language} code. Return ONLY the corrected code in a code block, no explanations:
-
-```{language}
-{code}
-```""".format(language=language, code=code_snippet)
+        prompt = (
+            "Fix and improve this {language} code. Return ONLY the corrected code in a code block, no explanations:\n\n"
+            "```{language}\n"
+            "{code}\n"
+            "```"
+        ).format(language=language, code=code_snippet)
         
         result = client.generate(prompt, model=model)
         
@@ -2533,16 +2623,15 @@ def fix_code(payload: dict):
 
 @app.post("/api/code-review", tags=["AI Analysis"])
 def code_review(payload: dict):
-    """Review code using local Ollama model and store results in database.
-    
-    Payload:
-    {
-        "code_snippet": "<code to review>",
-        "language": "python" (optional, defaults to python),
-        "model": "llama3.1:8b" (optional, defaults to llama3.1:8b),
-        "instructions": "Optional focus or question for the review"
-    }
-    """
+    # Review code using local Ollama model and store results in database.
+
+    # Payload shape:
+    # {
+    #     "code_snippet": "<code to review>",
+    #     "language": "python" (optional, defaults to python),
+    #     "model": "llama3.1:8b" (optional, defaults to llama3.1:8b),
+    #     "instructions": "Optional focus or question for the review"
+    # }
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, CodeReview
@@ -2565,30 +2654,27 @@ def code_review(payload: dict):
         if instructions:
             focus_block = f"\nAdditional focus/instructions from the analyst:\n{instructions}\n"
 
-        prompt = f"""You are an expert {language} engineer.
-
-The user has provided a code fragment or file context and may also provide
-explicit instructions about what to change. Your job is to propose
-CONCRETE code edits, not a generic data or project review.
-
-For the code below, respond with:
-1. A very short summary of what you will change.
-2. Specific code edits:
-   - Mention the file or component name when possible.
-   - Show before/after or replacement snippets as needed.
-   - Focus on the minimal diff that satisfies the instructions.
-3. If you suggest config/UI changes (HTML/JS/Python), include the exact
-   updated snippet ready to paste into the file.
-
-Avoid broad "data quality" or "potential uses" essays. Stay focused on
-actionable code changes and patches.
-{focus_block}
-
-Code:
-```{language}
-{code_snippet}
-```
-"""
+        prompt = (
+            f"You are an expert {language} engineer.\n\n"
+            "The user has provided a code fragment or file context and may also provide\n"
+            "explicit instructions about what to change. Your job is to propose\n"
+            "CONCRETE code edits, not a generic data or project review.\n\n"
+            "For the code below, respond with:\n"
+            "1. A very short summary of what you will change.\n"
+            "2. Specific code edits:\n"
+            "   - Mention the file or component name when possible.\n"
+            "   - Show before/after or replacement snippets as needed.\n"
+            "   - Focus on the minimal diff that satisfies the instructions.\n"
+            "3. If you suggest config/UI changes (HTML/JS/Python), include the exact\n"
+            "   updated snippet ready to paste into the file.\n\n"
+            "Avoid broad \"data quality\" or \"potential uses\" essays. Stay focused on\n"
+            "actionable code changes and patches.\n"
+            f"{focus_block}\n\n"
+            "Code:\n"
+            f"```{language}\n"
+            f"{code_snippet}\n"
+            "```\n"
+        )
         
         result = client.generate(prompt, model=model)
         
@@ -2624,6 +2710,32 @@ Code:
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/api/code-review/sections", tags=["AI Analysis"])
+def code_review_sections(payload: dict):
+    # Detect functions/classes/sections in a code snippet.
+    # This is a lightweight helper for the Code Review UI and does not
+    # call any models. It simply inspects the code and returns structural
+    # sections so the frontend can focus reviews on specific functions or
+    # classes without manual search terms.
+    try:
+        code_snippet = (payload.get("code_snippet") or "").strip()
+        language = (payload.get("language") or "python").strip()
+
+        if not code_snippet:
+            raise HTTPException(status_code=400, detail="code_snippet is required")
+
+        sections = _extract_code_sections(code_snippet, language)
+
+        return {
+            "language": language,
+            "sections": sections,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/code-review/zip", tags=["AI Analysis"])
 async def code_review_zip(
     file: UploadFile = File(...),
@@ -2631,12 +2743,10 @@ async def code_review_zip(
     model: str = Query("llama3.1:8b"),
     instructions: str = Query("", description="Optional focus or question for the review"),
 ):
-    """Review a zipped project using the local Ollama model.
-
-    This endpoint accepts a .zip archive, extracts a curated subset of
-    text/code files, concatenates representative snippets, and forwards
-    the aggregated project context into the standard code_review flow.
-    """
+    # Review a zipped project using the local Ollama model.
+    # This endpoint accepts a .zip archive, extracts a curated subset of
+    # text/code files, concatenates representative snippets, and forwards
+    # the aggregated project context into the standard code_review flow.
     try:
         filename = (file.filename or "").lower()
         if not filename.endswith(".zip"):
@@ -2735,7 +2845,7 @@ async def code_review_zip(
 
 @app.get("/api/code-reviews", tags=["AI Analysis"])
 def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
-    """List recent code reviews from database."""
+    # List recent code reviews from database.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, CodeReview
@@ -2763,7 +2873,7 @@ def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
 
 @app.get("/api/code-reviews/{review_id}", tags=["AI Analysis"])
 def get_code_review(review_id: int):
-    """Get a specific code review by ID."""
+    # Get a specific code review by ID.
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, CodeReview
@@ -2791,7 +2901,7 @@ def get_code_review(review_id: int):
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    """Global exception handler for unhandled errors."""
+    # Global exception handler for unhandled errors.
     return JSONResponse(
         status_code=500,
         content={"detail": str(exc)}

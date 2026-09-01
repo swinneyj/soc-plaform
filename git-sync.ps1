@@ -2,6 +2,7 @@ param (
     [string]$Message = "",  # auto-filled below if not provided
     [string]$Branch = "main",
     [switch]$All,
+    [string]$MergeFrom,       # Optional: merge origin/<branch> into this branch before syncing
     [switch]$PreferRemote,    # On conflict, remote history wins (local conflicting commits discarded)
     [switch]$PreferLocal      # On conflict, local history wins (force-push to remote)
 )
@@ -89,6 +90,38 @@ try {
     else {
         Write-Host "[*] Committing changes..." -ForegroundColor Cyan
         Invoke-GitSafe -Command "git commit -m `"$Message`"" -ErrorMessage "Git commit failed."
+    }
+
+    # Optionally merge a source branch (typically a test branch) into this branch
+    # in one go, so changes from origin/<MergeFrom> are integrated before pushing.
+    if ($MergeFrom) {
+        if ($MergeFrom -eq $Branch) {
+            throw "-MergeFrom branch '$MergeFrom' cannot be the same as target branch '$Branch'."
+        }
+
+        Write-Host "[*] Fetching origin to prepare merge from '$MergeFrom'..." -ForegroundColor Cyan
+        Invoke-GitSafe -Command "git fetch origin" -ErrorMessage "git fetch failed before merge."
+
+        # Verify that origin/<MergeFrom> exists
+        git show-ref --verify "refs/remotes/origin/$MergeFrom" >$null 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "Remote branch 'origin/$MergeFrom' not found. Ensure it exists and is pushed before using -MergeFrom."
+        }
+
+        Write-Host "[*] Merging origin/$MergeFrom into $Branch..." -ForegroundColor Cyan
+        try {
+            Invoke-GitSafe -Command "git merge --no-ff --no-edit origin/$MergeFrom" -ErrorMessage "git merge from origin/$MergeFrom into $Branch failed."
+        }
+        catch {
+            Write-Warning "Merge from origin/$MergeFrom into $Branch encountered conflicts. Aborting merge."
+            git merge --abort 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "git merge --abort did not complete cleanly. Repository may still be mid-merge; resolve manually."
+            }
+
+            Write-Warning "Resolve merge conflicts between $Branch and origin/$MergeFrom manually, then rerun git-sync.ps1 (optionally without -MergeFrom)."
+            throw $_
+        }
     }
 
     # Always attempt to push, even if this run had nothing new to commit,
