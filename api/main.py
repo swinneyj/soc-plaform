@@ -2487,6 +2487,138 @@ def generate_closure_note(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/code-review", tags=["AI Analysis"])
+def code_review(payload: dict):
+    """Review code using local Ollama model and store results in database.
+    
+    Payload:
+    {
+        "code_snippet": "<code to review>",
+        "language": "python" (optional, defaults to python),
+        "model": "llama3.1:8b" (optional, defaults to llama3.1:8b)
+    }
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, CodeReview
+        from services.ollama_service import get_ollama_client
+        
+        code_snippet = payload.get('code_snippet', '').strip()
+        language = payload.get('language', 'python').strip()
+        model = payload.get('model', 'llama3.1:8b').strip()
+        
+        if not code_snippet:
+            raise HTTPException(status_code=400, detail="code_snippet is required")
+        
+        client = get_ollama_client()
+        if not client.available:
+            raise HTTPException(status_code=503, detail="Ollama service not available")
+        
+        # Build review prompt
+        prompt = f"""You are an expert code reviewer. Review the following {language} code and provide:
+1. Code quality assessment
+2. Security vulnerabilities or concerns
+3. Performance issues
+4. Best practices improvements
+5. Specific fixes with code examples
+
+Code:
+```{language}
+{code_snippet}
+```
+
+Provide a thorough, constructive review."""
+        
+        result = client.generate(prompt, model=model)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        review_text = result["response"] or ""
+        
+        # Store in database
+        db = SessionLocal()
+        code_review = CodeReview(
+            code_snippet=code_snippet,
+            language=language,
+            review_result=review_text,
+            model_name=model
+        )
+        db.add(code_review)
+        db.commit()
+        db.refresh(code_review)
+        db.close()
+        
+        return {
+            "success": True,
+            "review_id": code_review.id,
+            "language": language,
+            "model": model,
+            "review": review_text,
+            "created_at": code_review.created_at.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/code-reviews", tags=["AI Analysis"])
+def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
+    """List recent code reviews from database."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, CodeReview
+        
+        db = SessionLocal()
+        reviews = db.query(CodeReview).order_by(
+            CodeReview.created_at.desc()
+        ).limit(limit).all()
+        db.close()
+        
+        return [
+            {
+                "id": r.id,
+                "language": r.language,
+                "model": r.model_name,
+                "code_snippet": r.code_snippet[:500],  # First 500 chars
+                "review": r.review_result[:1000],  # First 1000 chars
+                "created_at": r.created_at.isoformat()
+            }
+            for r in reviews
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/code-reviews/{review_id}", tags=["AI Analysis"])
+def get_code_review(review_id: int):
+    """Get a specific code review by ID."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, CodeReview
+        
+        db = SessionLocal()
+        review = db.query(CodeReview).filter(CodeReview.id == review_id).first()
+        db.close()
+        
+        if not review:
+            raise HTTPException(status_code=404, detail=f"Review {review_id} not found")
+        
+        return {
+            "id": review.id,
+            "language": review.language,
+            "model": review.model_name,
+            "code_snippet": review.code_snippet,
+            "review": review.review_result,
+            "created_at": review.created_at.isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
     """Global exception handler for unhandled errors."""

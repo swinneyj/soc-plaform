@@ -154,6 +154,18 @@ class PlaceholderAlias(Base):
     fields = Column(Text)  # JSON-encoded ["field1", "field2", ...]
     description = Column(Text)
 
+
+class CodeReview(Base):
+    """Code review results from Ollama LLM analysis."""
+    __tablename__ = "code_reviews"
+
+    id = Column(Integer, primary_key=True, index=True)
+    code_snippet = Column(Text)
+    language = Column(String, default="python")
+    review_result = Column(Text)
+    model_name = Column(String, default="llama3.1:8b")
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 
