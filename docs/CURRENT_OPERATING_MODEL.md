@@ -62,16 +62,13 @@ Equivalent repo commands:
 Normal Git expectations:
 
 - Pull upstream into local `main`
-- Do local or agent-driven work on a temporary branch
-- Never push directly from `main`
+- Make changes on local `main`
+- Pull before you start and push after local validation passes
 
 The Git helper now enforces that rule:
 
-- If push is attempted from `main`, it blocks the push
-- It prompts for an optional topic
-- It creates a temporary branch such as:
-  - `agent-lewis/20260826-130500`
-  - `agent-lewis/db-repro-20260826-130500`
+- Option 1 pulls the latest upstream changes into local `main`
+- Option 2 stages, commits, and pushes local `main`
 
 Git helper file:
 

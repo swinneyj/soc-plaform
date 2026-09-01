@@ -204,7 +204,7 @@ if ($gitAvailable) {
     if ($branchLine -match '\[ahead ([0-9]+), behind ([0-9]+)\]') {
         Add-CheckResult -Name 'Git branch sync' -Status 'WARN' -Issue 'Local branch has diverged from origin.' -ExpectedSolution 'Review local commits and upstream commits before the next push or pull. Rebase or merge intentionally.' -Evidence $branchLine -RecommendedCommand 'git log --oneline --decorate --left-right HEAD...origin/main'
     } elseif ($branchLine -match '\[ahead ([0-9]+)\]') {
-        Add-CheckResult -Name 'Git branch sync' -Status 'WARN' -Issue 'Local branch is ahead of origin.' -ExpectedSolution 'This is expected after a checkpoint or merge commit. Push a temp branch if you need to share it; do not push main directly.' -Evidence $branchLine -RecommendedCommand '.\git-menu.ps1'
+        Add-CheckResult -Name 'Git branch sync' -Status 'WARN' -Issue 'Local branch is ahead of origin.' -ExpectedSolution 'This is expected after local commits. Validate your changes, then push main with the Git helper.' -Evidence $branchLine -RecommendedCommand '.\git-menu.ps1'
     } elseif ($branchLine -match '\[behind ([0-9]+)\]') {
         Add-CheckResult -Name 'Git branch sync' -Status 'WARN' -Issue 'Local branch is behind origin.' -ExpectedSolution 'Run the safe sync helper before smoke testing code that depends on latest upstream changes.' -Evidence $branchLine -RecommendedCommand '.\scripts\sync_upstream_safe.ps1 -AutoCheckpoint'
     } else {

@@ -189,10 +189,8 @@ Step 2:
 ```
 
 That script will:
-- stop direct pushes from `main`
-- create a temporary branch
-- commit your work
-- push your branch
+- pull the latest upstream changes into local `main`
+- or commit and push local `main`
 
 ## Flow 7: Quick Decision Table
 
@@ -206,8 +204,8 @@ If the question is:
   Only after the coworker says upstream is ready
 - "How do I pull safely?"
   Run `.\scripts\sync_upstream_safe.ps1 -AutoCheckpoint`
-- "How do I push without touching main?"
-  Run `.\git-menu.ps1`
+- "How do I push my validated work?"
+  Run `\.\git-menu.ps1`
 
 ## Things To Avoid
 

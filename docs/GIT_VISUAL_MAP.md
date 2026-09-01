@@ -7,23 +7,20 @@ Use it when you need to answer:
 - When do I pull?
 - When do I wait?
 - Why should I avoid raw `git pull`?
-- When should I branch and push?
+- When should I commit and push?
 
 ## Core Mental Model
 
-There are three Git states that matter most here:
+There are two Git states that matter most here:
 
 1. `origin/main`
    The shared team baseline.
 2. local `main`
    Your synced local baseline.
-3. your temporary branch
-   Your safe place to share your own work.
 
 ```mermaid
 flowchart LR
     A[origin/main<br/>team baseline] --> B[local main<br/>synced local baseline]
-    B --> C[temp branch<br/>your shareable work]
 ```
 
 ## Why Raw Pull Is Risky Here
@@ -64,9 +61,8 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[Local stack passes smoke test] --> B[Run git-menu.ps1]
-    B --> C[Create temp branch if on main]
-    C --> D[Commit changes]
-    D --> E[Push branch]
+    B --> C[Commit changes on local main]
+    C --> D[Push main]
 ```
 
 ## Decision Rules
@@ -74,7 +70,7 @@ flowchart TD
 - If a coworker is still pushing to `origin/main`, wait.
 - If you have local edits, do not raw `git pull`.
 - If you need the latest shared code, use `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`.
-- If you want to share your work, use `git-menu.ps1`.
+- If you want to share your validated work, use `git-menu.ps1` from `main`.
 - If a merge conflict happens, resolve only the direct overlap, then revalidate.
 
 ## Script Entry Points
@@ -82,4 +78,4 @@ flowchart TD
 - safe sync: `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`
 - validate local state: `scripts\troubleshoot_platform.ps1`
 - validate live stack: `scripts\troubleshoot_platform.ps1 -RunSmokeTest`
-- branch and push: `git-menu.ps1`
+- commit and push main: `git-menu.ps1`

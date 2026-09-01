@@ -174,9 +174,8 @@ This is the safe "share my work" path.
 ```mermaid
 flowchart TD
     A[Local validation passes] --> B[Run git-menu.ps1]
-    B --> C[If on main, create temp branch]
-    C --> D[Commit changes]
-    D --> E[Push branch]
+  B --> C[Commit changes on local main]
+  C --> D[Push main]
 ```
 
 ## File Location Map

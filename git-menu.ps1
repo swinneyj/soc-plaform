@@ -19,61 +19,6 @@ function Get-CurrentBranch {
     return (git branch --show-current).Trim()
 }
 
-function ConvertTo-BranchSlug {
-    param([string]$Text)
-
-    if ([string]::IsNullOrWhiteSpace($Text)) {
-        return ''
-    }
-
-    $slug = $Text.ToLowerInvariant()
-    $slug = $slug -replace '[^a-z0-9]+', '-'
-    $slug = $slug.Trim('-')
-    return $slug
-}
-
-function Ensure-WorkingBranch {
-    $currentBranch = Get-CurrentBranch
-
-    if ([string]::IsNullOrWhiteSpace($currentBranch)) {
-        Write-Warning "Could not determine the current branch."
-        Wait-ForUser
-        return $null
-    }
-
-    if ($currentBranch -ne 'main') {
-        return $currentBranch
-    }
-
-    Write-Host "`n[!] Direct pushes from 'main' are blocked." -ForegroundColor Yellow
-    Write-Host "    Create a temporary branch first, test there, and push that branch instead." -ForegroundColor Yellow
-
-    $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $topic = Read-Host "Enter a short topic for the branch (optional, e.g. db-repro or docker-cleanup)"
-    $topicSlug = ConvertTo-BranchSlug -Text $topic
-
-    if ([string]::IsNullOrWhiteSpace($topicSlug)) {
-        $defaultBranchName = "agent-lewis/{0}" -f $timestamp
-    } else {
-        $defaultBranchName = "agent-lewis/{0}-{1}" -f $topicSlug, $timestamp
-    }
-
-    $branchName = Read-Host "Enter a temporary branch name (or press Enter for '$defaultBranchName')"
-    if ([string]::IsNullOrWhiteSpace($branchName)) {
-        $branchName = $defaultBranchName
-    }
-
-    git switch -c $branchName
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Could not create branch '$branchName'. Push aborted."
-        Wait-ForUser
-        return $null
-    }
-
-    Write-Host "`n[+] Switched to temporary branch '$branchName'." -ForegroundColor Green
-    return $branchName
-}
-
 function Invoke-PullWorkflow {
     if (-not (Test-Path $SyncScript)) {
         Write-Warning "Sync helper not found: $SyncScript"
@@ -96,8 +41,9 @@ function Invoke-PullWorkflow {
 
 function Invoke-PushWorkflow {
     Write-Host "`n[+] Preparing to push changes..." -ForegroundColor Cyan
-    $branchName = Ensure-WorkingBranch
-    if (-not $branchName) {
+    $currentBranch = Get-CurrentBranch
+    if ($currentBranch -ne 'main') {
+        Write-Warning "This simplified workflow expects you to work from 'main'. Switch to 'main' before pushing."
         return
     }
 
@@ -106,19 +52,11 @@ function Invoke-PushWorkflow {
         $commitMsg = 'Update SOC Platform files'
     }
 
-    git add -A
-    git commit -m $commitMsg
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "Commit did not complete. Push aborted."
-        Wait-ForUser
-        return
-    }
-
-    git push -u origin $branchName
+    & powershell.exe -ExecutionPolicy Bypass -File (Join-Path $RepoRoot 'git-sync.ps1') -Branch main -All -Message $commitMsg
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "`n[+] Successfully pushed branch '$branchName'." -ForegroundColor Green
+        Write-Host "`n[+] Successfully pushed 'main'." -ForegroundColor Green
     } else {
-        Write-Warning "Push failed. Review the git output above."
+        Write-Warning "Push workflow failed. Review the git output above."
     }
 
     Wait-ForUser
@@ -133,7 +71,7 @@ while ($true) {
     Show-Status
 
     Write-Host "1. Pull latest safely (recommended)"
-    Write-Host "2. Push current branch (main blocked)"
+    Write-Host "2. Commit and push main"
     Write-Host "3. Exit"
     Write-Host "=================================" -ForegroundColor Cyan
 
