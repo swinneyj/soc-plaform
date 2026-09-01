@@ -1020,6 +1020,14 @@
                                 class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-2 py-1 text-[11px] mb-2"
                                 placeholder="Filter sections by name or label (e.g., methods.submitCodeReview)"
                             >
+                            <label class="flex items-center gap-2 text-[11px] text-gray-400">
+                                <input
+                                    type="checkbox"
+                                    v-model="codeReviewSectionsCodeOnly"
+                                    class="h-3 w-3 bg-gray-800 border border-gray-600 rounded"
+                                >
+                                <span>Code Review methods only</span>
+                            </label>
                         </div>
                         <div v-if="filteredCodeReviewSections.length" class="max-h-40 overflow-y-auto bg-gray-900/40 border border-gray-700 rounded">
                             <button
@@ -1441,7 +1449,8 @@
                     codeReviewSearchTerm: '',
                     codeReviewSections: [],
                     codeReviewSectionsBusy: false,
-                    codeReviewSectionsFilter: ''
+                    codeReviewSectionsFilter: '',
+                    codeReviewSectionsCodeOnly: false
                 };
             },
             computed: {
@@ -1523,20 +1532,60 @@
                 filteredCodeReviewSections() {
                     const sections = this.codeReviewSections || [];
                     const term = (this.codeReviewSectionsFilter || '').trim().toLowerCase();
-                    if (!term) {
-                        return sections;
+                    let filtered = sections;
+
+                    if (term) {
+                        filtered = filtered.filter(section => {
+                            const label = (section.label || '').toString().toLowerCase();
+                            const name = (section.name || '').toString().toLowerCase();
+                            const kind = (section.kind || '').toString().toLowerCase();
+
+                            const haystack = [label, name, kind]
+                                .filter(Boolean)
+                                .join(' ');
+
+                            return haystack.includes(term);
+                        });
                     }
 
-                    return sections.filter(section => {
+                    if (!this.codeReviewSectionsCodeOnly) {
+                        return filtered;
+                    }
+
+                    const codeNames = new Set([
+                        'handlecodereviewfile',
+                        'focuscodereviewsection',
+                        'detectcodereviewsections',
+                        'submitcodereview',
+                        'loadcodereviews',
+                        'loadfullcodereview',
+                        'copycodereviewtoclipboard',
+                        'oncodereviewdragover',
+                        'oncodereviewdragleave',
+                        'oncodereviewdrop',
+                        'handlefolderupload'
+                    ]);
+
+                    return filtered.filter(section => {
                         const label = (section.label || '').toString().toLowerCase();
                         const name = (section.name || '').toString().toLowerCase();
                         const kind = (section.kind || '').toString().toLowerCase();
 
-                        const haystack = [label, name, kind]
-                            .filter(Boolean)
-                            .join(' ');
+                        if (codeNames.has(name)) {
+                            return true;
+                        }
 
-                        return haystack.includes(term);
+                        if (label.includes('codereview') || name.includes('codereview')) {
+                            return true;
+                        }
+
+                        // Also treat generic support helpers with "code" and
+                        // "review" in their label as code-review related.
+                        if (label.includes('code') && label.includes('review')) {
+                            return true;
+                        }
+
+                        return false;
                     });
                 },
                 analysisRule() {
