@@ -244,6 +244,67 @@ def _extract_code_sections(code_snippet: str, language: str) -> List[Dict[str, A
     if language == "python":
         return _extract_python_sections(code_snippet)
 
+    # For HTML/HTM, treat the content as a Vue/JS script and
+    # focus on top-level methods inside the `methods:` block so
+    # we don't overwhelm the UI with every inline if/for.
+    if language in ("html", "htm"):
+        lines = code_snippet.splitlines()
+        sections: List[Dict[str, Any]] = []
+
+        reserved_names = {"if", "for", "while", "switch", "try", "catch", "finally"}
+
+        brace_depth = 0
+        inside_methods = False
+
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+
+            # Track brace depth roughly so we know when we've
+            # left the methods block.
+            brace_depth += line.count("{")
+            brace_depth -= line.count("}")
+
+            if "methods:" in stripped:
+                inside_methods = True
+                # Methods block will start at the next opening brace
+                continue
+
+            if inside_methods and brace_depth <= 0:
+                inside_methods = False
+
+            if not inside_methods:
+                continue
+
+            # Vue-style method definitions: loadTools() { ... }
+            m = re.search(r"^\s*(async\s+)?([A-Za-z0-9_$]+)\s*\([^)]*\)\s*\{", line)
+            if not m:
+                continue
+
+            name = m.group(2).strip()
+            if not name or name in reserved_names:
+                continue
+
+            start_line = idx
+            end_line = min(len(lines), idx + 60)
+            body = "\n".join(lines[idx - 1:end_line]).strip()
+            if not body:
+                continue
+
+            sections.append(
+                {
+                    "id": f"method:{name}:{start_line}",
+                    "name": name,
+                    "kind": "method",
+                    "label": f"methods.{name}",
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "preview": body,
+                }
+            )
+
+        sections.sort(key=lambda s: (s["start_line"], s["name"]))
+        return sections
+
     lines = code_snippet.splitlines()
     sections: List[Dict[str, Any]] = []
 
@@ -272,9 +333,41 @@ def _extract_code_sections(code_snippet: str, language: str) -> List[Dict[str, A
                 }
             )
 
+    # JavaScript/TypeScript: extract named functions and simple
+    # const-as-function patterns, but skip obvious control-flow
+    # names to avoid noise.
     if language in ("javascript", "js", "ts"):
-        add_regex_sections(r"\bfunction\s+([A-Za-z0-9_$]+)\s*\(", "function")
-        add_regex_sections(r"\bconst\s+([A-Za-z0-9_$]+)\s*=\s*\(", "function")
+        reserved_names = {"if", "for", "while", "switch", "try", "catch", "finally"}
+        # Named functions: function foo(...) {
+        def add_js_sections(pattern: str, kind: str) -> None:
+            compiled = re.compile(pattern)
+            for idx, line in enumerate(lines, start=1):
+                match = compiled.search(line)
+                if not match:
+                    continue
+                name = match.group(1).strip()
+                if not name or name in reserved_names:
+                    continue
+                start_line = idx
+                end_line = min(len(lines), idx + 40)
+                preview_lines = lines[idx - 1:end_line]
+                preview = "\n".join(preview_lines).strip()
+                if not preview:
+                    continue
+                sections.append(
+                    {
+                        "id": f"{kind}:{name}:{start_line}",
+                        "name": name,
+                        "kind": kind,
+                        "start_line": start_line,
+                        "end_line": end_line,
+                        "preview": preview,
+                    }
+                )
+
+        add_js_sections(r"\bfunction\s+([A-Za-z0-9_$]+)\s*\(", "function")
+        # Simple const foo = (...) patterns
+        add_js_sections(r"\bconst\s+([A-Za-z0-9_$]+)\s*=\s*\(", "function")
     elif language == "go":
         add_regex_sections(r"\bfunc\s+([A-Za-z0-9_]+)\s*\(", "function")
     elif language == "bash":

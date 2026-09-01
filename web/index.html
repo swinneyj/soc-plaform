@@ -1013,9 +1013,17 @@
                                 {{ codeReviewSections.length }} section(s) found. Click one below to focus.
                             </span>
                         </div>
-                        <div v-if="codeReviewSections.length" class="max-h-40 overflow-y-auto bg-gray-900/40 border border-gray-700 rounded">
+                        <div v-if="codeReviewSections.length" class="mb-1">
+                            <input
+                                v-model="codeReviewSectionsFilter"
+                                type="text"
+                                class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-2 py-1 text-[11px] mb-2"
+                                placeholder="Filter sections by name or label (e.g., methods.submitCodeReview)"
+                            >
+                        </div>
+                        <div v-if="filteredCodeReviewSections.length" class="max-h-40 overflow-y-auto bg-gray-900/40 border border-gray-700 rounded">
                             <button
-                                v-for="section in codeReviewSections"
+                                v-for="section in filteredCodeReviewSections"
                                 :key="section.id"
                                 type="button"
                                 class="w-full text-left px-3 py-2 text-[11px] border-b border-gray-800 hover:bg-gray-800/70"
@@ -1023,8 +1031,11 @@
                             >
                                 <div class="flex justify-between gap-2">
                                     <span class="font-mono text-gray-200">
-                                        {{ (section.kind || 'section') }}
-                                        <span v-if="section.name">{{ ' ' + section.name }}</span>
+                                        <span v-if="section.label">{{ section.label }}</span>
+                                        <span v-else>
+                                            {{ (section.kind || 'section') }}
+                                            <span v-if="section.name">{{ ' ' + section.name }}</span>
+                                        </span>
                                     </span>
                                     <span class="text-gray-500" v-if="section.start_line && section.end_line">
                                         L{{ section.start_line }}-L{{ section.end_line }}
@@ -1034,6 +1045,9 @@
                                     {{ section.preview }}
                                 </div>
                             </button>
+                        </div>
+                        <div v-else-if="codeReviewSections.length" class="text-[11px] text-gray-500">
+                            No sections match "{{ codeReviewSectionsFilter }}".
                         </div>
                         <p class="mt-1 text-[11px] text-gray-500">
                             Automatically breaks the loaded file into functions/classes so you can review one at a time without typing a search term.
@@ -1426,7 +1440,8 @@
                     codeReviewDragActive: false,
                     codeReviewSearchTerm: '',
                     codeReviewSections: [],
-                    codeReviewSectionsBusy: false
+                    codeReviewSectionsBusy: false,
+                    codeReviewSectionsFilter: ''
                 };
             },
             computed: {
@@ -1504,6 +1519,25 @@
                     }
                     // Fallback list when Ollama health is not available yet.
                     return ['llama3.1:8b', 'llama2', 'mistral'];
+                },
+                filteredCodeReviewSections() {
+                    const sections = this.codeReviewSections || [];
+                    const term = (this.codeReviewSectionsFilter || '').trim().toLowerCase();
+                    if (!term) {
+                        return sections;
+                    }
+
+                    return sections.filter(section => {
+                        const label = (section.label || '').toString().toLowerCase();
+                        const name = (section.name || '').toString().toLowerCase();
+                        const kind = (section.kind || '').toString().toLowerCase();
+
+                        const haystack = [label, name, kind]
+                            .filter(Boolean)
+                            .join(' ');
+
+                        return haystack.includes(term);
+                    });
                 },
                 analysisRule() {
                     if (!this.analysisCaseId) {
