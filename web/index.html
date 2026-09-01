@@ -729,24 +729,45 @@
 
                 <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
                     <div class="flex items-center justify-between mb-4">
-                        <h3 class="text-xl font-bold text-blue-400">Analysis Result</h3>
+                        <h3 class="text-xl font-bold text-blue-400">Analysis Result (Phase 1)</h3>
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
+                                @click="copyAnalysisResult"
+                            >
+                                Copy Analysis
+                            </button>
+                            <button
+                                type="button"
+                                class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-semibold text-gray-200"
+                                @click="showPhase1Analysis = false"
+                            >
+                                Hide Phase 1
+                            </button>
+                        </div>
+                    </div>
+                    <div v-if="showPhase1Analysis">
+                        <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.investigation_evidence_count || analysisResult.supportive_results_count">
+                            Included
+                            <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
+                            closed baseline notables and
+                            <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
+                            saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
+                        </p>
+                        <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
+                            <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
+                        </div>
+                    </div>
+                    <div v-else class="text-xs text-gray-400 mb-2 flex items-center justify-between">
+                        <span>Phase 1 body is hidden to keep the view compact.</span>
                         <button
                             type="button"
-                            class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
-                            @click="copyAnalysisResult"
+                            class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] font-semibold text-gray-100"
+                            @click="showPhase1Analysis = true"
                         >
-                            Copy Analysis
+                            Show Phase 1
                         </button>
-                    </div>
-                    <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.investigation_evidence_count || analysisResult.supportive_results_count">
-                        Included
-                        <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
-                        closed baseline notables and
-                        <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
-                        saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
-                    </p>
-                    <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
-                        <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
                     </div>
                     <div v-if="analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="mt-4 space-y-3">
                         <div class="flex items-center justify-between mb-1">
@@ -1585,6 +1606,7 @@
                     analysisRunning: false,
                     analysisRequestId: 0,
                     analysisResult: null,
+                    showPhase1Analysis: true,
                     phase2Model: '',
                     phase2Result: null,
                     analysisSourceNotable: null,
