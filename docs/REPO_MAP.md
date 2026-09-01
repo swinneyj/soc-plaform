@@ -89,6 +89,46 @@ If you are new to this repo, read in this order:
 - `docs\REPO_MAP.md`
   This navigation guide
 
+### UI Feature Map (Where Each Tab Lives)
+
+Use this when you want to change a specific part of the web app:
+
+- **Tools Tab**
+  - UI: `web\index.html` ("Tools Catalog" section and tool execution modal)
+  - API: `/api/tools` and `/execute` handlers in `api\main.py`
+
+- **Database Tab (Triage / Notables / Stats)**
+  - UI: `web\index.html` ("Database" tab section)
+  - API: `/api/db/triage`, `/api/db/notables`, `/api/db/stats` in `api\main.py`
+  - Models: `TriageResult`, `SplunkEvent` in `db\models.py`
+
+- **AI Analysis Tab**
+  - UI: `web\index.html` ("AI Analysis" tab: case selector, model dropdown, Analysis Result card, Phase 2 SPL recommendations)
+  - API: `/api/db/analyze` in `api\main.py` (and related analysis helpers)
+  - Models: `AnalysisResult`, `SupportiveQuery`, `SupportiveQueryResult` in `db\models.py`
+  - Ollama integration: `services\ollama_service.py`
+
+- **Closure Notes Tab**
+  - UI: `web\index.html` ("Closure Notes" tab: closure form, generated note panel)
+  - API: `/api/db/closure-note` in `api\main.py`
+  - Models: `ClosureNote`, `ESCorrelationRule` in `db\models.py`
+
+- **Jobs Tab**
+  - UI: `web\index.html` ("Jobs" tab: queued tool runs and stdout/stderr views)
+  - API: `/api/jobs` in `api\main.py`
+
+- **Reports Tab**
+  - UI: `web\index.html` ("Generated Reports" grid)
+  - API: `/api/reports` in `api\main.py`
+  - Files: `Data\Reports\` (generated report artifacts)
+
+- **Code Review Tab**
+  - UI: `web\index.html` ("Code Review with Local Ollama" tab: language/model dropdowns, file/folder upload, instructions box, result and history tables)
+  - API: `/api/code-review`, `/api/code-review/zip`, `/api/code-reviews`, `/api/code-reviews/{id}` in `api\main.py`
+  - Models: `CodeReview` in `db\models.py`
+
+When you want to modify a feature, start from this map: find the tab, open the listed UI file (`web\index.html`) and corresponding API/DB files, then use either VS Code + Copilot (this chat) or the in-app Code Review against those specific files/snippets.
+
 ---
 
 ## Docs Folder
