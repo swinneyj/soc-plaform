@@ -84,21 +84,6 @@
       "rule_id": "lotl_outbound_connection",
       "supportive_queries": [
         {
-          "title": "Destination IP Activity",
-          "description": "Examine the activity of the destination IP address",
-          "spl_query": "index=Windows sourcetype=WinNetMon host=\"ndc24-1\"\n| search ProcessName=\"c:\\\\windows\\\\system32\\\\windowspowershell\\\\v1.0\\\\powershell.exe\"\n| stats count earliest(_time) as first_seen latest(_time) as last_seen values(RemoteAddress) as destination_ips values(RemotePort) as destination_ports values(RemoteHostName) as reverse_dns by host ProcessName\n| eval first_seen=strftime(first_seen, \"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen, \"%Y-%m-%d %H:%M\")\n| sort -count"
-        },
-        {
-          "title": "Destination IP Reputation",
-          "description": "Examine the reputation of the destination IP address",
-          "spl_query": "index=Windows sourcetype=WinNetMon RemoteAddress=\"140.18.224.161\"\n| stats count earliest(_time) as first_seen latest(_time) as last_seen values(ProcessName) as processes values(UserName) as users values(RemotePort) as destination_ports by host RemoteAddress\n| eval first_seen=strftime(first_seen, \"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen, \"%Y-%m-%d %H:%M\")\n| sort -count)"
-        },
-        {
-          "title": "Process Execution History",
-          "description": "Investigate the execution history of the process",
-          "spl_query": "index=Windows sourcetype=WinNetMon host=\"ndc24-1\" RemoteAddress=\"140.18.224.161\"\n| search ProcessName=\"c:\\\\windows\\\\system32\\\\windowspowershell\\\\v1.0\\\\powershell.exe\"\n| stats count earliest(_time) as first_seen latest(_time) as last_seen values(RemotePort) as destination_ports values(RemoteHostName) as reverse_dns by host ProcessName RemoteAddress\n| eval first_seen=strftime(first_seen, \"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen, \"%Y-%m-%d %H:%M\")\n| sort -count"
-        },
-        {
           "title": "Test 1",
           "description": "",
           "spl_query": "index=Windows sourcetype=XmlWinEventLog source=\"*Sysmon*\"\nEventCode=1\nImage=\"$process$\"\n| search host=\"$host$\"\n| table _time, host, User, Image, CommandLine, ParentImage, ParentCommandLine, Hashes, ProcessGuid\n| sort 0 -_time"

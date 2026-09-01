@@ -620,6 +620,24 @@
                         class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
                         {{ analysisRunning ? 'Running Analysis...' : 'Run Analysis' }}
                     </button>
+
+                    <div class="mt-2 flex items-center justify-end gap-2">
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
+                            @click="saveAnalysisState"
+                        >
+                            Save Analysis
+                        </button>
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold text-red-100 disabled:bg-gray-700 disabled:text-gray-400"
+                            @click="cancelAnalysis"
+                            :disabled="!analysisRunning"
+                        >
+                            Cancel Analysis
+                        </button>
+                    </div>
                 </div>
 
                 <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
@@ -1172,6 +1190,8 @@
                         </table>
                     </div>
                 </div>
+
+            </div>
 
         <!-- Supportive Query Editor Modal -->
         <div
@@ -2332,6 +2352,7 @@
                         return;
                     }
 
+                    const requestId = ++this.analysisRequestId;
                     this.analysisRunning = true;
                     try {
                         // Build composite context that includes freeform notes
@@ -2387,9 +2408,13 @@
                             this.analysisResult = newResult;
                         }
                     } catch (err) {
-                        alert('Error: ' + err.response?.data?.detail || err.message);
+                        if (requestId === this.analysisRequestId) {
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
+                        }
                     } finally {
-                        this.analysisRunning = false;
+                        if (requestId === this.analysisRequestId) {
+                            this.analysisRunning = false;
+                        }
                     }
                 },
                 getPhase2Key(q) {
