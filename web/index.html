@@ -182,6 +182,25 @@
                     <p class="text-gray-400">Browse and query cases from the active database backend</p>
                 </div>
 
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                    <button @click="currentTab = 'database'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">1. Paste a Live Notable</p>
+                        <p class="text-xs text-gray-400 mt-1">Start by saving Incident Review text into the platform.</p>
+                    </button>
+                    <button @click="currentTab = 'analysis'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">2. Analyze a Case</p>
+                        <p class="text-xs text-gray-400 mt-1">Run local AI, review follow-up queries, and gather more evidence.</p>
+                    </button>
+                    <button @click="currentTab = 'closure'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">3. Draft Closure Notes</p>
+                        <p class="text-xs text-gray-400 mt-1">Turn a triaged case into an operator-ready closure note.</p>
+                    </button>
+                    <button @click="currentTab = 'tools'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">Browse Utility Tools</p>
+                        <p class="text-xs text-gray-400 mt-1">Use the wider tool catalog for one-off parsing, intel, and reporting work.</p>
+                    </button>
+                </div>
+
                 <div class="grid grid-cols-4 gap-4">
                     <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
                         <p class="text-gray-400 text-sm">Total Cases</p>
@@ -564,6 +583,64 @@
                             class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-24"></textarea>
                     </div>
 
+                    <div v-if="analysisSourceNotable && analysisSourceNotable.parse_assessment" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm font-semibold text-blue-300">Parse Quality</p>
+                                <p class="text-xs text-gray-400">How complete the pasted notable is before full AI analysis.</p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-xl font-bold text-white">{{ analysisSourceNotable.parse_assessment.score || 0 }}</p>
+                                <p class="text-[11px] uppercase tracking-wide" :class="{
+                                    'text-green-300': analysisSourceNotable.parse_assessment.mode === 'normal',
+                                    'text-amber-300': analysisSourceNotable.parse_assessment.mode === 'enrichment',
+                                    'text-red-300': analysisSourceNotable.parse_assessment.mode === 'extraction'
+                                }">{{ analysisSourceNotable.parse_assessment.mode || 'unknown' }}</p>
+                            </div>
+                        </div>
+
+                        <div v-if="analysisSourceNotable.parse_assessment.missing_anchors && analysisSourceNotable.parse_assessment.missing_anchors.length">
+                            <p class="text-[11px] font-semibold text-gray-300 mb-1">Missing anchors</p>
+                            <div class="flex flex-wrap gap-2">
+                                <span v-for="item in analysisSourceNotable.parse_assessment.missing_anchors" :key="item" class="bg-amber-950 border border-amber-700 text-amber-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
+                            </div>
+                        </div>
+
+                        <div v-if="analysisSourceNotable.parse_assessment.mode !== 'normal'" class="bg-blue-950 border border-blue-800 rounded p-3 space-y-3">
+                            <p class="text-xs text-blue-100">This case needs one or two broad data points before the model can reason confidently. Run one of these generic queries, paste the result, then rerun analysis.</p>
+                            <div v-if="analysisSourceNotable.parse_assessment.generic_queries && analysisSourceNotable.parse_assessment.generic_queries.length" class="space-y-3">
+                                <div v-for="q in analysisSourceNotable.parse_assessment.generic_queries" :key="getEnrichmentKey(q)" class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2">
+                                    <div class="flex items-start justify-between gap-2">
+                                        <div>
+                                            <p class="text-xs font-semibold text-blue-300">{{ q.title }}</p>
+                                            <p class="text-xs text-gray-400">{{ q.description }}</p>
+                                        </div>
+                                        <button type="button" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200" @click="copyEnrichmentSPL(q)">Copy SPL</button>
+                                    </div>
+                                    <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ q.spl }}</pre>
+                                    <div>
+                                        <label class="text-[11px] text-gray-400">Results / notes for this enrichment query (optional)</label>
+                                        <textarea
+                                            v-model="enrichmentManualResults[getEnrichmentKey(q)]"
+                                            rows="3"
+                                            class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
+                                            placeholder="Paste a short summary or key rows from this generic query..."
+                                        ></textarea>
+                                    </div>
+                                    <div>
+                                        <label class="text-[11px] text-gray-400">Finding</label>
+                                        <select
+                                            v-model="enrichmentFindingTypes[getEnrichmentKey(q)]"
+                                            class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                                        >
+                                            <option v-for="option in evidenceFindingOptions" :key="'enrich:' + option" :value="option">{{ option }}</option>
+                                        </select>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="analysisRule" class="mt-2">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
@@ -595,6 +672,7 @@
                                     </button>
                                 </div>
                                 <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ renderSupportiveQuery(q) }}</pre>
+                                <p v-if="hasUnresolvedPlaceholders(renderSupportiveQuery(q))" class="text-[11px] text-amber-300">This query still has unresolved placeholders. Gather enrichment data or populate more case fields before copying it into Splunk.</p>
                                 <div class="mt-1">
                                     <label class="text-[11px] text-gray-400">Results / notes for this query (optional)</label>
                                     <textarea
@@ -603,6 +681,15 @@
                                         class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
                                         placeholder="Paste key rows or a short summary from this query's results..."
                                     ></textarea>
+                                </div>
+                                <div class="mt-1">
+                                    <label class="text-[11px] text-gray-400">Finding</label>
+                                    <select
+                                        v-model="supportiveFindingTypes[getSupportiveKey(q)]"
+                                        class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                                    >
+                                        <option v-for="option in evidenceFindingOptions" :key="'supportive:' + option" :value="option">{{ option }}</option>
+                                    </select>
                                 </div>
                             </div>
                             <p class="mt-1 text-[11px] text-gray-500">
@@ -651,12 +738,12 @@
                             Copy Analysis
                         </button>
                     </div>
-                    <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.supportive_results_count">
+                    <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.investigation_evidence_count || analysisResult.supportive_results_count">
                         Included
                         <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
                         closed baseline notables and
-                        <span class="font-semibold">{{ analysisResult.supportive_results_count || 0 }}</span>
-                        supportive query result{{ (analysisResult.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
+                        <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
+                        saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
                     </p>
                     <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                         <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
@@ -674,7 +761,7 @@
                         </div>
                         <p class="text-[11px] text-gray-400">
                             Run these queries in Splunk, paste key results below, then click
-                            <span class="font-semibold">Move to Phase 2 analysis</span> to feed them back into a second analysis.
+                            <span class="font-semibold">Save evidence and re-analyze</span> so the case keeps a durable evidence trail instead of relying on temporary prompt text.
                         </p>
                         <div
                             v-for="q in analysisResult.phase2_queries"
@@ -706,6 +793,7 @@
                             <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap mt-1">
                                 {{ renderPhase2Query(getPhase2Template(q)) }}
                             </pre>
+                            <p v-if="hasUnresolvedPlaceholders(renderPhase2Query(getPhase2Template(q)))" class="text-[11px] text-amber-300">This suggested Phase 2 query still has unresolved placeholders. Use enrichment data first or edit the SPL before copying it into Splunk.</p>
                             <div class="mt-1">
                                 <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
                                 <textarea
@@ -717,13 +805,22 @@
                                 ></textarea>
                             </div>
                             <div class="mt-1">
-                                <label class="text-[11px] text-gray-400">Results / notes for this query (optional)</label>
+                                <label class="text-[11px] text-gray-400">Results / notes for this query</label>
                                 <textarea
                                     v-model="phase2ManualResults[getPhase2Key(q)]"
                                     rows="3"
                                     class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
-                                    placeholder="Paste key rows or a short summary from this query's results..."
+                                    placeholder="Paste key rows or a short summary from this query's results. This will be saved as investigation evidence for the case."
                                 ></textarea>
+                            </div>
+                            <div class="mt-1">
+                                <label class="text-[11px] text-gray-400">Finding</label>
+                                <select
+                                    v-model="phase2FindingTypes[getPhase2Key(q)]"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                                >
+                                    <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
+                                </select>
                             </div>
                         </div>
                         <button
@@ -732,7 +829,7 @@
                             :disabled="analysisRunning"
                             @click="runPhase2Analysis"
                         >
-                            {{ analysisRunning ? 'Running Phase 2 Analysis...' : 'Move to Phase 2 analysis' }}
+                            {{ analysisRunning ? 'Saving Evidence and Re-analyzing...' : 'Save evidence and re-analyze' }}
                         </button>
                     </div>
                     <div class="text-xs text-gray-400 space-y-1">
@@ -1447,17 +1544,23 @@
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
+                    evidenceFindingOptions: ['supports', 'refutes', 'neutral'],
                     analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
                     analysisContext: '',
                     analysisRunning: false,
+                    analysisRequestId: 0,
                     analysisResult: null,
                     analysisSourceNotable: null,
+                    enrichmentManualResults: {},
+                    enrichmentFindingTypes: {},
                     placeholderAliases: {},
                     supportiveManualResults: {},
+                    supportiveFindingTypes: {},
                     phase2EditedQueries: {},
                     phase2ManualResults: {},
+                    phase2FindingTypes: {},
 
                     // Closure Notes
                     availableRules: [],
@@ -1779,6 +1882,14 @@
                     }
                 },
                 onAnalysisCaseChanged() {
+                    this.analysisResult = null;
+                    this.enrichmentManualResults = {};
+                    this.enrichmentFindingTypes = {};
+                    this.supportiveManualResults = {};
+                    this.supportiveFindingTypes = {};
+                    this.phase2EditedQueries = {};
+                    this.phase2ManualResults = {};
+                    this.phase2FindingTypes = {};
                     this.analysisSourceNotable = null;
 
                     const caseId = this.analysisCaseId;
@@ -1795,6 +1906,10 @@
                             console.error('Failed to load source notable for analysis case:', err);
                             this.analysisSourceNotable = null;
                         });
+
+                            this.loadSavedSupportiveEvidence(caseId);
+                            this.loadSavedEnrichmentEvidence(caseId);
+                            this.loadSavedPhase2Evidence(caseId);
                 },
                 async loadTriageData() {
                     try {
@@ -2355,37 +2470,10 @@
                     const requestId = ++this.analysisRequestId;
                     this.analysisRunning = true;
                     try {
-                        // Build composite context that includes freeform notes
-                        // plus any per-query pasted results from the fields
-                        // above the supportive SPL cards.
+                        await this.saveSupportiveEvidence({ silent: true });
+                        await this.saveEnrichmentEvidence({ silent: true });
+
                         let combinedContext = this.analysisContext || '';
-
-                        if (this.analysisRule && this.analysisRule.supportive_queries && this.analysisRule.supportive_queries.length) {
-                            const pieces = [];
-                            let idx = 0;
-                            for (const q of this.analysisRule.supportive_queries) {
-                                const key = this.getSupportiveKey(q);
-                                const text = (this.supportiveManualResults[key] || '').trim();
-                                if (!text) {
-                                    continue;
-                                }
-                                idx += 1;
-                                const title = q.title || 'Unnamed supportive query';
-                                pieces.push(
-                                    `[#${idx}] ${title}\n` +
-                                    `Results (analyst paste):\n${text}`
-                                );
-                            }
-
-                            if (pieces.length) {
-                                if (combinedContext) {
-                                    combinedContext += '\n\n';
-                                }
-                                combinedContext +=
-                                    '=== SUPPORTIVE QUERY RESULTS (MANUAL PASTE) ===\n\n' +
-                                    pieces.join('\n\n');
-                            }
-                        }
 
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
@@ -2424,6 +2512,13 @@
                     }
                     return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
                 },
+                getPhase2KeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'phase2:title:unknown';
+                    }
+                    return 'phase2:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
                 getPhase2Template(q) {
                     const key = this.getPhase2Key(q);
                     const existing = this.phase2EditedQueries[key];
@@ -2451,6 +2546,11 @@
                         return;
                     }
 
+                    if (this.hasUnresolvedPlaceholders(text)) {
+                        alert('This Phase 2 query still contains unresolved placeholders like $host$ or $user$. Use enrichment data or edit the SPL before copying it into Splunk.');
+                        return;
+                    }
+
                     if (!navigator.clipboard || !navigator.clipboard.writeText) {
                         alert('Clipboard API not available; copy manually from the card.');
                         return;
@@ -2470,35 +2570,9 @@
                     const requestId = ++this.analysisRequestId;
                     this.analysisRunning = true;
                     try {
+                        await this.savePhase2Evidence({ silent: true });
+
                         let combinedContext = this.analysisContext || '';
-
-                        const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
-                        if (phase2Queries.length) {
-                            const pieces = [];
-                            let idx = 0;
-                            for (const q of phase2Queries) {
-                                const key = this.getPhase2Key(q);
-                                const text = (this.phase2ManualResults[key] || '').trim();
-                                if (!text) {
-                                    continue;
-                                }
-                                idx += 1;
-                                const title = q.title || 'Unnamed phase 2 query';
-                                pieces.push(
-                                    `[#${idx}] ${title}\n` +
-                                    `Phase 2 Results (analyst paste):\n${text}`
-                                );
-                            }
-
-                            if (pieces.length) {
-                                if (combinedContext) {
-                                    combinedContext += '\n\n';
-                                }
-                                combinedContext +=
-                                    '=== PHASE 2 SUPPORTIVE QUERY RESULTS (MANUAL PASTE) ===\n\n' +
-                                    pieces.join('\n\n');
-                            }
-                        }
 
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
@@ -2525,6 +2599,170 @@
                         if (requestId === this.analysisRequestId) {
                             this.analysisRunning = false;
                         }
+                    }
+                },
+                async savePhase2Evidence(options = {}) {
+                    if (!this.analysisCaseId) {
+                        return;
+                    }
+
+                    const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
+                    const entries = [];
+                    for (const q of phase2Queries) {
+                        const key = this.getPhase2Key(q);
+                        const resultText = (this.phase2ManualResults[key] || '').trim();
+                        const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+                        if (!resultText && !queryText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed phase 2 query',
+                            query_text: queryText,
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.phase2FindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'phase2_manual',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Phase 2 evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async loadSavedPhase2Evidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'phase2_manual' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getPhase2KeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                            if (raw.query_text) {
+                                this.phase2EditedQueries[key] = raw.query_text.toString();
+                            }
+                        }
+                        this.phase2ManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved phase 2 evidence:', err);
+                    }
+                },
+                async saveSupportiveEvidence(options = {}) {
+                    if (!this.analysisCaseId || !this.analysisRule || !this.analysisRule.supportive_queries) {
+                        return;
+                    }
+
+                    const entries = [];
+                    for (const q of this.analysisRule.supportive_queries) {
+                        const key = this.getSupportiveKey(q);
+                        const resultText = (this.supportiveManualResults[key] || '').trim();
+                        if (!resultText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed supportive query',
+                            query_text: this.renderSupportiveQuery(q),
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.supportiveFindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'supportive_manual',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Supportive evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async saveEnrichmentEvidence(options = {}) {
+                    if (!this.analysisCaseId || !this.analysisSourceNotable || !this.analysisSourceNotable.parse_assessment || !this.analysisSourceNotable.parse_assessment.generic_queries) {
+                        return;
+                    }
+
+                    const entries = [];
+                    for (const q of this.analysisSourceNotable.parse_assessment.generic_queries) {
+                        const key = this.getEnrichmentKey(q);
+                        const resultText = (this.enrichmentManualResults[key] || '').trim();
+                        if (!resultText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed enrichment query',
+                            query_text: (q && q.spl ? q.spl : '').toString().trim(),
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.enrichmentFindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'generic_enrichment',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Enrichment evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async loadSavedSupportiveEvidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'supportive_manual' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getSupportiveKeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                        }
+                        this.supportiveManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved supportive evidence:', err);
+                    }
+                },
+                async loadSavedEnrichmentEvidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'generic_enrichment' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                        }
+                        this.enrichmentManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved enrichment evidence:', err);
                     }
                 },
                 copyAnalysisResult() {
@@ -2557,8 +2795,12 @@
                         analysisContext: this.analysisContext,
                         analysisModel: this.analysisModel,
                         supportiveManualResults: this.supportiveManualResults,
+                        supportiveFindingTypes: this.supportiveFindingTypes,
+                        enrichmentManualResults: this.enrichmentManualResults,
+                        enrichmentFindingTypes: this.enrichmentFindingTypes,
                         phase2EditedQueries: this.phase2EditedQueries,
                         phase2ManualResults: this.phase2ManualResults,
+                        phase2FindingTypes: this.phase2FindingTypes,
                         analysisResult: this.analysisResult,
                     };
 
@@ -2591,11 +2833,23 @@
                         if (snapshot.supportiveManualResults) {
                             this.supportiveManualResults = snapshot.supportiveManualResults;
                         }
+                        if (snapshot.supportiveFindingTypes) {
+                            this.supportiveFindingTypes = snapshot.supportiveFindingTypes;
+                        }
+                        if (snapshot.enrichmentManualResults) {
+                            this.enrichmentManualResults = snapshot.enrichmentManualResults;
+                        }
+                        if (snapshot.enrichmentFindingTypes) {
+                            this.enrichmentFindingTypes = snapshot.enrichmentFindingTypes;
+                        }
                         if (snapshot.phase2EditedQueries) {
                             this.phase2EditedQueries = snapshot.phase2EditedQueries;
                         }
                         if (snapshot.phase2ManualResults) {
                             this.phase2ManualResults = snapshot.phase2ManualResults;
+                        }
+                        if (snapshot.phase2FindingTypes) {
+                            this.phase2FindingTypes = snapshot.phase2FindingTypes;
                         }
                         if (snapshot.analysisResult) {
                             this.analysisResult = snapshot.analysisResult;
@@ -2619,10 +2873,57 @@
                     }
                     return 'title:' + title.replace(/\s+/g, '_').slice(0, 64);
                 },
+                getEnrichmentKey(q) {
+                    const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
+                    if (!title) {
+                        return 'enrichment:unknown';
+                    }
+                    return 'enrichment:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getSupportiveKeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'title:unknown';
+                    }
+                    return 'title:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getEnrichmentKeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'enrichment:unknown';
+                    }
+                    return 'enrichment:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
+                hasUnresolvedPlaceholders(text) {
+                    return /\$[A-Za-z0-9_]+\$/.test((text || '').toString());
+                },
+                copyEnrichmentSPL(q) {
+                    const text = (q && q.spl ? q.spl : '').toString();
+                    if (!text) {
+                        alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .catch(err => {
+                            console.error('Failed to copy generic enrichment SPL:', err);
+                            alert('Failed to copy SPL to clipboard');
+                        });
+                },
                 copySupportiveSPL(q) {
                     const text = this.renderSupportiveQuery(q);
                     if (!text) {
                         alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (this.hasUnresolvedPlaceholders(text)) {
+                        alert('This query still contains unresolved placeholders like $host$ or $user$. Gather enrichment data or populate more case fields before copying it into Splunk.');
                         return;
                     }
 
@@ -2674,11 +2975,11 @@
                 },
                 renderSupportiveQuery(q) {
                     const text = (q.spl_query || '').toString();
-                    if (!this.analysisSourceNotable || !this.analysisSourceNotable.fields) {
+                    if (!this.analysisSourceNotable) {
                         return text;
                     }
 
-                    const fields = this.analysisSourceNotable.fields || {};
+                    const fields = this.analysisSourceNotable.raw_fields || this.analysisSourceNotable.fields || {};
 
                     // Dynamic alias map loaded from backend (placeholder_aliases table + JSON seed).
                     // Falls back to built-in defaults if not yet loaded.

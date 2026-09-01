@@ -82,6 +82,20 @@ class AnalyzeRequest(BaseModel):
     context: str = ""
 
 
+class InvestigationEvidenceEntryPayload(BaseModel):
+    query_title: str = Field(..., description="Short title for the investigative query or evidence item")
+    query_text: Optional[str] = Field("", description="SPL or other query text used to gather the evidence")
+    result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
+    analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
+    finding_type: Optional[str] = Field("neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis")
+
+
+class InvestigationEvidenceBatchPayload(BaseModel):
+    entries: List[InvestigationEvidenceEntryPayload] = Field(default_factory=list)
+    source_system: str = Field("phase2_manual", description="Source or stage label for this evidence batch")
+    replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
+
+
 class SupportiveQueryPayload(BaseModel):
     """Payload for creating/updating supportive SPL queries.
 
@@ -495,11 +509,13 @@ def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent
 
 
 NOTABLE_FIELD_ALIASES = [
+    ("Description", "description"),
     ("Additional FieldsValue", "additional_fields_value"),
     ("Additional Fields Value", "additional_fields_value"),
     ("Coorelation Search", "correlation_search"),
     ("Correlation Search", "correlation_search"),
     ("Security Domain", "security_domain"),
+    ("SSL Errors", "ssl_errors"),
     ("Destination", "destination"),
     ("Destination Business Unit", "destination_business_unit"),
     ("Destination Category", "destination_category"),
@@ -513,8 +529,10 @@ NOTABLE_FIELD_ALIASES = [
     ("Username", "username"),
     ("File Name", "file_name"),
     ("Process", "process"),
+    ("Parent Process", "parent_process"),
     ("Risk Score", "risk_score"),
     ("Severity", "severity"),
+    ("Signature", "signature"),
     ("Urgency", "urgency"),
     ("Status", "status"),
     ("Actions", "actions"),
@@ -524,6 +542,7 @@ NOTABLE_FIELD_ALIASES = [
     ("Type", "type"),
     ("Time", "time"),
     ("Host", "host"),
+    ("Source", "source_ip"),
     ("Source IP Address", "source_ip"),
     ("Source Port", "source_port"),
     ("User Email", "user_email"),
@@ -536,6 +555,7 @@ NOTABLE_FIELD_ALIASES = [
 ]
 
 NOTABLE_FIELD_LABELS = {
+    "description": "Description",
     "title": "Title",
     "correlation_search": "Correlation Search",
     "type": "Type",
@@ -569,10 +589,91 @@ NOTABLE_FIELD_LABELS = {
     "value": "Value",
     "file_name": "File Name",
     "process": "Process",
+    "parent_process": "Parent Process",
     "risk_score": "Risk Score",
     "security_domain": "Security Domain",
+    "ssl_errors": "SSL Errors",
     "severity": "Severity",
+    "signature": "Signature",
 }
+
+EMBEDDED_FIELD_EXTRACTORS = [
+    ("correlation_search", ["Coorelation Search", "Correlation Search"]),
+    ("signature", ["Signature"]),
+    ("ssl_errors", ["SSL Errors"]),
+    ("risk_score", ["Risk Score"]),
+]
+
+GLUED_FIELD_TAIL_MARKERS = [
+    "Risk Score",
+    "SSL Errors",
+    "Severity",
+    "Urgency",
+    "Status",
+    "Owner",
+    "Disposition",
+    "Security Domain",
+    "Source Port",
+    "Destination Port",
+    "Time",
+    "Title",
+    "Type",
+]
+
+
+def trim_glued_field_tails(value: str, tail_markers: Optional[List[str]] = None) -> str:
+    """Trim known field labels that were accidentally glued onto a value."""
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return ""
+
+    markers = tail_markers or GLUED_FIELD_TAIL_MARKERS
+    while cleaned:
+        lower = cleaned.lower()
+        candidate_indexes = []
+        for marker in markers:
+            idx = lower.find(marker.lower())
+            if idx <= 0:
+                continue
+            prev_char = cleaned[idx - 1]
+            if prev_char.isalnum() or prev_char in ")].":
+                candidate_indexes.append(idx)
+        if not candidate_indexes:
+            break
+        cleaned = cleaned[:min(candidate_indexes)].strip()
+
+    return cleaned
+
+
+def is_usable_primary_entity(key: str, value: str) -> bool:
+    """Return True when a parsed anchor looks concrete enough for analysis."""
+    candidate = (value or "").strip()
+    if not candidate:
+        return False
+
+    if "[0](http" in candidate or "####" in candidate:
+        return False
+
+    if trim_glued_field_tails(candidate) != candidate:
+        return False
+
+    if key in {"source_ip", "destination_ip"}:
+        return bool(
+            re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", candidate)
+            or re.fullmatch(r"[A-Fa-f0-9:]+", candidate)
+            or re.fullmatch(r"[A-Z0-9_]+", candidate)
+        )
+
+    if key in {"host", "destination"}:
+        return bool(re.fullmatch(r"[A-Za-z0-9_.:-]+", candidate) or re.fullmatch(r"[A-Z0-9_]+", candidate))
+
+    if key in {"user", "username"}:
+        return bool(re.fullmatch(r"[A-Za-z0-9_@.\\:-]+", candidate) or re.fullmatch(r"[A-Z0-9_]+", candidate))
+
+    if key in {"process", "parent_process"}:
+        return bool(re.fullmatch(r"[A-Za-z0-9_.:\\/-]+", candidate))
+
+    return True
 
 
 def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
@@ -589,11 +690,44 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     event_details_idx = normalized.find("Event Details")
     if event_details_idx != -1:
         normalized = normalized[:event_details_idx]
+
+    # Description is handled separately via extract_notable_section and can
+    # contain natural-language sentences that start with words like "User" or
+    # "Host". Remove that section before field-label scanning so those lines
+    # are not misclassified as structured notable fields.
+    lines = normalized.split("\n")
+    filtered_lines: List[str] = []
+    in_description_section = False
+
+    for line in lines:
+        stripped = line.strip()
+        normalized_heading = re.sub(r"^#+\s*", "", stripped).strip().lower()
+
+        if normalized_heading == "description":
+            in_description_section = True
+            filtered_lines.append(line)
+            continue
+
+        if in_description_section and stripped.startswith("####"):
+            in_description_section = False
+
+        if in_description_section:
+            continue
+
+        filtered_lines.append(line)
+
+    normalized = "\n".join(filtered_lines)
+
     # Prefer label occurrences at the beginning of lines (how Splunk renders
     # the Additional Fields grid), to avoid matching words inside long
     # sentences such as correlation rule names.
     for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
-        pattern = re.compile(rf"(^|\n)[ \t]*({re.escape(alias)})\b", flags=re.IGNORECASE)
+        # Splunk Incident Review pastes often render as label+value with no
+        # colon or space separator, for example `TitleGit spawned...`.
+        # Match aliases only at the beginning of logical lines and rely on
+        # longest-alias-first de-overlap below rather than a trailing word
+        # boundary, which would miss these glued-together exports.
+        pattern = re.compile(rf"(^|\n)[ \t]*({re.escape(alias)})(?!_)", flags=re.IGNORECASE)
         for match in pattern.finditer(normalized):
             # Capture just the alias span, not the leading newline/whitespace.
             alias_start = match.start(2)
@@ -626,6 +760,75 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     return parsed
 
 
+def extract_notable_section(raw_text: str, heading: str, end_markers: Optional[List[str]] = None) -> str:
+    """Extract a markdown-style section from pasted Incident Review text."""
+    if not raw_text:
+        return ""
+
+    normalized = raw_text.replace("\r\n", "\n")
+    lines = normalized.split("\n")
+
+    def normalize_heading_label(line: str) -> str:
+        return re.sub(r"^#+\s*", "", line).strip().lower()
+
+    heading_norm = heading.strip().lower()
+    start_index = None
+    for index, line in enumerate(lines):
+        if normalize_heading_label(line) == heading_norm:
+            start_index = index
+            break
+
+    if start_index is None or start_index + 1 >= len(lines):
+        return ""
+
+    normalized_markers = [m.strip().lower() for m in (end_markers or [])]
+    end_index = len(lines)
+    for index in range(start_index + 1, len(lines)):
+        lower = normalize_heading_label(lines[index])
+        if any(lower.startswith(marker) for marker in normalized_markers):
+            end_index = index
+            break
+
+    return "\n".join(lines[start_index + 1:end_index]).strip()
+
+
+def infer_notable_fields_from_description(fields: Dict[str, str]) -> Dict[str, str]:
+    """Infer a few high-value fields from the freeform description section."""
+    description = (fields.get("description") or "").strip()
+    if not description:
+        return fields
+
+    if not (fields.get("user") or fields.get("username")):
+        user_match = re.search(r"\bUser:\s*([^\.\n]+)", description, flags=re.IGNORECASE)
+        if user_match:
+            fields["username"] = user_match.group(1).strip()
+
+    if not fields.get("host"):
+        host_match = re.search(r"\bon\s+([^\s\[]+)\s*\[", description, flags=re.IGNORECASE)
+        if host_match:
+            host_value = host_match.group(1).strip()
+            if "$" not in host_value:
+                fields["host"] = host_value
+
+    if not fields.get("process"):
+        child_match = re.search(r"spawned\s+([^\n]+?)\s*\(parent:", description, flags=re.IGNORECASE)
+        if child_match:
+            child_value = child_match.group(1).strip()
+            child_basename = re.split(r"[\\/]", child_value)[-1].strip()
+            if child_basename:
+                fields["process"] = child_basename
+
+    if not fields.get("parent_process"):
+        parent_match = re.search(r"\(parent:\s*([^\)]+)\)", description, flags=re.IGNORECASE)
+        if parent_match:
+            parent_value = parent_match.group(1).strip()
+            parent_basename = re.split(r"[\\/]", parent_value)[-1].strip()
+            if parent_basename:
+                fields["parent_process"] = parent_basename
+
+    return fields
+
+
 def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     """Apply small, conservative fix-ups to parsed notable fields."""
 
@@ -637,6 +840,63 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     # - If Destination's value still contains "Risk Score" (e.g.,
     #   "Destination NDC56-10Risk Score"), trim at that marker to recover
     #   the hostname.
+
+    # Strip trailing markdown heading artifacts (for example `low ####`) that
+    # can appear when a pasted field is immediately followed by a `####`
+    # section marker in the source Splunk export.
+    for key, value in list(fields.items()):
+        if not isinstance(value, str):
+            continue
+        cleaned = re.sub(r"\s+#+\s*$", "", value).strip()
+        fields[key] = cleaned
+
+    # Remove markdown link wrappers and obvious inline link tails that often
+    # appear in Splunk Incident Review exports, e.g. Host140.18.228.2[0](...)Risk Score
+    for key, value in list(fields.items()):
+        if not isinstance(value, str):
+            continue
+        cleaned = re.sub(r"\[[^\]]*\]\([^\)]*\)", "", value)
+        cleaned = cleaned.replace("(Opens new window)", "")
+        fields[key] = re.sub(r"\s+", " ", cleaned).strip()
+
+    # Some exports glue the next field label directly onto the previous
+    # field's value. Pull those embedded labels back out conservatively.
+    for source_key, value in list(fields.items()):
+        if not isinstance(value, str) or not value:
+            continue
+
+        current_value = value
+        for target_key, aliases in EMBEDDED_FIELD_EXTRACTORS:
+            if target_key == source_key:
+                continue
+            if fields.get(target_key):
+                continue
+
+            for alias in aliases:
+                pattern = re.compile(rf"\s*{re.escape(alias)}\s*(.+)$", flags=re.IGNORECASE)
+                match = pattern.search(current_value)
+                if not match:
+                    continue
+
+                prefix = current_value[:match.start()].strip()
+                suffix = match.group(1).strip()
+                if prefix:
+                    fields[source_key] = prefix
+                if suffix:
+                    fields[target_key] = suffix
+                current_value = fields[source_key]
+                break
+
+    for key in ["host", "source_ip", "destination", "destination_ip"]:
+        entity_value = (fields.get(key) or "").strip()
+        if entity_value:
+            fields[key] = trim_glued_field_tails(entity_value)
+
+    sev_val = (fields.get("severity") or "").strip()
+    if sev_val:
+        severity_token = sev_val.split()[0].strip().lower()
+        if severity_token in {"low", "medium", "high", "critical"}:
+            fields["severity"] = severity_token
 
     # Normalize destination from destination_nt_hostname when appropriate.
     dest_nt = (fields.get("destination_nt_hostname") or "").strip()
@@ -677,7 +937,159 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     if host_num_match:
         fields["destination"] = host_num_match.group(1)
 
+    # If host/source/destination IP values were masked, keep them if they are
+    # still single-token placeholders, but reject obviously merged artifacts.
+    for key in ["host", "source_ip", "destination_ip"]:
+        value = (fields.get(key) or "").strip()
+        if not value:
+            continue
+        # Strip residual markdown counters like trailing [0].
+        value = re.sub(r"\[\d+\]$", "", value).strip()
+        fields[key] = value
+
     return fields
+
+
+def build_generic_enrichment_queries(fields: Dict[str, str]) -> List[Dict[str, str]]:
+    """Build a small, safe set of generic SPL queries with concrete values only."""
+    queries: List[Dict[str, str]] = []
+    correlation_search = (fields.get("correlation_search") or "").strip()
+    host = (fields.get("host") or "").strip()
+    user = (fields.get("user") or fields.get("username") or "").strip()
+    process = (fields.get("process") or "").strip()
+    parent_process = (fields.get("parent_process") or "").strip()
+
+    if correlation_search:
+        corr_escaped = correlation_search.replace('"', '\\"')
+        queries.append({
+            "title": "Recent cases for this rule",
+            "spl": f'| `incident_review` | search correlation_search="{corr_escaped}" | table _time rule_name correlation_search urgency status owner disposition | sort - _time',
+            "description": "Show recent notables for the same correlation search to quickly compare expected versus unusual outcomes.",
+        })
+
+    if host:
+        host_escaped = host.replace('"', '\\"')
+        queries.append({
+            "title": "Host activity around alert time",
+            "spl": f'search index=* host="{host_escaped}" earliest=-30m latest=+30m | sort 0 _time | table _time host sourcetype source user process Image ParentImage CommandLine',
+            "description": "Build a short timeline around the impacted host to see what else was happening nearby.",
+        })
+
+    if user:
+        user_escaped = user.replace('"', '\\"')
+        queries.append({
+            "title": "User activity around alert time",
+            "spl": f'search index=* earliest=-30m latest=+30m (user="{user_escaped}" OR username="{user_escaped}" OR Account_Name="{user_escaped}") | sort 0 _time | table _time host user sourcetype process Image ParentImage CommandLine',
+            "description": "Check what else the same user was doing around the alert window.",
+        })
+
+    if process or parent_process:
+        clauses = []
+        if parent_process:
+            clauses.append(f'ParentImage="*\\\\{parent_process}"')
+        if process:
+            clauses.append(f'Image="*\\\\{process}"')
+        if clauses:
+            query = 'search index=windows source="XmlWinEventLog:Microsoft-Windows-Sysmon/Operational" EventCode=1 ' + ' '.join(clauses) + ' | table _time ComputerName User ParentImage Image CommandLine ParentCommandLine | sort - _time'
+            queries.append({
+                "title": "Process lineage validation",
+                "spl": query,
+                "description": "Validate whether the observed parent and child process relationship is common or suspicious.",
+            })
+
+    if not queries:
+        queries.append({
+            "title": "Recent endpoint process notables",
+            "spl": '| `incident_review` | search security_domain=endpoint | table _time correlation_search rule_name urgency status owner disposition | sort - _time | head 25',
+            "description": "Start broad: review recent endpoint notables to find the closest comparable activity when the paste is too thin to anchor on a host or user.",
+        })
+
+    return queries[:3]
+
+
+def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_text: str) -> Dict[str, Any]:
+    """Score how usable a pasted notable is and choose the next workflow mode."""
+    score = 0
+    missing: List[str] = []
+
+    title = (fields.get("title") or "").strip()
+    correlation_search = (fields.get("correlation_search") or "").strip()
+    time_value = (fields.get("time") or "").strip()
+    primary_entity_keys = ["host", "destination", "destination_ip", "source_ip", "user", "username", "process", "parent_process"]
+    clean_primary_entity_keys = [
+        key for key in primary_entity_keys if is_usable_primary_entity(key, (fields.get(key) or "").strip())
+    ]
+    has_primary_entity = bool(clean_primary_entity_keys)
+    has_context = bool(history_text.strip())
+    has_status_bundle = any((fields.get(key) or "").strip() for key in ["disposition", "status", "severity", "urgency"])
+    has_detail = bool((fields.get("description") or "").strip() or (sanitized_text or "").strip())
+
+    malformed_keys = []
+    for key in ["correlation_search", "host", "destination", "source_ip", "destination_ip", "user", "username", "severity", "urgency", "signature"]:
+        value = (fields.get(key) or "").strip()
+        if not value:
+            continue
+        if key in primary_entity_keys:
+            if not is_usable_primary_entity(key, value):
+                malformed_keys.append(key)
+            continue
+        if any(token in value for token in ["[0](http", "Risk Score", "SSL Errors", "Signature"]) or "####" in value:
+            malformed_keys.append(key)
+
+    if correlation_search or (title and title.lower() != "pasted splunk notable"):
+        score += 25
+    else:
+        missing.append("rule identity")
+
+    if time_value:
+        score += 20
+    else:
+        missing.append("time")
+
+    if has_primary_entity:
+        score += 20
+    else:
+        missing.append("primary entity")
+
+    if has_context:
+        score += 10
+    else:
+        missing.append("history or analyst context")
+
+    if has_status_bundle:
+        score += 10
+    else:
+        missing.append("disposition or severity")
+
+    if has_detail:
+        score += 15
+    else:
+        missing.append("supporting detail")
+
+    if malformed_keys:
+        score -= min(35, 10 + (5 * len(set(malformed_keys))))
+        missing.append("clean field boundaries")
+
+    generic_title = not title or title.strip().lower() == "pasted splunk notable"
+    hard_trigger = generic_title or not time_value or not has_primary_entity or bool(malformed_keys)
+
+    if score >= 70 and not hard_trigger:
+        mode = "normal"
+    elif score >= 40 or correlation_search or title:
+        mode = "enrichment"
+    else:
+        mode = "extraction"
+
+    score = max(0, min(100, score))
+
+    generic_queries = build_generic_enrichment_queries(fields) if mode != "normal" else []
+
+    return {
+        "score": score,
+        "mode": mode,
+        "missing_anchors": missing,
+        "generic_queries": generic_queries,
+    }
 
 
 def split_pasted_notables(raw_text: str) -> List[str]:
@@ -747,9 +1159,12 @@ def extract_notable_history(raw_text: str) -> str:
     normalized = raw_text.replace("\r\n", "\n")
     lines = normalized.split("\n")
 
+    def normalize_heading_label(line: str) -> str:
+        return re.sub(r"^#+\s*", "", line).strip().lower()
+
     start_index = None
     for index, line in enumerate(lines):
-        if line.strip().lower() == "history":
+        if normalize_heading_label(line) == "history":
             start_index = index
             break
 
@@ -765,7 +1180,7 @@ def extract_notable_history(raw_text: str) -> str:
 
     end_index = len(lines)
     for index in range(start_index + 1, len(lines)):
-        lower = lines[index].strip().lower()
+        lower = normalize_heading_label(lines[index])
         if any(lower.startswith(marker) for marker in end_markers):
             end_index = index
             break
@@ -900,6 +1315,12 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         payload = {"sanitized_text": event.raw}
 
     fields = payload.get("fields", {})
+    raw_fields = payload.get("raw_fields") or fields
+    parse_assessment = payload.get("parse_assessment") or build_parse_assessment(
+        raw_fields,
+        payload.get("sanitized_text", ""),
+        payload.get("history") or "",
+    )
     return {
         "id": event.id,
         "promoted_case_id": payload.get("promoted_case_id"),
@@ -920,6 +1341,8 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         "severity": fields.get("severity"),
         "historical": payload.get("historical", False),
         "history": payload.get("history"),
+        "parse_assessment": parse_assessment,
+        "raw_fields": raw_fields,
         "fields": fields,
         "sanitized_text": payload.get("sanitized_text", ""),
         "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
@@ -1228,6 +1651,137 @@ def get_triage_case(case_id: str):
             pass
 
 
+@app.get("/api/db/triage/{case_id}/evidence", tags=["Database"])
+def list_case_evidence(
+    case_id: str,
+    source_system: Optional[str] = Query(default=None, description="Optional source/stage filter, e.g. phase2_manual"),
+):
+    """List saved investigation evidence for a case.
+
+    This uses the existing supportive_query_results table as a durable
+    evidence ledger so the analyst's findings can be replayed into future
+    analyses without relying on browser-local state.
+    """
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SupportiveQueryResult
+
+        db = SessionLocal()
+        query = db.query(SupportiveQueryResult).filter(SupportiveQueryResult.case_id == case_id)
+        if source_system:
+            query = query.filter(SupportiveQueryResult.source_system == source_system)
+
+        rows = query.order_by(SupportiveQueryResult.created_at.asc()).all()
+        items = []
+        for row in rows:
+            try:
+                raw_result = json.loads(row.raw_result) if row.raw_result else {}
+            except Exception:
+                raw_result = {"result_text": row.raw_result}
+
+            items.append({
+                "id": row.id,
+                "case_id": row.case_id,
+                "rule_id": row.rule_id,
+                "query_title": row.query_title,
+                "source_system": row.source_system,
+                "raw_result": raw_result,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+            })
+
+        return items
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence", tags=["Database"])
+def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload):
+    """Persist a batch of case-linked investigation evidence.
+
+    The UI uses this for Phase 2 analyst-pasted SPL results so the AI can
+    reason over durable evidence on subsequent analyses rather than only the
+    current browser prompt state.
+    """
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from sqlalchemy import func  # type: ignore
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        source_system = (payload.source_system or "phase2_manual").strip() or "phase2_manual"
+        if payload.replace_existing:
+            db.query(SupportiveQueryResult).filter(
+                SupportiveQueryResult.case_id == case_id,
+                SupportiveQueryResult.source_system == source_system,
+            ).delete()
+
+        try:
+            max_id = db.query(func.max(SupportiveQueryResult.id)).scalar() or 0
+        except Exception:
+            max_id = 0
+        next_id = int(max_id) + 1
+
+        saved_count = 0
+        for entry in payload.entries:
+            title = (entry.query_title or "").strip()
+            result_text = (entry.result_text or "").strip()
+            analyst_summary = (entry.analyst_summary or "").strip()
+            query_text = (entry.query_text or "").strip()
+
+            if not title or not (result_text or analyst_summary or query_text):
+                continue
+
+            raw_result = json.dumps(
+                {
+                    "query_text": query_text,
+                    "result_text": result_text,
+                    "analyst_summary": analyst_summary,
+                    "finding_type": (entry.finding_type or "neutral").strip() or "neutral",
+                },
+                ensure_ascii=False,
+            )
+
+            db.add(
+                SupportiveQueryResult(
+                    id=next_id,
+                    case_id=case_id,
+                    rule_id=case.rule_id or "",
+                    query_title=title,
+                    source_system=source_system,
+                    raw_result=raw_result,
+                )
+            )
+            next_id += 1
+            saved_count += 1
+
+        db.commit()
+        return {"success": True, "saved_count": saved_count, "source_system": source_system}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
 def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """Delete a triage case from the database.
@@ -1371,6 +1925,22 @@ def paste_notable(request: PastedNotableRequest):
             # Apply small normalization tweaks (e.g., Destination from
             # Destination NT Hostname) before rendering/sanitizing.
             parsed_fields = normalize_notable_fields(parsed_fields)
+            description_text = extract_notable_section(
+                segment_text,
+                "Description",
+                [
+                    "event details",
+                    "correlation search",
+                    "history",
+                    "related investigations",
+                    "drill-down search",
+                    "adaptive responses",
+                ],
+            )
+            if description_text and not parsed_fields.get("description"):
+                parsed_fields["description"] = description_text
+            parsed_fields = infer_notable_fields_from_description(parsed_fields)
+            raw_query_fields = normalize_notable_fields(parsed_fields.copy())
 
             base_structured_text = render_notable_fields(parsed_fields) or segment_text
             history_text = extract_notable_history(segment_text)
@@ -1383,6 +1953,10 @@ def paste_notable(request: PastedNotableRequest):
                 sanitized_text, mapping = sanitize_logs_with_tokens(structured_text)
                 sanitized_text = sanitize_pii_phi(sanitized_text)
                 sanitized_fields = parse_structured_notable(sanitized_text)
+                parsed_sanitized_fallback = parse_pasted_notable(sanitized_text)
+                for key, value in parsed_sanitized_fallback.items():
+                    if value and key not in sanitized_fields:
+                        sanitized_fields[key] = value
                 # preserve original time if we parsed it before masking
                 if parsed_fields.get("time"):
                     sanitized_fields["time"] = parsed_fields["time"]
@@ -1394,6 +1968,7 @@ def paste_notable(request: PastedNotableRequest):
                 sanitized_fields = normalize_notable_fields(parsed_fields.copy())
 
             sanitized_history = extract_notable_history(sanitized_text)
+            parse_assessment = build_parse_assessment(raw_query_fields, sanitized_text, sanitized_history)
 
             # Deduplicate closed/historical notables to avoid duplicate rows
             # when the same incident is pasted multiple times.
@@ -1410,9 +1985,11 @@ def paste_notable(request: PastedNotableRequest):
                     artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
                     payload = {
                         "record_type": "splunk_notable_paste",
+                        "raw_fields": raw_query_fields,
                         "fields": sanitized_fields,
                         "sanitized_text": sanitized_text,
                         "history": sanitized_history,
+                        "parse_assessment": parse_assessment,
                         "saved_at": datetime.datetime.utcnow().isoformat(),
                         "artifact_paths": artifact_paths,
                         "historical": request.historical,
@@ -1448,9 +2025,11 @@ def paste_notable(request: PastedNotableRequest):
                 artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
                 payload = {
                     "record_type": "splunk_notable_paste",
+                    "raw_fields": raw_query_fields,
                     "fields": sanitized_fields,
                     "sanitized_text": sanitized_text,
                     "history": sanitized_history,
+                    "parse_assessment": parse_assessment,
                     "saved_at": datetime.datetime.utcnow().isoformat(),
                     "artifact_paths": artifact_paths,
                     "historical": request.historical,
@@ -1475,7 +2054,9 @@ def paste_notable(request: PastedNotableRequest):
 
             events_info.append({
                 "event_id": event.id if event else None,
+                "raw_fields": raw_query_fields,
                 "parsed_fields": sanitized_fields,
+                "parse_assessment": parse_assessment,
                 "artifact_paths": artifact_paths or {},
                 "mapping_entries": len(mapping),
                 "deduplicated": bool(request.historical and key and existing),
@@ -1490,7 +2071,9 @@ def paste_notable(request: PastedNotableRequest):
             "events": events_info,
             # Backwards-compatible single-event fields (use first segment)
             "event_id": first_event["event_id"],
+            "raw_fields": first_event["raw_fields"],
             "parsed_fields": first_event["parsed_fields"],
+            "parse_assessment": first_event["parse_assessment"],
             "artifact_paths": first_event["artifact_paths"],
             "mapping_entries": total_mapping_entries,
         }
@@ -1787,12 +2370,20 @@ def get_triage_source_notable(case_id: str):
 
             if payload.get("promoted_case_id") == case_id:
                 fields = payload.get("fields", {})
+                raw_fields = payload.get("raw_fields") or fields
+                parse_assessment = payload.get("parse_assessment") or build_parse_assessment(
+                    raw_fields,
+                    payload.get("sanitized_text", ""),
+                    payload.get("history") or "",
+                )
                 return {
                     "event_id": event.id,
                     "historical": payload.get("historical", False),
+                    "raw_fields": raw_fields,
                     "fields": fields,
                     "sanitized_text": payload.get("sanitized_text", ""),
                     "history": payload.get("history"),
+                    "parse_assessment": parse_assessment,
                     "saved_at": payload.get("saved_at") or (
                         event.ingested_at.isoformat() if event.ingested_at else None
                     ),
@@ -2011,9 +2602,26 @@ def analyze_case(request: AnalyzeRequest):
                 prompt_parts.append(f"[Baseline {idx}] History/Closure Notes: {b.get('history')}")
 
         if supportive_results:
-            prompt_parts.append("\n\n=== SUPPORTIVE QUERY EVIDENCE ===")
+            prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")
             for idx, res in enumerate(supportive_results, 1):
-                prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(res['raw_result'])}")
+                raw_result = res.get("raw_result")
+                if isinstance(raw_result, dict):
+                    query_text = (raw_result.get("query_text") or "").strip()
+                    result_text = (raw_result.get("result_text") or "").strip()
+                    analyst_summary = (raw_result.get("analyst_summary") or "").strip()
+                    finding_type = (raw_result.get("finding_type") or "neutral").strip()
+                    block = [f"[{idx}] {res['query_title']} ({res['source_system']})"]
+                    if finding_type:
+                        block.append(f"Evidence Direction: {finding_type}")
+                    if query_text:
+                        block.append(f"Query Used:\n{query_text}")
+                    if result_text:
+                        block.append(f"Observed Result:\n{result_text}")
+                    if analyst_summary:
+                        block.append(f"Analyst Takeaway:\n{analyst_summary}")
+                    prompt_parts.append("\n".join(block))
+                else:
+                    prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(raw_result)}")
 
         if supportive_query_defs:
             prompt_parts.append("\n\n=== RECOMMENDED SUPPORTIVE SPL QUERIES TO VALIDATE HYPOTHESIS ===")
@@ -2122,6 +2730,7 @@ def analyze_case(request: AnalyzeRequest):
             "detection_science_applied": bool(detection_rule),
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
+            "investigation_evidence_count": len(supportive_results),
             "supportive_queries": [
                 {
                     "id": q.id,
