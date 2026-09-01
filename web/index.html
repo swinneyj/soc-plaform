@@ -917,7 +917,38 @@
                     
                     <div class="mb-4">
                         <label class="text-xs font-bold text-gray-300 mb-2 block">Upload File or Project (.zip) (or paste below)</label>
-                        <input type="file" @change="handleFileUpload" accept=".py,.js,.go,.sh,.sql,.ts,.java,.cpp,.c,.html,.htm,.zip" class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 text-sm">
+                        <div
+                            class="w-full rounded border-2 border-dashed px-4 py-6 text-xs text-gray-300 bg-gray-900/40 flex flex-col items-center justify-center cursor-pointer"
+                            :class="codeReviewDragActive ? 'border-blue-400 bg-gray-800/60' : 'border-gray-600 hover:border-blue-500'"
+                            @dragover.prevent="onCodeReviewDragOver"
+                            @dragleave.prevent="onCodeReviewDragLeave"
+                            @drop.prevent="onCodeReviewDrop"
+                            @click="$refs.codeReviewFileInput.click()"
+                        >
+                            <p class="mb-2 text-center">
+                                Drag & drop a single file or project .zip here,<br>
+                                or <span class="font-semibold text-blue-400">click to choose</span>
+                            </p>
+                            <p v-if="codeReviewForm.uploadedFile" class="text-[11px] text-gray-400 mt-1">
+                                Selected: <span class="font-mono">{{ codeReviewForm.uploadedFile.name }}</span>
+                            </p>
+                            <input
+                                ref="codeReviewFileInput"
+                                type="file"
+                                class="hidden"
+                                @change="handleFileUpload"
+                                accept=".py,.js,.go,.sh,.sql,.ts,.java,.cpp,.c,.html,.htm,.zip"
+                            >
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="text-xs font-bold text-gray-300 mb-2 block">Review Instructions / Question (optional)</label>
+                        <textarea
+                            v-model="codeReviewForm.instructions"
+                            class="w-full h-24 bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 text-xs"
+                            placeholder="E.g., Focus on security issues in this file, or check performance of this loop..."
+                        ></textarea>
                     </div>
                     
                     <div class="mb-4">
@@ -930,7 +961,74 @@
                     </button>
                 </div>
                 
-                <div v-if="codeReviewResult"
+                <!-- Code Review Result -->
+                <div v-if="codeReviewResult" class="bg-gray-900/50 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-xl font-bold text-blue-400 mb-2">
+                        Review Result (ID: {{ codeReviewResult.id || codeReviewResult.review_id }})
+                    </h3>
+                    <p class="text-xs text-gray-400 mb-4">
+                        <strong>Language:</strong> {{ codeReviewResult.language }}
+                        &nbsp;|&nbsp;
+                        <strong>Model:</strong> {{ codeReviewResult.model }}
+                        &nbsp;|&nbsp;
+                        <strong>Created:</strong> {{ codeReviewResult.created_at }}
+                    </p>
+                    <div class="bg-black/40 border border-gray-700 rounded p-3 max-h-96 overflow-y-auto text-xs font-mono text-gray-200 whitespace-pre-wrap">
+                        {{ codeReviewResult.review }}
+                    </div>
+                    <button
+                        @click="copyCodeReviewToClipboard"
+                        class="mt-3 px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white text-xs rounded"
+                    >
+                        Copy Review to Clipboard
+                    </button>
+                </div>
+
+                <!-- Previous Code Reviews -->
+                <div v-if="codeReviewsList.length > 0" class="bg-gray-900/50 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-lg font-bold text-blue-400 mb-3">Previous Reviews</h3>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full text-xs text-gray-200 border border-gray-700 rounded">
+                            <thead class="bg-gray-800">
+                                <tr>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">ID</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Language</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Model</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Code (preview)</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Review (preview)</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Created</th>
+                                    <th class="px-2 py-1 text-left border-b border-gray-700">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr
+                                    v-for="review in codeReviewsList"
+                                    :key="review.id"
+                                    class="border-b border-gray-800 hover:bg-gray-800/70"
+                                >
+                                    <td class="px-2 py-1">{{ review.id }}</td>
+                                    <td class="px-2 py-1">{{ review.language }}</td>
+                                    <td class="px-2 py-1">{{ review.model }}</td>
+                                    <td class="px-2 py-1 font-mono text-[11px] max-w-[200px] truncate">
+                                        {{ review.code_snippet }}
+                                    </td>
+                                    <td class="px-2 py-1 font-mono text-[11px] max-w-[260px] truncate">
+                                        {{ review.review }}
+                                    </td>
+                                    <td class="px-2 py-1 text-[11px]">{{ review.created_at }}</td>
+                                    <td class="px-2 py-1">
+                                        <button
+                                            @click="loadFullCodeReview(review.id)"
+                                            class="px-2 py-1 bg-violet-600 hover:bg-violet-700 text-white text-[11px] rounded"
+                                        >
+                                            View Full
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
 
         <!-- Supportive Query Editor Modal -->
         <div
@@ -1232,10 +1330,11 @@
                     selectedToolForExecution: null,
 
                     // Code Review
-                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b', uploadedFile: null },
+                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b', uploadedFile: null, instructions: '' },
                     codeReviewResult: null,
                     codeReviewRunning: false,
-                    codeReviewsList: []
+                    codeReviewsList: [],
+                    codeReviewDragActive: false
                 };
             },
             computed: {
@@ -1927,7 +2026,12 @@
                         const res = await axios.get(this.apiUrl + '/db/ollama/health');
                         this.ollamaHealth = res.data;
                         if (this.ollamaHealth.models.length > 0) {
-                            this.analysisModel = this.ollamaHealth.models[0];
+                            const preferred = 'llama3.1:8b';
+                            if (this.ollamaHealth.models.includes(preferred)) {
+                                this.analysisModel = preferred;
+                            } else {
+                                this.analysisModel = this.ollamaHealth.models[0];
+                            }
                         }
                     } catch (err) {
                         this.ollamaHealth = { available: false, models: [] };
@@ -2532,8 +2636,7 @@
                 selectToolForExecution(tool) {
                     this.selectedToolForExecution = tool;
                 },
-                handleFileUpload(event) {
-                    const file = event.target.files && event.target.files[0];
+                handleCodeReviewFile(file) {
                     if (!file) {
                         this.codeReviewForm.uploadedFile = null;
                         return;
@@ -2568,6 +2671,29 @@
                         this.codeReviewForm.codeSnippet = '';
                     }
                 },
+                handleFileUpload(event) {
+                    const file = event.target.files && event.target.files[0];
+                    this.handleCodeReviewFile(file);
+                },
+                onCodeReviewDragOver(event) {
+                    if (!event.dataTransfer) {
+                        return;
+                    }
+                    event.dataTransfer.dropEffect = 'copy';
+                    this.codeReviewDragActive = true;
+                },
+                onCodeReviewDragLeave() {
+                    this.codeReviewDragActive = false;
+                },
+                onCodeReviewDrop(event) {
+                    this.codeReviewDragActive = false;
+                    const dt = event.dataTransfer;
+                    if (!dt || !dt.files || dt.files.length === 0) {
+                        return;
+                    }
+                    const file = dt.files[0];
+                    this.handleCodeReviewFile(file);
+                },
                 async submitCodeReview() {
                     const hasText = this.codeReviewForm.codeSnippet && this.codeReviewForm.codeSnippet.trim().length > 0;
                     const file = this.codeReviewForm.uploadedFile;
@@ -2583,7 +2709,7 @@
                         if (isZip) {
                             const formData = new FormData();
                             formData.append('file', file);
-                            const url = this.apiUrl + `/code-review/zip?language=${encodeURIComponent(this.codeReviewForm.language)}&model=${encodeURIComponent(this.codeReviewForm.model)}`;
+                            const url = this.apiUrl + `/code-review/zip?language=${encodeURIComponent(this.codeReviewForm.language)}&model=${encodeURIComponent(this.codeReviewForm.model)}&instructions=${encodeURIComponent(this.codeReviewForm.instructions || '')}`;
                             res = await axios.post(url, formData, {
                                 headers: { 'Content-Type': 'multipart/form-data' }
                             });
@@ -2591,7 +2717,8 @@
                             res = await axios.post(this.apiUrl + '/code-review', {
                                 code_snippet: this.codeReviewForm.codeSnippet,
                                 language: this.codeReviewForm.language,
-                                model: this.codeReviewForm.model
+                                model: this.codeReviewForm.model,
+                                instructions: this.codeReviewForm.instructions
                             });
                         }
                         this.codeReviewResult = res.data;

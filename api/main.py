@@ -77,7 +77,7 @@ class ToolInfo(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     case_id: str
-    model: str = "llama2"
+    model: str = "llama3.1:8b"
     context: str = ""
 
 
@@ -2539,7 +2539,8 @@ def code_review(payload: dict):
     {
         "code_snippet": "<code to review>",
         "language": "python" (optional, defaults to python),
-        "model": "llama3.1:8b" (optional, defaults to llama3.1:8b)
+        "model": "llama3.1:8b" (optional, defaults to llama3.1:8b),
+        "instructions": "Optional focus or question for the review"
     }
     """
     try:
@@ -2550,6 +2551,7 @@ def code_review(payload: dict):
         code_snippet = payload.get('code_snippet', '').strip()
         language = payload.get('language', 'python').strip()
         model = payload.get('model', 'llama3.1:8b').strip()
+        instructions = payload.get('instructions', '').strip()
         
         if not code_snippet:
             raise HTTPException(status_code=400, detail="code_snippet is required")
@@ -2559,19 +2561,23 @@ def code_review(payload: dict):
             raise HTTPException(status_code=503, detail="Ollama service not available")
         
         # Build review prompt
+        focus_block = ""
+        if instructions:
+            focus_block = f"\nAdditional focus/instructions from the analyst:\n{instructions}\n"
+
         prompt = f"""You are an expert code reviewer. Review the following {language} code and provide:
-1. Code quality assessment
-2. Security vulnerabilities or concerns
-3. Performance issues
-4. Best practices improvements
-5. Specific fixes with code examples
+    1. Code quality assessment
+    2. Security vulnerabilities or concerns
+    3. Performance issues
+    4. Best practices improvements
+    5. Specific fixes with code examples
+    {focus_block}
+    Code:
+    ```{language}
+    {code_snippet}
+    ```
 
-Code:
-```{language}
-{code_snippet}
-```
-
-Provide a thorough, constructive review."""
+    Provide a thorough, constructive review."""
         
         result = client.generate(prompt, model=model)
         
@@ -2612,6 +2618,7 @@ async def code_review_zip(
     file: UploadFile = File(...),
     language: str = Query("python"),
     model: str = Query("llama3.1:8b"),
+    instructions: str = Query("", description="Optional focus or question for the review"),
 ):
     """Review a zipped project using the local Ollama model.
 
@@ -2706,6 +2713,7 @@ async def code_review_zip(
             "code_snippet": project_summary,
             "language": language,
             "model": model,
+            "instructions": instructions,
         }
         return code_review(payload)
     except HTTPException:
