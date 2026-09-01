@@ -230,6 +230,12 @@
                 "name": "Evidence File",
                 "description": "Path to the sanitized notable text or export (optional; will prompt if omitted)",
                 "required": false
+            },
+            {
+                "flag": "--detection-science",
+                "name": "Detection Science File",
+                "description": "Path to detection science / supportive rules JSON/MD (optional)",
+                "required": false
             }
         ]
     },
