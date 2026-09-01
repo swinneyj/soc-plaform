@@ -750,7 +750,20 @@
                     </div>
                     <div v-if="analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="mt-4 space-y-3">
                         <div class="flex items-center justify-between mb-1">
-                            <h4 class="text-sm font-semibold text-blue-300">Phase 2 SPL Recommendations</h4>
+                            <div>
+                                <h4 class="text-sm font-semibold text-blue-300">Phase 2 SPL Recommendations</h4>
+                                <div class="mt-1 flex items-center gap-2 text-[11px] text-gray-400">
+                                    <span>Phase 2 Model:</span>
+                                    <select
+                                        v-model="phase2Model"
+                                        class="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                                    >
+                                        <option v-for="model in ollamaHealth.models" :key="model" :value="model">
+                                            {{ model }}
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
                             <button
                                 type="button"
                                 class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
@@ -842,6 +855,26 @@
                             class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded text-xs font-semibold transition">
                             Move to Closure Notes for this Case
                         </button>
+                    </div>
+                </div>
+
+                <div v-if="phase2Result" class="bg-gray-800 border border-purple-700 rounded-lg p-6 mt-6">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xl font-bold text-purple-300">Phase 2 Analysis Result</h3>
+                    </div>
+                    <p class="text-xs text-gray-400 mb-2" v-if="phase2Result.baseline_notables_count || phase2Result.supportive_results_count">
+                        Included
+                        <span class="font-semibold">{{ phase2Result.baseline_notables_count || 0 }}</span>
+                        closed baseline notables and
+                        <span class="font-semibold">{{ phase2Result.supportive_results_count || 0 }}</span>
+                        supportive query result{{ (phase2Result.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
+                    </p>
+                    <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
+                        <p class="text-gray-300 whitespace-pre-wrap">{{ phase2Result.analysis }}</p>
+                    </div>
+                    <div class="text-xs text-gray-400 space-y-1">
+                        <p>Model: {{ phase2Result.model }}</p>
+                        <p>Case: {{ phase2Result.case_id }}</p>
                     </div>
                 </div>
             </div>
@@ -1552,6 +1585,8 @@
                     analysisRunning: false,
                     analysisRequestId: 0,
                     analysisResult: null,
+                    phase2Model: '',
+                    phase2Result: null,
                     analysisSourceNotable: null,
                     enrichmentManualResults: {},
                     enrichmentFindingTypes: {},
@@ -2409,6 +2444,9 @@
                                 selected = preferred;
                             }
                             this.analysisModel = selected;
+                            if (!this.phase2Model || !models.includes(this.phase2Model)) {
+                                this.phase2Model = selected;
+                            }
                             // Keep Code Review model aligned with the same default
                             // when it hasn't been explicitly set yet.
                             if (!this.codeReviewForm.model || !this.codeReviewModels.includes(this.codeReviewForm.model)) {
@@ -2562,8 +2600,14 @@
                     });
                 },
                 async runPhase2Analysis() {
-                    if (!this.analysisCaseId || !this.analysisModel) {
-                        alert('Please select a case ID and model');
+                    if (!this.analysisCaseId) {
+                        alert('Please select a case ID');
+                        return;
+                    }
+
+                    const effectiveModel = this.phase2Model || this.analysisModel;
+                    if (!effectiveModel) {
+                        alert('Please select a Phase 2 model (or an Analysis model)');
                         return;
                     }
 
@@ -2576,7 +2620,7 @@
 
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
-                            model: this.analysisModel,
+                            model: effectiveModel,
                             context: combinedContext
                         });
                         if (requestId === this.analysisRequestId) {
@@ -2589,7 +2633,7 @@
                             ) {
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
-                            this.analysisResult = newResult;
+                            this.phase2Result = newResult;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -2794,6 +2838,7 @@
                     const snapshot = {
                         analysisContext: this.analysisContext,
                         analysisModel: this.analysisModel,
+                        phase2Model: this.phase2Model,
                         supportiveManualResults: this.supportiveManualResults,
                         supportiveFindingTypes: this.supportiveFindingTypes,
                         enrichmentManualResults: this.enrichmentManualResults,
@@ -2802,6 +2847,7 @@
                         phase2ManualResults: this.phase2ManualResults,
                         phase2FindingTypes: this.phase2FindingTypes,
                         analysisResult: this.analysisResult,
+                        phase2Result: this.phase2Result,
                     };
 
                     try {
@@ -2830,6 +2876,9 @@
                         if (snapshot.analysisModel) {
                             this.analysisModel = snapshot.analysisModel;
                         }
+                        if (snapshot.phase2Model) {
+                            this.phase2Model = snapshot.phase2Model;
+                        }
                         if (snapshot.supportiveManualResults) {
                             this.supportiveManualResults = snapshot.supportiveManualResults;
                         }
@@ -2853,6 +2902,9 @@
                         }
                         if (snapshot.analysisResult) {
                             this.analysisResult = snapshot.analysisResult;
+                        }
+                        if (snapshot.phase2Result) {
+                            this.phase2Result = snapshot.phase2Result;
                         }
                     } catch (err) {
                         console.error('Failed to load analysis state:', err);
