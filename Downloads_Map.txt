@@ -21,7 +21,6 @@ Generated: 2026-08-26 12:58:39
     fix_endpoint.py
     fix_schema.py
     git-menu.ps1
-    git-pull-latest.ps1
     git-sync.ps1
     ingest_notables.py
     inspect_db.py
@@ -36,7 +35,6 @@ Generated: 2026-08-26 12:58:39
     seed_test_cases.py
     Start_SOC_Platform.bat
     supportive_rules.json
-    Sync_To_Git.bat
     updated_rules.json
     update_api.py
     update_closure_endpoint.py

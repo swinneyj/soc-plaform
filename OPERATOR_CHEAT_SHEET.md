@@ -77,7 +77,7 @@ Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SO
 
 Use the root launcher if you want a menu:
 
-`Sync_To_Git.bat`
+`git-menu.ps1`
 
 Or do it manually:
 

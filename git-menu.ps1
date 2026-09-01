@@ -26,14 +26,15 @@ function Invoke-PullWorkflow {
         return
     }
 
-    Write-Host "`n[+] Pulling latest changes into this working copy..." -ForegroundColor Cyan
-    Write-Host "    A local checkpoint commit will be created first if your tree is dirty." -ForegroundColor Cyan
+    Write-Host "`n[+] Syncing local main with upstream..." -ForegroundColor Cyan
+    Write-Host "    If your tree is dirty, a local checkpoint commit will be created before the pull." -ForegroundColor Cyan
+    Write-Host "    Post-sync health checks will run automatically." -ForegroundColor Cyan
     powershell.exe -ExecutionPolicy Bypass -File $SyncScript -AutoCheckpoint
 
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "`n[+] Pull workflow completed." -ForegroundColor Green
+        Write-Host "`n[+] Safe sync workflow completed." -ForegroundColor Green
     } else {
-        Write-Warning "Pull workflow stopped. Review the output above for conflicts or validation errors."
+        Write-Warning "Safe sync workflow stopped. Review the output above for conflicts or validation errors."
     }
 
     Wait-ForUser
@@ -70,8 +71,8 @@ while ($true) {
 
     Show-Status
 
-    Write-Host "1. Pull latest safely (recommended)"
-    Write-Host "2. Commit and push main"
+    Write-Host "1. Safe sync main (auto-checkpoint + health checks)"
+    Write-Host "2. Commit and push local main"
     Write-Host "3. Exit"
     Write-Host "=================================" -ForegroundColor Cyan
 

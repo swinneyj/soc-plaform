@@ -66,7 +66,7 @@ This note captures follow-on work completed after the initial 2026-08-27 summary
   - Rely on the auto-generated `"SOC sync - <timestamp>"` message when you don't need a custom one.
 
 - **For consumers (pulling changes on other machines)**
-  - Use `./git-pull-latest.ps1` to safely fetch/pull from `origin/main` with optional auto-stash/restore of local changes.
+  - Use `./git-menu.ps1` option `1` or `./scripts/sync_upstream_safe.ps1 -AutoCheckpoint` to safely sync `origin/main` into the working copy.
 
 - **For aliases and supportive queries**
   - Add/edit supportive queries and placeholder aliases via the UI while the API is running.
