@@ -35,6 +35,28 @@ try {
         }
     }
 
+    # Self-heal if Git reports a detached HEAD or in-progress rebase/merge
+    if ($currentBranch -eq 'HEAD') {
+        Write-Warning "Git reports HEAD (detached or in-progress rebase/merge). Attempting automatic recovery..."
+
+        # Try aborting any rebase first
+        git rebase --abort 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            # If that didn't work, try aborting a merge
+            git merge --abort 2>$null
+        }
+
+        # Re-detect current branch after attempted recovery
+        $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
+
+        # If still HEAD but a target branch was provided, try switching to it
+        if ($currentBranch -eq 'HEAD' -and $Branch) {
+            Write-Host "[*] Switching to branch '$Branch'..." -ForegroundColor Cyan
+            Invoke-GitSafe -Command "git checkout $Branch" -ErrorMessage "Failed to switch to branch '$Branch'. Resolve Git state manually."
+            $currentBranch = (git rev-parse --abbrev-ref HEAD).Trim()
+        }
+    }
+
     if ($currentBranch -ne $Branch) {
         throw "Refusing to sync from branch '$currentBranch'. Expected '$Branch'. Switch branches or use -Branch to override intentionally."
     }
@@ -57,14 +79,15 @@ try {
     Write-Host "[*] Checking for changes to commit..." -ForegroundColor Cyan
     git diff --cached --quiet
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "[+] No staged changes. Nothing to commit or push." -ForegroundColor Green
-        return
+        Write-Host "[+] No staged changes to commit." -ForegroundColor Green
+    }
+    else {
+        Write-Host "[*] Committing changes..." -ForegroundColor Cyan
+        Invoke-GitSafe -Command "git commit -m `"$Message`"" -ErrorMessage "Git commit failed."
     }
 
-    Write-Host "[*] Committing changes..." -ForegroundColor Cyan
-    Invoke-GitSafe -Command "git commit -m `"$Message`"" -ErrorMessage "Git commit failed."
-
-    # Try a fast-forward push first
+    # Always attempt to push, even if this run had nothing new to commit,
+    # so that previously-created local commits still get synced.
     Write-Host "[*] Pushing changes to origin/$Branch..." -ForegroundColor Cyan
     git push origin $Branch
     if ($LASTEXITCODE -eq 0) {
@@ -74,8 +97,21 @@ try {
 
     Write-Warning "Initial push failed. Attempting to pull and re-push (rebase)..."
 
-    # Try to reconcile with remote via pull --rebase
-    Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed. Resolve conflicts, then re-run git-sync.ps1."
+    # Try to reconcile with remote via pull --rebase. If this hits conflicts,
+    # automatically abort the rebase so the repo is not left in a stuck state.
+    try {
+        Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed."
+    }
+    catch {
+        Write-Warning "git pull --rebase encountered conflicts. Aborting rebase to restore previous state."
+        git rebase --abort 2>$null
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warning "git rebase --abort did not complete cleanly. Repository may still be mid-rebase; resolve manually."
+        }
+
+        Write-Warning "Remote contains conflicting changes. Review and resolve conflicts (e.g., by pulling and merging manually), then rerun git-sync.ps1."
+        throw $_
+    }
 
     Write-Host "[*] Retrying push after rebase..." -ForegroundColor Cyan
     Invoke-GitSafe -Command "git push origin $Branch" -ErrorMessage "Push failed even after rebase. Resolve Git issues manually."

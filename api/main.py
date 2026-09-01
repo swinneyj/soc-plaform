@@ -2487,6 +2487,48 @@ def generate_closure_note(request: dict):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/code-review/fix", tags=["AI Analysis"])
+def fix_code(payload: dict):
+    """Generate fixed/improved version of code based on review."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from services.ollama_service import get_ollama_client
+        
+        code_snippet = payload.get('code_snippet', '').strip()
+        language = payload.get('language', 'python').strip()
+        model = payload.get('model', 'llama3.1:8b').strip()
+        
+        if not code_snippet:
+            raise HTTPException(status_code=400, detail="code_snippet is required")
+        
+        client = get_ollama_client()
+        if not client.available:
+            raise HTTPException(status_code=503, detail="Ollama service not available")
+        
+        prompt = """Fix and improve this {language} code. Return ONLY the corrected code in a code block, no explanations:
+
+```{language}
+{code}
+```""".format(language=language, code=code_snippet)
+        
+        result = client.generate(prompt, model=model)
+        
+        if not result["success"]:
+            raise HTTPException(status_code=500, detail=result["error"])
+        
+        fixed_code = result["response"] or ""
+        if "```" in fixed_code:
+            parts = fixed_code.split("```")
+            if len(parts) >= 2:
+                fixed_code = parts[1].replace(f"{language}\n", "", 1).strip()
+        
+        return {"success": True, "fixed_code": fixed_code, "language": language, "model": model}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/code-review", tags=["AI Analysis"])
 def code_review(payload: dict):
     """Review code using local Ollama model and store results in database.
@@ -2635,3 +2677,4 @@ if os.path.exists(web_dir):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
