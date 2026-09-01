@@ -2560,24 +2560,35 @@ def code_review(payload: dict):
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
         
-        # Build review prompt
+        # Build review prompt tuned for concrete changes rather than generic commentary.
         focus_block = ""
         if instructions:
             focus_block = f"\nAdditional focus/instructions from the analyst:\n{instructions}\n"
 
-        prompt = f"""You are an expert code reviewer. Review the following {language} code and provide:
-    1. Code quality assessment
-    2. Security vulnerabilities or concerns
-    3. Performance issues
-    4. Best practices improvements
-    5. Specific fixes with code examples
-    {focus_block}
-    Code:
-    ```{language}
-    {code_snippet}
-    ```
+        prompt = f"""You are an expert {language} engineer.
 
-    Provide a thorough, constructive review."""
+The user has provided a code fragment or file context and may also provide
+explicit instructions about what to change. Your job is to propose
+CONCRETE code edits, not a generic data or project review.
+
+For the code below, respond with:
+1. A very short summary of what you will change.
+2. Specific code edits:
+   - Mention the file or component name when possible.
+   - Show before/after or replacement snippets as needed.
+   - Focus on the minimal diff that satisfies the instructions.
+3. If you suggest config/UI changes (HTML/JS/Python), include the exact
+   updated snippet ready to paste into the file.
+
+Avoid broad "data quality" or "potential uses" essays. Stay focused on
+actionable code changes and patches.
+{focus_block}
+
+Code:
+```{language}
+{code_snippet}
+```
+"""
         
         result = client.generate(prompt, model=model)
         

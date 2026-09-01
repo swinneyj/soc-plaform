@@ -591,7 +591,16 @@
                 </div>
 
                 <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
-                    <h3 class="text-xl font-bold text-blue-400 mb-4">Analysis Result</h3>
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="text-xl font-bold text-blue-400">Analysis Result</h3>
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
+                            @click="copyAnalysisResult"
+                        >
+                            Copy Analysis
+                        </button>
+                    </div>
                     <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.supportive_results_count">
                         Included
                         <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
@@ -940,6 +949,19 @@
                                 accept=".py,.js,.go,.sh,.sql,.ts,.java,.cpp,.c,.html,.htm,.zip"
                             >
                         </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="text-xs font-bold text-gray-300 mb-2 block">Upload Project Folder (optional)</label>
+                        <input
+                            type="file"
+                            webkitdirectory
+                            @change="handleFolderUpload"
+                            class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 text-xs"
+                        >
+                        <p class="mt-1 text-[11px] text-gray-500">
+                            Select a folder to aggregate its code files into a single review context (no need to zip).
+                        </p>
                     </div>
 
                     <div class="mb-4">
@@ -2262,6 +2284,25 @@
                         }
                     }
                 },
+                copyAnalysisResult() {
+                    const text = (this.analysisResult && this.analysisResult.analysis) || '';
+                    if (!text) {
+                        alert('No analysis text to copy');
+                        return;
+                    }
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+                    navigator.clipboard.writeText(text)
+                        .then(() => {
+                            alert('Analysis copied to clipboard');
+                        })
+                        .catch(err => {
+                            console.error('Failed to copy analysis:', err);
+                            alert('Failed to copy analysis to clipboard');
+                        });
+                },
                 saveAnalysisState() {
                     if (!this.analysisCaseId) {
                         alert('Select a case before saving analysis state');
@@ -2674,6 +2715,76 @@
                 handleFileUpload(event) {
                     const file = event.target.files && event.target.files[0];
                     this.handleCodeReviewFile(file);
+                },
+                async handleFolderUpload(event) {
+                    const fileList = event.target.files || [];
+                    const files = Array.from(fileList);
+                    if (!files.length) {
+                        return;
+                    }
+
+                    const allowedExts = [
+                        '.py', '.js', '.ts', '.go', '.sh', '.sql',
+                        '.java', '.cpp', '.c', '.html', '.htm', '.css', '.json', '.md'
+                    ];
+                    const excludedPaths = [
+                        'node_modules/', 'venv/', 'env/', '__pycache__/', '.git/', 'dist/', 'build/'
+                    ];
+                    const maxPerFileChars = 2000;
+                    const maxTotalChars = 20000;
+
+                    let totalChars = 0;
+                    const chunks = [];
+
+                    const sorted = files.slice().sort((a, b) => {
+                        const pa = (a.webkitRelativePath || a.name || '').toLowerCase();
+                        const pb = (b.webkitRelativePath || b.name || '').toLowerCase();
+                        return pa.localeCompare(pb);
+                    });
+
+                    for (const file of sorted) {
+                        const rel = file.webkitRelativePath || file.name || '';
+                        const lower = rel.toLowerCase();
+
+                        if (excludedPaths.some(excl => lower.includes(excl))) {
+                            continue;
+                        }
+                        if (!allowedExts.some(ext => lower.endsWith(ext))) {
+                            continue;
+                        }
+
+                        const text = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                const result = (e && e.target && e.target.result) || '';
+                                resolve(typeof result === 'string' ? result : '');
+                            };
+                            reader.onerror = reject;
+                            reader.readAsText(file);
+                        }).catch(() => '');
+
+                        if (!text || !text.trim()) {
+                            continue;
+                        }
+
+                        const snippet = text.slice(0, maxPerFileChars);
+                        const chunk = `File: ${rel}\n` + snippet.trim() + '\n\n';
+
+                        if (totalChars + chunk.length > maxTotalChars) {
+                            break;
+                        }
+
+                        chunks.push(chunk);
+                        totalChars += chunk.length;
+                    }
+
+                    if (!chunks.length) {
+                        alert('No supported text/code files found in selected folder');
+                        return;
+                    }
+
+                    this.codeReviewForm.codeSnippet = chunks.join('\n');
+                    this.codeReviewForm.uploadedFile = null;
                 },
                 onCodeReviewDragOver(event) {
                     if (!event.dataTransfer) {
