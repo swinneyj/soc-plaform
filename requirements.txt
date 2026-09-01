@@ -1,9 +1,9 @@
-# Dependencies for SOC Platform API and containerization
-requests>=2.31.0
-fastapi>=0.104.0
-uvicorn[standard]>=0.24.0
-pydantic>=2.0.0
-python-dotenv>=1.0.0
-sqlalchemy>=2.0.0
-ollama>=0.1.0
-psycopg[binary]>=3.2.1
+﻿requests
+sqlalchemy
+psycopg2-binary
+redis
+pydantic
+fastapi
+uvicorn
+python-dotenv
+python-multipart

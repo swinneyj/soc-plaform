@@ -17,6 +17,8 @@ import uuid
 import subprocess
 import datetime
 import re
+import io
+import zipfile
 from pathlib import Path
 from enum import Enum
 
@@ -2599,6 +2601,113 @@ Provide a thorough, constructive review."""
             "review": review_text,
             "created_at": code_review.created_at.isoformat()
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/code-review/zip", tags=["AI Analysis"])
+async def code_review_zip(
+    file: UploadFile = File(...),
+    language: str = Query("python"),
+    model: str = Query("llama3.1:8b"),
+):
+    """Review a zipped project using the local Ollama model.
+
+    This endpoint accepts a .zip archive, extracts a curated subset of
+    text/code files, concatenates representative snippets, and forwards
+    the aggregated project context into the standard code_review flow.
+    """
+    try:
+        filename = (file.filename or "").lower()
+        if not filename.endswith(".zip"):
+            raise HTTPException(status_code=400, detail="Uploaded file must be a .zip archive")
+
+        contents = await file.read()
+        if not contents:
+            raise HTTPException(status_code=400, detail="Uploaded archive is empty")
+
+        # Sensible limits to avoid overwhelming the model context
+        max_total_chars = 20000
+        max_per_file_chars = 2000
+
+        allowed_exts = (
+            ".py",
+            ".js",
+            ".ts",
+            ".go",
+            ".sh",
+            ".sql",
+            ".html",
+            ".htm",
+            ".css",
+            ".json",
+            ".md",
+        )
+
+        excluded_paths = [
+            "node_modules/",
+            "venv/",
+            "env/",
+            "__pycache__/",
+            ".git/",
+            "dist/",
+            "build/",
+        ]
+
+        aggregated_chunks: list[str] = []
+        total_chars = 0
+
+        try:
+            with zipfile.ZipFile(io.BytesIO(contents)) as zf:
+                for name in sorted(zf.namelist()):
+                    # Skip directories and obviously unwanted paths
+                    if name.endswith("/"):
+                        continue
+                    lower_name = name.lower()
+                    if any(excl in lower_name for excl in excluded_paths):
+                        continue
+                    if not any(lower_name.endswith(ext) for ext in allowed_exts):
+                        continue
+
+                    try:
+                        with zf.open(name) as f:
+                            raw_bytes = f.read()
+                    except Exception:
+                        continue
+
+                    try:
+                        text = raw_bytes.decode("utf-8", errors="ignore")
+                    except Exception:
+                        continue
+
+                    if not text.strip():
+                        continue
+
+                    snippet = text[:max_per_file_chars]
+                    chunk = f"File: {name}\n" + snippet.strip() + "\n\n"
+
+                    if total_chars + len(chunk) > max_total_chars:
+                        break
+
+                    aggregated_chunks.append(chunk)
+                    total_chars += len(chunk)
+        except zipfile.BadZipFile:
+            raise HTTPException(status_code=400, detail="Invalid or corrupted zip archive")
+
+        if not aggregated_chunks:
+            raise HTTPException(status_code=400, detail="No supported text/code files found in archive")
+
+        project_summary = "\n".join(aggregated_chunks)
+
+        # Reuse the existing code review pipeline to store and analyze
+        payload = {
+            "code_snippet": project_summary,
+            "language": language,
+            "model": model,
+        }
+        return code_review(payload)
     except HTTPException:
         raise
     except Exception as e:

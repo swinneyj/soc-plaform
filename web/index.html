@@ -902,6 +902,7 @@
                             <option value="go">Go</option>
                             <option value="bash">Bash</option>
                             <option value="sql">SQL</option>
+                            <option value="html">HTML</option>
                         </select>
                     </div>
                     
@@ -915,8 +916,8 @@
                     </div>
                     
                     <div class="mb-4">
-                        <label class="text-xs font-bold text-gray-300 mb-2 block">Upload File (or paste below)</label>
-                        <input type="file" @change="handleFileUpload" accept=".py,.js,.go,.sh,.sql,.ts,.java,.cpp,.c" class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 text-sm">
+                        <label class="text-xs font-bold text-gray-300 mb-2 block">Upload File or Project (.zip) (or paste below)</label>
+                        <input type="file" @change="handleFileUpload" accept=".py,.js,.go,.sh,.sql,.ts,.java,.cpp,.c,.html,.htm,.zip" class="w-full bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 text-sm">
                     </div>
                     
                     <div class="mb-4">
@@ -924,7 +925,7 @@
                         <textarea v-model="codeReviewForm.codeSnippet" class="w-full h-64 bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 font-mono text-xs" placeholder="Paste your code here..."></textarea>
                     </div>
                     
-                    <button @click="submitCodeReview" :disabled="codeReviewRunning || !codeReviewForm.codeSnippet.trim()" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded text-sm font-bold">
+                    <button @click="submitCodeReview" :disabled="codeReviewRunning || (!codeReviewForm.codeSnippet.trim() && !codeReviewForm.uploadedFile)" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded text-sm font-bold">
                         {{ codeReviewRunning ? 'Reviewing...' : 'Submit for Review' }}
                     </button>
                 </div>
@@ -1231,7 +1232,7 @@
                     selectedToolForExecution: null,
 
                     // Code Review
-                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b' },
+                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b', uploadedFile: null },
                     codeReviewResult: null,
                     codeReviewRunning: false,
                     codeReviewsList: []
@@ -2531,18 +2532,68 @@
                 selectToolForExecution(tool) {
                     this.selectedToolForExecution = tool;
                 },
+                handleFileUpload(event) {
+                    const file = event.target.files && event.target.files[0];
+                    if (!file) {
+                        this.codeReviewForm.uploadedFile = null;
+                        return;
+                    }
+
+                    this.codeReviewForm.uploadedFile = file;
+                    const name = file.name || '';
+                    const lowerName = name.toLowerCase();
+                    const ext = lowerName.includes('.') ? lowerName.substring(lowerName.lastIndexOf('.') + 1) : '';
+
+                    // Auto-set language based on extension when reasonable
+                    if (ext === 'js' || ext === 'ts') {
+                        this.codeReviewForm.language = 'javascript';
+                    } else if (ext === 'sh') {
+                        this.codeReviewForm.language = 'bash';
+                    } else if (ext === 'sql') {
+                        this.codeReviewForm.language = 'sql';
+                    } else if (ext === 'html' || ext === 'htm') {
+                        this.codeReviewForm.language = 'html';
+                    }
+
+                    // For non-zip files, load contents into the text area
+                    if (ext !== 'zip') {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const text = (e.target && e.target.result) || '';
+                            this.codeReviewForm.codeSnippet = typeof text === 'string' ? text : '';
+                        };
+                        reader.readAsText(file);
+                    } else {
+                        // Zip projects can be large; leave textarea empty and route to zip endpoint
+                        this.codeReviewForm.codeSnippet = '';
+                    }
+                },
                 async submitCodeReview() {
-                    if (!this.codeReviewForm.codeSnippet.trim()) {
-                        alert('Please paste code to review');
+                    const hasText = this.codeReviewForm.codeSnippet && this.codeReviewForm.codeSnippet.trim().length > 0;
+                    const file = this.codeReviewForm.uploadedFile;
+                    const isZip = file && file.name && file.name.toLowerCase().endsWith('.zip');
+
+                    if (!hasText && !file) {
+                        alert('Please paste code or upload a file/project to review');
                         return;
                     }
                     this.codeReviewRunning = true;
                     try {
-                        const res = await axios.post(this.apiUrl + '/code-review', {
-                            code_snippet: this.codeReviewForm.codeSnippet,
-                            language: this.codeReviewForm.language,
-                            model: this.codeReviewForm.model
-                        });
+                        let res;
+                        if (isZip) {
+                            const formData = new FormData();
+                            formData.append('file', file);
+                            const url = this.apiUrl + `/code-review/zip?language=${encodeURIComponent(this.codeReviewForm.language)}&model=${encodeURIComponent(this.codeReviewForm.model)}`;
+                            res = await axios.post(url, formData, {
+                                headers: { 'Content-Type': 'multipart/form-data' }
+                            });
+                        } else {
+                            res = await axios.post(this.apiUrl + '/code-review', {
+                                code_snippet: this.codeReviewForm.codeSnippet,
+                                language: this.codeReviewForm.language,
+                                model: this.codeReviewForm.model
+                            });
+                        }
                         this.codeReviewResult = res.data;
                         await this.loadCodeReviews();
                     } catch (err) {

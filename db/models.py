@@ -20,8 +20,8 @@ def get_default_sqlite_url() -> str:
 
 def get_default_postgres_url() -> str:
     if os.path.exists("/app"):
-        return "postgresql+psycopg://soc_platform@postgres:5432/soc_platform"
-    return "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+        return "postgresql+psycopg2://soc_platform@postgres:5432/soc_platform"
+    return "postgresql+psycopg2://soc_platform@localhost:5433/soc_platform"
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL", get_default_postgres_url())

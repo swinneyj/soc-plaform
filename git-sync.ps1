@@ -1,7 +1,9 @@
 param (
     [string]$Message = "",  # auto-filled below if not provided
     [string]$Branch = "main",
-    [switch]$All
+    [switch]$All,
+    [switch]$PreferRemote,    # On conflict, remote history wins (local conflicting commits discarded)
+    [switch]$PreferLocal      # On conflict, local history wins (force-push to remote)
 )
 
 function Invoke-GitSafe {
@@ -18,6 +20,9 @@ function Invoke-GitSafe {
 }
 
 try {
+    if ($PreferRemote -and $PreferLocal) {
+        throw "Cannot use both -PreferRemote and -PreferLocal. Choose one conflict policy or neither."
+    }
     # Ensure we're in a Git repo
     $status = git status 2>$null
     if ($LASTEXITCODE -ne 0) {
@@ -98,18 +103,42 @@ try {
     Write-Warning "Initial push failed. Attempting to pull and re-push (rebase)..."
 
     # Try to reconcile with remote via pull --rebase. If this hits conflicts,
-    # automatically abort the rebase so the repo is not left in a stuck state.
+    # either apply the chosen conflict policy or abort safely.
     try {
         Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed."
     }
     catch {
-        Write-Warning "git pull --rebase encountered conflicts. Aborting rebase to restore previous state."
+        Write-Warning "git pull --rebase encountered conflicts."
+
+        # Always undo the in-progress rebase first so the repo is not left stuck.
         git rebase --abort 2>$null
         if ($LASTEXITCODE -ne 0) {
             Write-Warning "git rebase --abort did not complete cleanly. Repository may still be mid-rebase; resolve manually."
         }
 
-        Write-Warning "Remote contains conflicting changes. Review and resolve conflicts (e.g., by pulling and merging manually), then rerun git-sync.ps1."
+        if ($PreferRemote) {
+            Write-Warning "Applying -PreferRemote: resetting local branch to match origin/$Branch (local conflicting commits will be discarded)."
+            Invoke-GitSafe -Command "git fetch origin" -ErrorMessage "git fetch failed before reset."
+            Invoke-GitSafe -Command "git reset --hard origin/$Branch" -ErrorMessage "git reset --hard origin/$Branch failed. Resolve Git state manually."
+
+            Write-Host "[*] Retrying push after remote-preferred reset..." -ForegroundColor Cyan
+            Invoke-GitSafe -Command "git push origin $Branch" -ErrorMessage "Push failed even after remote-preferred reset. Resolve Git issues manually."
+
+            Write-Host "[+] Push successful after applying -PreferRemote policy." -ForegroundColor Green
+            return
+        }
+        elseif ($PreferLocal) {
+            Write-Warning "Applying -PreferLocal: forcing local branch to remote (remote conflicting commits will be overwritten)."
+
+            Write-Host "[*] Forcing push of local branch to origin/$Branch..." -ForegroundColor Cyan
+            Invoke-GitSafe -Command "git push --force-with-lease origin $Branch" -ErrorMessage "Force-push with -PreferLocal failed. Resolve Git issues manually."
+
+            Write-Host "[+] Push successful after applying -PreferLocal policy." -ForegroundColor Green
+            return
+        }
+
+        # Default safe behavior: leave repo clean and require manual conflict resolution.
+        Write-Warning "Aborting rebase to restore previous state. Remote contains conflicting changes. Review and resolve conflicts (e.g., by pulling and merging manually), then rerun git-sync.ps1."
         throw $_
     }
 
