@@ -1913,16 +1913,10 @@
                         pocEntries.push({ label, value: cleaned });
                     };
 
-                    const fullName = [fields.user_first_name, fields.user_last_name]
-                        .filter(Boolean)
-                        .map(value => String(value).trim())
-                        .filter(Boolean)
-                        .join(' ');
-
+                    // Only surface the primary owner as a Point of Contact
+                    // to keep the UI focused and avoid duplicating user
+                    // details that already appear elsewhere.
                     addEntry('Owner', fields.owner);
-                    addEntry('Name', fullName);
-                    addEntry('Email', fields.user_email);
-                    addEntry('Identity', fields.user_identity);
 
                     return pocEntries;
                 },

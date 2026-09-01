@@ -681,60 +681,11 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     matches = []
     normalized = raw_text.replace("\r\n", "\n")
 
-    # Many Splunk Incident Review exports append an "Event Details" section
-    # after the Additional Fields grid. That section can contain label-like
-    # text (e.g., "event_hash", "notable" markers) that we do NOT want
-    # treated as key/value pairs. Trim the raw text at the first occurrence
-    # of "Event Details" so field extraction only considers the top-of-card
-    # Additional Fields area.
-    event_details_idx = normalized.find("Event Details")
-    if event_details_idx != -1:
-        normalized = normalized[:event_details_idx]
-
-    # Description is handled separately via extract_notable_section and can
-    # contain natural-language sentences that start with words like "User" or
-    # "Host". Remove that section before field-label scanning so those lines
-    # are not misclassified as structured notable fields.
-    lines = normalized.split("\n")
-    filtered_lines: List[str] = []
-    in_description_section = False
-
-    for line in lines:
-        stripped = line.strip()
-        normalized_heading = re.sub(r"^#+\s*", "", stripped).strip().lower()
-
-        if normalized_heading == "description":
-            in_description_section = True
-            filtered_lines.append(line)
-            continue
-
-        if in_description_section and stripped.startswith("####"):
-            in_description_section = False
-
-        if in_description_section:
-            continue
-
-        filtered_lines.append(line)
-
-    normalized = "\n".join(filtered_lines)
-
-    # Prefer label occurrences at the beginning of lines (how Splunk renders
-    # the Additional Fields grid), to avoid matching words inside long
-    # sentences such as correlation rule names.
     for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
-        # Splunk Incident Review pastes often render as label+value with no
-        # colon or space separator, for example `TitleGit spawned...`.
-        # Match aliases only at the beginning of logical lines and rely on
-        # longest-alias-first de-overlap below rather than a trailing word
-        # boundary, which would miss these glued-together exports.
-        pattern = re.compile(rf"(^|\n)[ \t]*({re.escape(alias)})(?!_)", flags=re.IGNORECASE)
-        for match in pattern.finditer(normalized):
-            # Capture just the alias span, not the leading newline/whitespace.
-            alias_start = match.start(2)
-            alias_end = match.end(2)
+        for match in re.finditer(re.escape(alias), normalized, flags=re.IGNORECASE):
             matches.append({
-                "start": alias_start,
-                "end": alias_end,
+                "start": match.start(),
+                "end": match.end(),
                 "canonical": canonical,
             })
 
@@ -753,6 +704,29 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
         value_start = match["end"]
         value_end = deduped[index + 1]["start"] if index + 1 < len(deduped) else len(normalized)
         value = normalized[value_start:value_end].strip(" \t:\n")
+
+        # If another known label appears inside the value span (common in
+        # glued-together exports like "Owner dalton lewis Security Domain
+        # network"), truncate at the earliest such label so each field keeps
+        # only its own value instead of swallowing subsequent labels.
+        #
+        # Use whole-word matching so aliases like "Host" do NOT match inside
+        # words like "hosts", which would incorrectly chop values such as
+        # "ndc24-1 session hosts west-24 ..." down to just "ndc24-1 session".
+        lower_value = value.lower()
+        earliest_alias_idx = None
+        for alias, _ in NOTABLE_FIELD_ALIASES:
+            alias_lower = alias.lower()
+            pattern = re.compile(r"\b" + re.escape(alias_lower) + r"\b")
+            m = pattern.search(lower_value)
+            if not m:
+                continue
+            idx = m.start()
+            if earliest_alias_idx is None or idx < earliest_alias_idx:
+                earliest_alias_idx = idx
+        if earliest_alias_idx is not None and earliest_alias_idx > 0:
+            value = value[:earliest_alias_idx]
+
         value = re.sub(r"\s+", " ", value).strip()
         if value and match["canonical"] not in parsed:
             parsed[match["canonical"]] = value
@@ -1115,9 +1089,12 @@ def split_pasted_notables(raw_text: str) -> List[str]:
         index for index, line in enumerate(lines) if notable_pattern.match(line)
     ]
 
-    # Fallback heuristic: use Title/Correlation Search labels when the Notable pattern
-    # doesn't give us multiple segments.
-    if len(boundaries) <= 1:
+    # Fallback heuristic: use Title/Correlation Search labels only when the
+    # Notable pattern finds *no* headings at all. When there is exactly one
+    # "Notable" line, treat the entire paste as a single card instead of
+    # splitting on later Title/Correlation Search occurrences (which often
+    # appear in Event Details for the same card).
+    if len(boundaries) == 0:
         heading_pattern = re.compile(r"^\s*(Title|Correlation Search)\b", re.IGNORECASE)
         boundaries = [
             index for index, line in enumerate(lines) if heading_pattern.match(line)
