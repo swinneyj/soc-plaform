@@ -641,7 +641,7 @@
                         </div>
                     </div>
 
-                    <div v-if="analysisRule" class="mt-2">
+                    <div v-if="analysisRule && showPhase1Analysis" class="mt-2">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
                             <button
@@ -769,103 +769,6 @@
                             Show Phase 1
                         </button>
                     </div>
-                    <div v-if="analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="mt-4 space-y-3">
-                        <div class="flex items-center justify-between mb-1">
-                            <div>
-                                <h4 class="text-sm font-semibold text-blue-300">Phase 2 SPL Recommendations</h4>
-                                <div class="mt-1 flex items-center gap-2 text-[11px] text-gray-400">
-                                    <span>Phase 2 Model:</span>
-                                    <select
-                                        v-model="phase2Model"
-                                        class="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
-                                    >
-                                        <option v-for="model in ollamaHealth.models" :key="model" :value="model">
-                                            {{ model }}
-                                        </option>
-                                    </select>
-                                </div>
-                            </div>
-                            <button
-                                type="button"
-                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
-                                @click="openPlaceholderAliasEditor"
-                            >
-                                Manage Placeholder Aliases
-                            </button>
-                        </div>
-                        <p class="text-[11px] text-gray-400">
-                            Run these queries in Splunk, paste key results below, then click
-                            <span class="font-semibold">Save evidence and re-analyze</span> so the case keeps a durable evidence trail instead of relying on temporary prompt text.
-                        </p>
-                        <div
-                            v-for="q in analysisResult.phase2_queries"
-                            :key="getPhase2Key(q)"
-                            class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2"
-                        >
-                            <div class="flex items-start justify-between gap-2">
-                                <div>
-                                    <p class="text-xs font-semibold text-blue-300 mb-0.5">{{ q.title }}</p>
-                                    <p class="text-xs text-gray-400" v-if="q.description">{{ q.description }}</p>
-                                </div>
-                                <div class="flex gap-1 ml-2 flex-shrink-0">
-                                    <button
-                                        type="button"
-                                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200"
-                                        @click="copyPhase2SPL(q)"
-                                    >
-                                        Copy SPL
-                                    </button>
-                                    <button
-                                        type="button"
-                                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-purple-500 rounded text-[10px] text-purple-200"
-                                        @click="promotePhase2Query(q)"
-                                    >
-                                        Save as Supportive
-                                    </button>
-                                </div>
-                            </div>
-                            <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap mt-1">
-                                {{ renderPhase2Query(getPhase2Template(q)) }}
-                            </pre>
-                            <p v-if="hasUnresolvedPlaceholders(renderPhase2Query(getPhase2Template(q)))" class="text-[11px] text-amber-300">This suggested Phase 2 query still has unresolved placeholders. Use enrichment data first or edit the SPL before copying it into Splunk.</p>
-                            <div class="mt-1">
-                                <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
-                                <textarea
-                                    :value="getPhase2Template(q)"
-                                    @input="onPhase2TemplateInput(q, $event.target.value)"
-                                    rows="4"
-                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
-                                    placeholder="Edit the suggested SPL here before running or saving..."
-                                ></textarea>
-                            </div>
-                            <div class="mt-1">
-                                <label class="text-[11px] text-gray-400">Results / notes for this query</label>
-                                <textarea
-                                    v-model="phase2ManualResults[getPhase2Key(q)]"
-                                    rows="3"
-                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
-                                    placeholder="Paste key rows or a short summary from this query's results. This will be saved as investigation evidence for the case."
-                                ></textarea>
-                            </div>
-                            <div class="mt-1">
-                                <label class="text-[11px] text-gray-400">Finding</label>
-                                <select
-                                    v-model="phase2FindingTypes[getPhase2Key(q)]"
-                                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
-                                >
-                                    <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
-                                </select>
-                            </div>
-                        </div>
-                        <button
-                            type="button"
-                            class="mt-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white"
-                            :disabled="analysisRunning"
-                            @click="runPhase2Analysis"
-                        >
-                            {{ analysisRunning ? 'Saving Evidence and Re-analyzing...' : 'Save evidence and re-analyze' }}
-                        </button>
-                    </div>
                     <div class="text-xs text-gray-400 space-y-1">
                         <p>Model: {{ analysisResult.model }}</p>
                         <p>Case: {{ analysisResult.case_id }}</p>
@@ -877,6 +780,115 @@
                             Move to Closure Notes for this Case
                         </button>
                     </div>
+                </div>
+
+                <div
+                    v-if="analysisResult && analysisResult.phase2_queries && analysisResult.phase2_queries.length"
+                    class="bg-gray-800 border border-gray-700 rounded-lg p-6 mt-4"
+                >
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-sm font-semibold text-blue-300">Phase 2 SPL Recommendations & Evidence</h3>
+                            <p class="text-[11px] text-gray-400">
+                                Run these queries in Splunk, paste results, and save them as durable evidence before Phase 2 analysis.
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <div class="flex items-center gap-1 text-[11px] text-gray-400">
+                                <span>Phase 2 Model:</span>
+                                <select
+                                    v-model="phase2Model"
+                                    class="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                                >
+                                    <option v-for="model in ollamaHealth.models" :key="model" :value="model">
+                                        {{ model }}
+                                    </option>
+                                </select>
+                            </div>
+                            <button
+                                type="button"
+                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
+                                @click="openPlaceholderAliasEditor"
+                            >
+                                Manage Placeholder Aliases
+                            </button>
+                        </div>
+                    </div>
+
+                    <div
+                        v-for="q in analysisResult.phase2_queries"
+                        :key="getPhase2Key(q)"
+                        class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2 mb-2"
+                    >
+                        <div class="flex items-start justify-between gap-2">
+                            <div>
+                                <p class="text-xs font-semibold text-blue-300 mb-0.5">{{ q.title }}</p>
+                                <p class="text-xs text-gray-400" v-if="q.description">{{ q.description }}</p>
+                            </div>
+                            <div class="flex gap-1 ml-2 flex-shrink-0">
+                                <button
+                                    type="button"
+                                    class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200"
+                                    @click="copyPhase2SPL(q)"
+                                >
+                                    Copy SPL
+                                </button>
+                                <button
+                                    type="button"
+                                    class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-purple-500 rounded text-[10px] text-purple-200"
+                                    @click="promotePhase2Query(q)"
+                                >
+                                    Save as Supportive
+                                </button>
+                            </div>
+                        </div>
+                        <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap mt-1">
+                            {{ renderPhase2Query(getPhase2Template(q)) }}
+                        </pre>
+                        <p
+                            v-if="hasUnresolvedPlaceholders(renderPhase2Query(getPhase2Template(q)))"
+                            class="text-[11px] text-amber-300"
+                        >
+                            This suggested Phase 2 query still has unresolved placeholders. Use enrichment data first or edit the SPL before copying it into Splunk.
+                        </p>
+                        <div class="mt-1">
+                            <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
+                            <textarea
+                                :value="getPhase2Template(q)"
+                                @input="onPhase2TemplateInput(q, $event.target.value)"
+                                rows="4"
+                                class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+                                placeholder="Edit the suggested SPL here before running or saving..."
+                            ></textarea>
+                        </div>
+                        <div class="mt-1">
+                            <label class="text-[11px] text-gray-400">Results / notes for this query</label>
+                            <textarea
+                                v-model="phase2ManualResults[getPhase2Key(q)]"
+                                rows="3"
+                                class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
+                                placeholder="Paste key rows or a short summary from this query's results. This will be saved as investigation evidence for the case."
+                            ></textarea>
+                        </div>
+                        <div class="mt-1">
+                            <label class="text-[11px] text-gray-400">Finding</label>
+                            <select
+                                v-model="phase2FindingTypes[getPhase2Key(q)]"
+                                class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                            >
+                                <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <button
+                        type="button"
+                        class="mt-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white"
+                        :disabled="analysisRunning"
+                        @click="runPhase2Analysis"
+                    >
+                        {{ analysisRunning ? 'Saving Evidence and Re-analyzing...' : 'Save evidence and re-analyze' }}
+                    </button>
                 </div>
 
                 <div v-if="phase2Result" class="bg-gray-800 border border-purple-700 rounded-lg p-6 mt-6">
