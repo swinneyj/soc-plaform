@@ -70,6 +70,73 @@ function Get-ModeLabel {
 	return 'CODING MODE'
 }
 
+function Get-BranchRoleLabel {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'MAIN BASELINE'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'STAGING / DEMO BRANCH'
+	}
+
+	return 'FEATURE / WORK BRANCH'
+}
+
+function Get-BranchPurpose {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'Stable baseline only. Do not do normal coding here.'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'Combine work here and prep the meeting demo.'
+	}
+
+	return 'Normal coding branch. Make changes here, then save/share them.'
+}
+
+function Get-BranchAccentColor {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'Red'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'Cyan'
+	}
+
+	return 'Green'
+}
+
+function Show-FlowGraphic {
+	$currentBranch = Get-CurrentBranch
+	$roleLabel = Get-BranchRoleLabel -BranchName $currentBranch
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
+
+	Write-Host 'Flow:' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [MAIN] ' -ForegroundColor Red -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [WORK] ' -ForegroundColor Green -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [STAGING] ' -ForegroundColor Cyan -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [MAIN]' -ForegroundColor Red
+
+	Write-Host 'Now :' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" [{0}] " -f $currentBranch.ToUpper()) -ForegroundColor $roleColor -NoNewline
+	Write-Host (" {0}" -f $roleLabel) -ForegroundColor DarkGray
+}
+
 function Get-WorkGuidance {
 	param(
 		[Parameter(Mandatory = $true)][string]$BranchName
@@ -251,7 +318,7 @@ function Select-BranchFromList {
 		[string]$CancelLabel = 'Cancel'
 	)
 
-	Write-Host "`n--- $Title ---" -ForegroundColor Yellow
+	Write-Host "`n--- $Title ---" -ForegroundColor Cyan
 
 	if ($Options.Count -eq 0) {
 		Write-Host 'No branch options are available.' -ForegroundColor DarkGray
@@ -261,10 +328,10 @@ function Select-BranchFromList {
 	for ($index = 0; $index -lt $Options.Count; $index++) {
 		$option = $Options[$index]
 		$details = if ([string]::IsNullOrWhiteSpace($option.Description)) { '' } else { " ($($option.Description))" }
-		Write-Host (("{0}. {1}{2}" -f ($index + 1), $option.Name, $details)) -ForegroundColor Yellow
+		Write-Host (("{0}. {1}{2}" -f ($index + 1), $option.Name, $details)) -ForegroundColor White
 	}
 
-	Write-Host (("{0}. {1}" -f ($Options.Count + 1), $CancelLabel)) -ForegroundColor Yellow
+	Write-Host (("{0}. {1}" -f ($Options.Count + 1), $CancelLabel)) -ForegroundColor DarkGray
 
 	$selection = Read-Host (("Select an option (1-{0})" -f ($Options.Count + 1)))
 	[int]$selectedNumber = 0
@@ -380,11 +447,17 @@ function Show-Status {
 	$currentBranch = Get-CurrentBranch
 	$changeCount = @(git status --porcelain).Count
 	$nextStep = Get-NextStepHint -BranchName $currentBranch
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
+	$workGuidance = Get-WorkGuidance -BranchName $currentBranch
 
-	Write-Host (("Branch: {0} | Mode: {1}" -f $currentBranch, (Get-ModeLabel -BranchName $currentBranch))) -ForegroundColor Yellow
-	Write-Host (("Work here: {0}" -f (Get-WorkGuidance -BranchName $currentBranch))) -ForegroundColor Yellow
-	Write-Host (("Changes: {0} | Next: {1}" -f $changeCount, $nextStep)) -ForegroundColor Yellow
-	Write-Host 'Need help choosing a branch? Pick 7, then 2.' -ForegroundColor DarkYellow
+	Show-FlowGraphic
+	Write-Host 'Code:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f $workGuidance) -ForegroundColor $roleColor
+	Write-Host 'Next:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f $nextStep) -ForegroundColor White
+	Write-Host 'Help:' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' 4 -> 2' -ForegroundColor Cyan -NoNewline
+	Write-Host ((" | Changes: {0}" -f $changeCount)) -ForegroundColor DarkGray
 }
 
 function Show-DetailedStatus {
@@ -400,11 +473,11 @@ function Show-BranchGuide {
 	$currentBranch = Get-CurrentBranch
 	Write-Host "`n--- Branch Guide ---" -ForegroundColor Yellow
 	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor Yellow
-	Write-Host 'main        = safe starting point only' -ForegroundColor DarkGray
-	Write-Host 'work branch = where you normally code' -ForegroundColor DarkGray
-	Write-Host (("demo branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor DarkGray
+	Write-Host 'main                = stable baseline only' -ForegroundColor DarkGray
+	Write-Host 'feature/work branch = where you normally code' -ForegroundColor DarkGray
+	Write-Host (("staging/demo branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor DarkGray
 	Write-Host ""
-	Write-Host 'Normal flow: main -> your work branch -> demo branch -> main' -ForegroundColor Yellow
+	Write-Host 'Normal flow: main -> feature/work branch -> staging/demo branch -> main' -ForegroundColor Yellow
 	Write-Host ""
 	Wait-ForUser
 }
@@ -417,46 +490,44 @@ function Show-BranchChooserHelp {
 	$recommendedBranch = Get-RecommendedWorkBranch
 	$activeLocalWorkBranches = @($localWorkBranches | Where-Object { $mergedLocalWorkBranches -notcontains $_ })
 	$remoteOnlyWorkBranches = @($remoteWorkBranches | Where-Object { -not (Test-LocalBranchExists -BranchName $_) })
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
 
-	Write-Host "`n--- Which Branch Should I Use? ---" -ForegroundColor Yellow
-	Write-Host (("Current: {0}" -f $currentBranch)) -ForegroundColor Yellow
-	Write-Host (("Can you code here? {0}" -f (Get-WorkGuidance -BranchName $currentBranch))) -ForegroundColor Yellow
+	Write-Host "`n--- BRANCH PICKER ---" -ForegroundColor Cyan
+	Show-FlowGraphic
+	Write-Host 'Code:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f (Get-WorkGuidance -BranchName $currentBranch)) -ForegroundColor $roleColor
 	Write-Host ""
-	Write-Host 'Best answer right now:' -ForegroundColor Yellow
+	Write-Host 'BEST' -ForegroundColor Cyan
 	if ($currentBranch -eq 'main') {
-		Write-Host '  You should move off main before coding.' -ForegroundColor DarkGray
-		Write-Host '  Use main menu option 1 to open or create your work branch.' -ForegroundColor DarkGray
+		Write-Host '  MAIN -> use 1 for a work branch' -ForegroundColor White
 	} elseif ($currentBranch -eq $DemoBranch) {
-		Write-Host '  You are in demo mode, not coding mode.' -ForegroundColor DarkGray
-		Write-Host '  Use main menu option 1 if you want to go back to a normal work branch.' -ForegroundColor DarkGray
+		Write-Host '  DEMO -> use 1 for a work branch' -ForegroundColor White
 	} else {
-		Write-Host (("  Stay on '{0}' if this is the branch you are actively coding in." -f $currentBranch)) -ForegroundColor DarkGray
-		Write-Host '  Use main menu option 2 when you want to save and share your changes.' -ForegroundColor DarkGray
+		Write-Host (("  STAY -> {0}" -f $currentBranch)) -ForegroundColor White
 	}
 
 	Write-Host ""
-	Write-Host 'Active local work branches:' -ForegroundColor Yellow
+	Write-Host 'WORK BRANCHES' -ForegroundColor Green
 	if ($activeLocalWorkBranches.Count -eq 0) {
-		Write-Host '  (none yet - use main menu option 1 to create one)' -ForegroundColor DarkGray
+		Write-Host '  (none yet - use 1)' -ForegroundColor DarkGray
 	} else {
 		if ($currentBranch -eq 'main' -or $currentBranch -eq $DemoBranch) {
-			Write-Host (("  Recommended now: {0}" -f $recommendedBranch)) -ForegroundColor Green
-			Write-Host '  Use main menu option 1, then choose that branch name.' -ForegroundColor DarkGray
+			Write-Host (("  > {0}" -f $recommendedBranch)) -ForegroundColor Green
 			Write-Host ""
 		}
 		foreach ($branch in $activeLocalWorkBranches) {
 			$marker = if ($branch -eq $currentBranch) { '*' } else { '-' }
-			$suffix = if ($branch -eq $currentBranch) { ' <- current branch' } elseif ($branch -eq $recommendedBranch) { ' <- recommended' } else { '' }
-			Write-Host (("  {0} {1}{2}" -f $marker, $branch, $suffix)) -ForegroundColor DarkGray
+			$suffix = if ($branch -eq $currentBranch) { ' <- current' } elseif ($branch -eq $recommendedBranch) { ' <- rec' } else { '' }
+			$branchColor = if ($branch -eq $recommendedBranch) { 'Green' } else { 'White' }
+			Write-Host (("  {0} {1}{2}" -f $marker, $branch, $suffix)) -ForegroundColor $branchColor
 		}
 	}
 
 	Write-Host ""
-	Write-Host (("Demo branch: {0}" -f $DemoBranch)) -ForegroundColor Yellow
-	Write-Host '  Ignore this for normal coding. Use it only when combining work for the meeting.' -ForegroundColor DarkGray
+	Write-Host (("DEMO   {0}" -f $DemoBranch)) -ForegroundColor Cyan
 
 	Write-Host ""
-	Write-Host 'Already merged into main (usually safe to ignore or clean up later):' -ForegroundColor Yellow
+	Write-Host 'MERGED ALREADY' -ForegroundColor Cyan
 	if ($mergedLocalWorkBranches.Count -eq 0) {
 		Write-Host '  (none)' -ForegroundColor DarkGray
 	} else {
@@ -466,7 +537,7 @@ function Show-BranchChooserHelp {
 	}
 
 	Write-Host ""
-	Write-Host 'Remote-only / probably old shared branches (ignore unless you were told to use one):' -ForegroundColor Yellow
+	Write-Host 'REMOTE-ONLY' -ForegroundColor Cyan
 	if ($remoteOnlyWorkBranches.Count -eq 0) {
 		Write-Host '  (none visible)' -ForegroundColor DarkGray
 	} else {
@@ -476,9 +547,8 @@ function Show-BranchChooserHelp {
 	}
 
 	Write-Host ""
-	Write-Host 'What to do next:' -ForegroundColor Yellow
-	Write-Host '  If you want to start or continue coding, use one branch from the active local work list.' -ForegroundColor DarkGray
-	Write-Host '  If you are ready to combine branches for the meeting, use main menu option 4.' -ForegroundColor DarkGray
+	Write-Host 'NAV' -ForegroundColor Cyan
+	Write-Host '  1 = coding branch | 3 = demo actions' -ForegroundColor DarkGray
 	Write-Host ""
 	Wait-ForUser
 }
@@ -487,28 +557,28 @@ function Show-CleanupCandidates {
 	$localCleanupCandidates = @(Get-MergedLocalWorkBranches)
 	$remoteCleanupCandidates = @(Get-RemoteCleanupCandidates)
 
-	Write-Host "`n--- Cleanup Ideas ---" -ForegroundColor Yellow
-	Write-Host 'These local branches are already merged into main.' -ForegroundColor Yellow
+	Write-Host "`n--- CLEANUP IDEAS ---" -ForegroundColor Cyan
+	Write-Host 'LOCAL MERGED' -ForegroundColor Green
 	if ($localCleanupCandidates.Count -eq 0) {
 		Write-Host '  No local cleanup candidates found.' -ForegroundColor DarkGray
 	} else {
 		foreach ($branch in $localCleanupCandidates) {
-			Write-Host (("  - {0}" -f $branch)) -ForegroundColor DarkGray
+			Write-Host (("  - {0}" -f $branch)) -ForegroundColor White
 		}
 	}
 
 	Write-Host ""
-	Write-Host 'These remote work branches look like cleanup candidates too.' -ForegroundColor Yellow
+	Write-Host 'REMOTE CANDIDATES' -ForegroundColor Cyan
 	if ($remoteCleanupCandidates.Count -eq 0) {
 		Write-Host '  No remote cleanup candidates found.' -ForegroundColor DarkGray
 	} else {
 		foreach ($branch in $remoteCleanupCandidates) {
-			Write-Host (("  - {0} ({1})" -f $branch.Name, $branch.Description)) -ForegroundColor DarkGray
+			Write-Host (("  - {0} ({1})" -f $branch.Name, $branch.Description)) -ForegroundColor White
 		}
 	}
 
 	Write-Host ""
-	Write-Host 'Use this cleanup menu to actually delete one after you review the list.' -ForegroundColor DarkGray
+	Write-Host 'Use this menu to delete one after review.' -ForegroundColor DarkGray
 	Write-Host ""
 	Wait-ForUser
 }
@@ -588,46 +658,53 @@ function Invoke-PruneRemoteRefs {
 	Wait-ForUser
 }
 
-function Show-CleanupMenu {
+function Show-DemoMenu {
 	while ($true) {
-		Write-Host "`n--- CLEANUP TOOLS ---" -ForegroundColor Cyan
-		Write-Host '1. Which branches can I clean up?' -ForegroundColor Yellow
-		Write-Host '2. Delete a local merged branch' -ForegroundColor Yellow
-		Write-Host '3. Delete a remote branch' -ForegroundColor Yellow
-		Write-Host '4. Remove stale remote branch refs' -ForegroundColor Yellow
-		Write-Host '5. Show raw git status' -ForegroundColor Yellow
-		Write-Host '6. Back' -ForegroundColor Yellow
+		$currentBranch = Get-CurrentBranch
+		$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh demo branch' } else { 'Open demo branch' }
 
-		$cleanupChoice = Read-Host 'Select an option (1-6)'
+		Write-Host "`n--- DEMO ACTIONS ---" -ForegroundColor Cyan
+		Write-Host (("1. {0}" -f $openDemoLabel)) -ForegroundColor White
+		Write-Host '2. Bring work into demo' -ForegroundColor White
+		Write-Host '3. Ship approved demo to main' -ForegroundColor Red
+		Write-Host '4. Back' -ForegroundColor DarkGray
 
-		switch ($cleanupChoice) {
-			'1' { Show-CleanupCandidates }
-			'2' { Invoke-DeleteLocalBranchWorkflow }
-			'3' { Invoke-DeleteRemoteBranchWorkflow }
-			'4' { Invoke-PruneRemoteRefs }
-			'5' { Show-DetailedStatus }
-			'6' { return }
-			default { Write-Warning 'Invalid selection. Please choose 1-6.' }
+		$demoChoice = Read-Host 'Select an option (1-4)'
+
+		switch ($demoChoice) {
+			'1' { Invoke-OpenDemoWorkflow }
+			'2' { Invoke-AddWorkToDemoWorkflow }
+			'3' { Invoke-FinalMergeWorkflow }
+			'4' { return }
+			default { Write-Warning 'Invalid selection. Please choose 1-4.' }
 		}
 	}
 }
 
 function Show-ToolsMenu {
 	while ($true) {
-		Write-Host "`n--- BRANCH TOOLS ---" -ForegroundColor Cyan
-		Write-Host '1. What do these branches mean?' -ForegroundColor Yellow
-		Write-Host '2. Help me choose a branch' -ForegroundColor Yellow
-		Write-Host '3. Show raw git status' -ForegroundColor Yellow
-		Write-Host '4. Back' -ForegroundColor Yellow
+		Write-Host "`n--- BRANCH HELP / CLEANUP ---" -ForegroundColor Cyan
+		Write-Host '1. What do these branches mean?' -ForegroundColor White
+		Write-Host '2. Help me choose a branch' -ForegroundColor White
+		Write-Host '3. Which branches can I clean up?' -ForegroundColor White
+		Write-Host '4. Delete a local merged branch' -ForegroundColor White
+		Write-Host '5. Delete a remote branch' -ForegroundColor Red
+		Write-Host '6. Remove stale remote branch refs' -ForegroundColor White
+		Write-Host '7. Show raw git status' -ForegroundColor White
+		Write-Host '8. Back' -ForegroundColor DarkGray
 
-		$toolChoice = Read-Host 'Select an option (1-4)'
+		$toolChoice = Read-Host 'Select an option (1-8)'
 
 		switch ($toolChoice) {
 			'1' { Show-BranchGuide }
 			'2' { Show-BranchChooserHelp }
-			'3' { Show-DetailedStatus }
-			'4' { return }
-			default { Write-Warning 'Invalid selection. Please choose 1-4.' }
+			'3' { Show-CleanupCandidates }
+			'4' { Invoke-DeleteLocalBranchWorkflow }
+			'5' { Invoke-DeleteRemoteBranchWorkflow }
+			'6' { Invoke-PruneRemoteRefs }
+			'7' { Show-DetailedStatus }
+			'8' { return }
+			default { Write-Warning 'Invalid selection. Please choose 1-8.' }
 		}
 	}
 }
@@ -971,34 +1048,27 @@ function Invoke-FinalMergeWorkflow {
 while ($true) {
 	$currentBranch = Get-CurrentBranch
 	$startCodingLabel = if ($currentBranch -eq $DemoBranch) { 'Leave demo / start coding' } else { 'Start or continue coding' }
-	$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh demo branch' } else { 'Open demo branch' }
 
-	Write-Host "`n=================================" -ForegroundColor Cyan
-	Write-Host '    SOC GIT WORKFLOW MENU        ' -ForegroundColor Cyan
-	Write-Host '=================================' -ForegroundColor Cyan
-	Write-Host (("Flow: main -> work branches -> {0} -> main" -f $DemoBranch)) -ForegroundColor DarkCyan
+	Write-Host "`n+---------------------------------------+" -ForegroundColor Cyan
+	Write-Host '  SOC GIT WORKFLOW MENU' -ForegroundColor Cyan
+	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
 	Show-Status
-	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor Yellow
-	Write-Host '2. Save and share this branch' -ForegroundColor Yellow
-	Write-Host (("3. {0}" -f $openDemoLabel)) -ForegroundColor Yellow
-	Write-Host '4. Bring work into demo' -ForegroundColor Yellow
-	Write-Host '5. Ship approved demo to main' -ForegroundColor Yellow
-	Write-Host '6. Cleanup branches / stale refs' -ForegroundColor Yellow
-	Write-Host '7. Branch help / where should I work?' -ForegroundColor Yellow
-	Write-Host '8. Exit' -ForegroundColor Yellow
-	Write-Host '=================================' -ForegroundColor Cyan
+	Write-Host ''
+	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor White
+	Write-Host '2. Save and share this branch' -ForegroundColor White
+	Write-Host '3. Demo branch actions' -ForegroundColor White
+	Write-Host '4. Branch help / cleanup' -ForegroundColor White
+	Write-Host '5. Exit' -ForegroundColor DarkGray
+	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
 
-	$choice = Read-Host 'Select an option (1-8)'
+	$choice = Read-Host 'Select an option (1-5)'
 
 	switch ($choice) {
 		'1' { Invoke-StartCodingWorkflow }
 		'2' { Invoke-SaveShareWorkflow }
-		'3' { Invoke-OpenDemoWorkflow }
-		'4' { Invoke-AddWorkToDemoWorkflow }
-		'5' { Invoke-FinalMergeWorkflow }
-		'6' { Show-CleanupMenu }
-		'7' { Show-ToolsMenu }
-		'8' { exit }
-		default { Write-Warning 'Invalid selection. Please choose 1-8.' }
+		'3' { Show-DemoMenu }
+		'4' { Show-ToolsMenu }
+		'5' { exit }
+		default { Write-Warning 'Invalid selection. Please choose 1-5.' }
 	}
 }
