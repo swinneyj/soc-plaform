@@ -381,7 +381,6 @@ function Show-BranchGuide {
 
 function Show-BranchChooserHelp {
 	$currentBranch = Get-CurrentBranch
-	$localBranches = Get-LocalBranchNames
 	$localWorkBranches = @(Get-LocalWorkBranches)
 	$remoteWorkBranches = @(Get-RemoteWorkBranches)
 	$mergedLocalWorkBranches = @(Get-MergedLocalWorkBranches)
