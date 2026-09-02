@@ -686,7 +686,18 @@ def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     normalized = raw_text.replace("\r\n", "\n")
 
     for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
-        for match in re.finditer(re.escape(alias), normalized, flags=re.IGNORECASE):
+        # For certain aliases like User/Process, only treat them as field
+        # labels when they appear at the beginning of a line. This avoids
+        # mis-parsing natural-language sentences such as "The suspicious
+        # process executed by user has initiated connections to an external
+        # IP." where "process"/"user" are ordinary words, not headings.
+        alias_lower = alias.lower()
+        if canonical in {"user", "process"} and alias_lower in {"user", "process"}:
+            pattern = re.compile(r"(?m)^\s*" + re.escape(alias) + r"\b", flags=re.IGNORECASE)
+        else:
+            pattern = re.compile(re.escape(alias), flags=re.IGNORECASE)
+
+        for match in pattern.finditer(normalized):
             matches.append({
                 "start": match.start(),
                 "end": match.end(),
@@ -984,6 +995,16 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
         value = re.sub(r"\[\d+\]$", "", value).strip()
         fields[key] = value
 
+    # When the process field contains a long analytic sentence plus an
+    # embedded Windows executable path (common in Incident Review exports
+    # like "Outbound Connection - Rule ... c:\\windows\\...\\powershell.exe"),
+    # prefer the concrete executable path as the process value.
+    proc_val = (fields.get("process") or "").strip()
+    if proc_val:
+        win_path_match = re.search(r"[A-Za-z]:\\\\[^\s]+", proc_val)
+        if win_path_match:
+            fields["process"] = win_path_match.group(0)
+
     return fields
 
 
@@ -1170,16 +1191,21 @@ def split_pasted_notables(raw_text: str) -> List[str]:
         index for index, line in enumerate(lines) if notable_pattern.match(line)
     ]
 
-    # Fallback heuristic: use Title/Correlation Search labels only when the
-    # Notable pattern finds *no* headings at all. When there is exactly one
-    # "Notable" line, treat the entire paste as a single card instead of
-    # splitting on later Title/Correlation Search occurrences (which often
-    # appear in Event Details for the same card).
+    # Fallback heuristic: if we find *no* standalone "Notable" headings at
+    # all, we can optionally fall back to Title/Correlation Search labels.
+    # However, to avoid over-splitting a single closed Incident Review card
+    # into multiple segments (e.g., one for the card and one for a related
+    # underlying notable), we only treat this as a multi-notable paste when
+    # there are at least three such headings. For one or two headings, keep
+    # the entire paste as a single segment.
     if len(boundaries) == 0:
         heading_pattern = re.compile(r"^\s*(Title|Correlation Search)\b", re.IGNORECASE)
         boundaries = [
             index for index, line in enumerate(lines) if heading_pattern.match(line)
         ]
+        if len(boundaries) <= 2:
+            single = normalized.strip()
+            return [single] if single else []
 
         # Saved single-card artifacts often contain exactly one structured
         # "Correlation Search:" line and one later "Title:" line. That should
@@ -1316,14 +1342,12 @@ def parse_notable_timestamp(value: str):
 def build_historical_dedup_key(fields: Dict[str, str], sanitized_text: str) -> Optional[str]:
     """Build a stable key for deduplicating closed/historical pasted notables.
 
-    We rely on a combination of correlation search/title, notable time, host,
-    and the sanitized text body. This is intentionally conservative and only
-    used for historical (closed) notables, so a match strongly suggests the
-    same incident has already been stored.
+    We rely on a combination of correlation search/title, notable time, and
+    host. This is intentionally conservative and only used for historical
+    (closed) notables, so a match strongly suggests the same incident has
+    already been stored. Sanitized text is *not* included so that repeated
+    pastes of the same IR export (with different tokenization) still dedup.
     """
-    if not sanitized_text:
-        return None
-
     title = (fields.get("title") or "").strip()
     corr = (fields.get("correlation_search") or "").strip()
     time_val = (fields.get("time") or "").strip()
@@ -1333,9 +1357,7 @@ def build_historical_dedup_key(fields: Dict[str, str], sanitized_text: str) -> O
     if not anchor:
         return None
 
-    # Normalize whitespace in sanitized_text to reduce trivial diffs
-    normalized_text = re.sub(r"\s+", " ", sanitized_text).strip()
-    return "|".join([anchor, time_val, host_val, normalized_text]) or None
+    return "|".join([anchor, time_val, host_val]) or None
 
 
 def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dict[str, str], parsed_fields: Dict[str, str]) -> Dict[str, str]:
@@ -1388,6 +1410,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         payload.get("sanitized_text", ""),
         payload.get("history") or "",
     )
+    hidden_from_recent = payload.get("hidden_from_recent", False)
     return {
         "id": event.id,
         "promoted_case_id": payload.get("promoted_case_id"),
@@ -1413,6 +1436,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
         "fields": fields,
         "sanitized_text": payload.get("sanitized_text", ""),
         "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+        "hidden_from_recent": hidden_from_recent,
     }
 
 
@@ -1998,7 +2022,7 @@ def paste_notable(request: PastedNotableRequest):
                 if not payload.get("historical"):
                     continue
 
-                fields = payload.get("fields", {}) or {}
+                fields = payload.get("raw_fields") or payload.get("fields", {}) or {}
                 sanitized_text_existing = payload.get("sanitized_text", "")
                 key = build_historical_dedup_key(fields, sanitized_text_existing)
                 if key and key not in existing_historical:
@@ -2192,20 +2216,85 @@ def list_recent_notables(
 
         db = SessionLocal()
 
-        # Optional delete step using the same session
+        # Optional delete/hide step using the same session
         if delete_event_id is not None:
             event = db.query(SplunkEvent).filter(
                 SplunkEvent.id == delete_event_id,
                 SplunkEvent.sourcetype == "splunk:notable:pasted",
             ).first()
             if event:
-                db.delete(event)
+                try:
+                    payload = json.loads(event.raw) if event.raw else {}
+                except Exception:
+                    payload = {}
+
+                if payload.get("historical"):
+                    payload["hidden_from_recent"] = True
+                    event.raw = json.dumps(payload)
+                else:
+                    db.delete(event)
                 db.commit()
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
         ).order_by(SplunkEvent.ingested_at.desc()).limit(limit).all()
 
-        return [serialize_recent_notable(row) for row in rows]
+        serialized = [serialize_recent_notable(row) for row in rows]
+        visible = [n for n in serialized if not n.get("hidden_from_recent")]
+        return visible
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/db/notables/historical", tags=["Database"])
+def list_historical_notables(
+    limit: int = Query(20, ge=1, le=500),
+):
+    """List a high-level summary of historical (closed) pasted notables.
+
+    Returns a compact view suitable for quick baseline reference without
+    flooding the main triage grid.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        rows = (
+            db.query(SplunkEvent)
+            .filter(SplunkEvent.sourcetype == "splunk:notable:pasted")
+            .order_by(SplunkEvent.ingested_at.desc())
+            .limit(limit)
+            .all()
+        )
+
+        summaries = []
+        for event in rows:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
+
+            if not payload.get("historical"):
+                continue
+
+            fields = payload.get("fields", {}) or {}
+            summaries.append({
+                "id": event.id,
+                "title": fields.get("title") or fields.get("correlation_search") or event.source,
+                "correlation_search": fields.get("correlation_search"),
+                "host": fields.get("host") or event.host,
+                "user": fields.get("user") or fields.get("username"),
+                "urgency": fields.get("urgency"),
+                "disposition": fields.get("disposition"),
+                "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+            })
+
+        return summaries
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -2235,7 +2324,20 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        db.delete(event)
+        # For historical (closed) pasted notables, retain the underlying
+        # record in the database and simply hide it from the recent list so
+        # stats and closed-notables summaries remain accurate.
+        try:
+            payload = json.loads(event.raw) if event.raw else {}
+        except Exception:
+            payload = {}
+
+        if payload.get("historical"):
+            payload["hidden_from_recent"] = True
+            event.raw = json.dumps(payload)
+        else:
+            db.delete(event)
+
         db.commit()
 
         return {"success": True}
@@ -2299,7 +2401,18 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 if not event:
                     missing.append(eid)
                     continue
-                db.delete(event)
+
+                try:
+                    payload_raw = json.loads(event.raw) if event.raw else {}
+                except Exception:
+                    payload_raw = {}
+
+                if payload_raw.get("historical"):
+                    payload_raw["hidden_from_recent"] = True
+                    event.raw = json.dumps(payload_raw)
+                else:
+                    db.delete(event)
+
                 deleted.append(eid)
 
             db.commit()
@@ -2517,10 +2630,33 @@ def analyze_case(request: AnalyzeRequest):
         detection_rule = None
         if case.rule_id:
             detection_rule = db.query(ESCorrelationRule).filter(ESCorrelationRule.rule_id == case.rule_id).first()
+
+        # If rule_id is missing or could not be resolved, fall back to a
+        # relaxed rule_name match similar to the triage promotion logic so
+        # Suspicious LotL and related rules still map to their canonical
+        # ESCorrelationRule entries even when the case's rule_name includes
+        # wrapper text like "Endpoint - <Rule Name> - Rule".
         if not detection_rule and case.rule_name:
-            detection_rule = db.query(ESCorrelationRule).filter(
-                ESCorrelationRule.rule_name.ilike(case.rule_name.strip())
-            ).first()
+            anchor = case.rule_name.strip().lower()
+            if anchor:
+                rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
+
+                # Prefer exact rule_name match first
+                for r in rules:
+                    name = (r.rule_name or "").strip().lower()
+                    if name and name == anchor:
+                        detection_rule = r
+                        break
+
+                # Fallback: relaxed contains-based match
+                if not detection_rule:
+                    for r in rules:
+                        name = (r.rule_name or "").strip().lower()
+                        if not name:
+                            continue
+                        if anchor in name or name in anchor:
+                            detection_rule = r
+                            break
 
         # Load pasted-notable events, baselines, and supportive queries
         pasted_events = db.query(SplunkEvent).filter(
