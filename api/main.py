@@ -512,6 +512,8 @@ NOTABLE_FIELD_ALIASES = [
     ("Description", "description"),
     ("Additional FieldsValue", "additional_fields_value"),
     ("Additional Fields Value", "additional_fields_value"),
+    ("Added Account", "added_account"),
+    ("Actor", "actor"),
     ("Coorelation Search", "correlation_search"),
     ("Correlation Search", "correlation_search"),
     ("Security Domain", "security_domain"),
@@ -586,6 +588,8 @@ NOTABLE_FIELD_LABELS = {
     "actions": "Actions",
     "action": "Action",
     "additional_fields_value": "Additional FieldsValue",
+    "added_account": "Added Account",
+    "actor": "Actor",
     "value": "Value",
     "file_name": "File Name",
     "process": "Process",
@@ -777,12 +781,35 @@ def infer_notable_fields_from_description(fields: Dict[str, str]) -> Dict[str, s
         if user_match:
             fields["username"] = user_match.group(1).strip()
 
+    existing_user = (fields.get("user") or fields.get("username") or "").strip()
+    if existing_user and (" experienced " in existing_user.lower() or "observed source ips" in existing_user.lower()):
+        acct_match = re.search(r"account\s+([^\s\.]+)", existing_user, flags=re.IGNORECASE)
+        if acct_match:
+            account_value = acct_match.group(1).strip()
+            fields["user"] = account_value
+            fields["username"] = account_value
+
+    if not (fields.get("source_ip") or "").strip():
+        src_match = re.search(r"Observed\s+Source\s+IPs?:\s*([^\.\s]+)", description, flags=re.IGNORECASE)
+        if src_match:
+            fields["source_ip"] = src_match.group(1).strip()
+
     if not fields.get("host"):
         host_match = re.search(r"\bon\s+([^\s\[]+)\s*\[", description, flags=re.IGNORECASE)
         if host_match:
             host_value = host_match.group(1).strip()
             if "$" not in host_value:
                 fields["host"] = host_value
+
+    if not fields.get("host"):
+        host_match = re.search(r"\bon\s+host\s+([^\s\.]+(?:\.[^\s\.]+)*)", description, flags=re.IGNORECASE)
+        if host_match:
+            host_value = host_match.group(1).strip().rstrip('.')
+            if host_value:
+                fields["host"] = host_value
+
+    if not fields.get("destination") and fields.get("host"):
+        fields["destination"] = fields["host"]
 
     if not fields.get("process"):
         child_match = re.search(r"spawned\s+([^\n]+?)\s*\(parent:", description, flags=re.IGNORECASE)
@@ -799,6 +826,24 @@ def infer_notable_fields_from_description(fields: Dict[str, str]) -> Dict[str, s
             parent_basename = re.split(r"[\\/]", parent_value)[-1].strip()
             if parent_basename:
                 fields["parent_process"] = parent_basename
+
+    if not fields.get("actor"):
+        actor_match = re.search(
+            r"The\s+account\s+([^\s\(]+)(?:\s*\([^\)]*\))?\s+added\s+",
+            description,
+            flags=re.IGNORECASE,
+        )
+        if actor_match:
+            fields["actor"] = actor_match.group(1).strip()
+
+    if not fields.get("added_account"):
+        added_match = re.search(
+            r"\sadded\s+(.+?)\s+to\s+the\s+administrators\s+group",
+            description,
+            flags=re.IGNORECASE,
+        )
+        if added_match:
+            fields["added_account"] = added_match.group(1).strip()
 
     return fields
 
@@ -860,6 +905,24 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
                     fields[target_key] = suffix
                 current_value = fields[source_key]
                 break
+
+    additional_fields = (fields.get("additional_fields_value") or "").strip()
+    if additional_fields:
+        if not fields.get("actor"):
+            actor_match = re.search(r"ActionActor\s*([^\s]+)", additional_fields, flags=re.IGNORECASE)
+            if actor_match:
+                fields["actor"] = actor_match.group(1).strip()
+
+        if not fields.get("added_account"):
+            added_match = re.search(r"Added Account\s*(.+?)(?=\s*Category(?:Other)?\b|\s*Zero Trust\b|$)", additional_fields, flags=re.IGNORECASE)
+            if added_match:
+                fields["added_account"] = added_match.group(1).strip()
+
+    dest_val = (fields.get("destination") or "").strip()
+    if not dest_val or dest_val.lower() in {"business", "category", "dns", "expected", "nt", "pci"}:
+        host_from_desc = (fields.get("host") or "").strip()
+        if host_from_desc:
+            fields["destination"] = host_from_desc
 
     for key in ["host", "source_ip", "destination", "destination_ip"]:
         entity_value = (fields.get(key) or "").strip()
@@ -990,21 +1053,34 @@ def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_
     correlation_search = (fields.get("correlation_search") or "").strip()
     time_value = (fields.get("time") or "").strip()
     primary_entity_keys = ["host", "destination", "destination_ip", "source_ip", "user", "username", "process", "parent_process"]
+    identity_context_keys = ["user", "username", "process", "parent_process", "actor", "added_account"]
     clean_primary_entity_keys = [
         key for key in primary_entity_keys if is_usable_primary_entity(key, (fields.get(key) or "").strip())
     ]
     has_primary_entity = bool(clean_primary_entity_keys)
+    has_identity_context = any((fields.get(key) or "").strip() for key in identity_context_keys)
     has_context = bool(history_text.strip())
     has_status_bundle = any((fields.get(key) or "").strip() for key in ["disposition", "status", "severity", "urgency"])
     has_detail = bool((fields.get("description") or "").strip() or (sanitized_text or "").strip())
+    description = (fields.get("description") or "").strip()
+    signature = (fields.get("signature") or "").strip()
+    ssl_errors = (fields.get("ssl_errors") or "").strip()
+    symptom_text = " ".join([title, correlation_search, description, signature, ssl_errors])
+    is_symptom_only_network_case = bool(
+        re.search(r"\b(ssl|tls|cipher|handshake|scan(?:ning)?|enumeration|misconfigured client|connection errors?)\b", symptom_text, flags=re.IGNORECASE)
+    )
 
     malformed_keys = []
-    for key in ["correlation_search", "host", "destination", "source_ip", "destination_ip", "user", "username", "severity", "urgency", "signature"]:
+    for key in ["correlation_search", "host", "destination", "source_ip", "destination_ip", "user", "username", "severity", "urgency", "signature", "time"]:
         value = (fields.get(key) or "").strip()
         if not value:
             continue
         if key in primary_entity_keys:
             if not is_usable_primary_entity(key, value):
+                malformed_keys.append(key)
+            continue
+        if key == "time":
+            if re.search(r"\b(HOST|IPV4|USER|REDACTED)_[A-Za-z0-9]+", value):
                 malformed_keys.append(key)
             continue
         if any(token in value for token in ["[0](http", "Risk Score", "SSL Errors", "Signature"]) or "####" in value:
@@ -1044,8 +1120,13 @@ def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_
         score -= min(35, 10 + (5 * len(set(malformed_keys))))
         missing.append("clean field boundaries")
 
+    needs_confirmatory_context = is_symptom_only_network_case and not has_identity_context
+    if needs_confirmatory_context:
+        score -= 20
+        missing.append("confirmatory context")
+
     generic_title = not title or title.strip().lower() == "pasted splunk notable"
-    hard_trigger = generic_title or not time_value or not has_primary_entity or bool(malformed_keys)
+    hard_trigger = generic_title or not time_value or not has_primary_entity or bool(malformed_keys) or needs_confirmatory_context
 
     if score >= 70 and not hard_trigger:
         mode = "normal"
@@ -1099,6 +1180,15 @@ def split_pasted_notables(raw_text: str) -> List[str]:
         boundaries = [
             index for index, line in enumerate(lines) if heading_pattern.match(line)
         ]
+
+        # Saved single-card artifacts often contain exactly one structured
+        # "Correlation Search:" line and one later "Title:" line. That should
+        # stay one notable instead of being split into two fragments.
+        title_count = sum(1 for line in lines if re.match(r"^\s*Title\b", line, flags=re.IGNORECASE))
+        corr_count = sum(1 for line in lines if re.match(r"^\s*(Coorelation Search|Correlation Search)\b", line, flags=re.IGNORECASE))
+        if title_count <= 1 and corr_count <= 1:
+            single = normalized.strip()
+            return [single] if single else []
 
     # If we still didn't find multiple headings, treat the whole paste as a single notable.
     if len(boundaries) <= 1:
