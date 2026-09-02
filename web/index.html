@@ -201,7 +201,7 @@
                     </button>
                 </div>
 
-                <div class="grid grid-cols-4 gap-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
                     <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
                         <p class="text-gray-400 text-sm">Total Cases</p>
                         <p class="text-3xl font-bold text-blue-400">{{ dbStats.triage_cases }}</p>
@@ -218,19 +218,8 @@
                         <p class="text-gray-400 text-sm">Benign</p>
                         <p class="text-3xl font-bold text-green-400">{{ dbStats.verdict_breakdown?.benign || 0 }}</p>
                     </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                     <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
-                        <p class="text-gray-400 text-sm">Pasted Notables (Total)</p>
-                        <p class="text-3xl font-bold text-blue-300">{{ dbStats.pasted_notables_total || 0 }}</p>
-                    </div>
-                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
-                        <p class="text-gray-400 text-sm">Open Pasted Notables</p>
-                        <p class="text-3xl font-bold text-emerald-300">{{ dbStats.pasted_notables_open || 0 }}</p>
-                    </div>
-                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
-                        <p class="text-gray-400 text-sm">Historical (Closed) Pasted Notables</p>
+                        <p class="text-gray-400 text-sm">Closed Notables</p>
                         <p class="text-3xl font-bold text-amber-300">{{ dbStats.pasted_notables_historical || 0 }}</p>
                     </div>
                 </div>
@@ -285,18 +274,28 @@
                     </div>
 
                     <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
-                        <div class="flex items-center justify-between">
-                            <div>
+                        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-4">
+                            <div class="space-y-1">
                                 <h3 class="text-xl font-bold text-blue-400">Recent Pasted Notables</h3>
-                                <p class="text-sm text-gray-400">Sanitized notable records saved from copy/paste workflow. Owner and contact fields are surfaced here when present.</p>
+                                <p class="text-xs text-gray-400 max-w-xl">
+                                    Sanitized notable records saved from copy/paste workflow. Owner and contact fields are surfaced here when present.
+                                </p>
                             </div>
-                            <div class="flex items-center space-x-3">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <label class="flex items-center text-[11px] text-gray-300 space-x-1">
+                                    <input
+                                        type="checkbox"
+                                        :checked="areAllPastedNotablesSelected()"
+                                        @change="toggleSelectAllPastedNotables($event)"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span class="whitespace-nowrap">Select all</span>
+                                </label>
                                 <label class="flex items-center text-[11px] text-gray-300 space-x-1">
                                     <input
                                         type="checkbox"
                                         v-model="showOpenNotablesOnly"
                                         class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
-                                    <span>Show open pasted notables only</span>
+                                    <span class="whitespace-nowrap">Show open pasted notables only</span>
                                 </label>
                                 <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
                                 <button
@@ -304,6 +303,12 @@
                                     :disabled="!selectedNotableIds.length"
                                     class="px-3 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
                                     Delete selected
+                                </button>
+                                <button
+                                    @click="promoteAllOpenPastedNotables"
+                                    :disabled="bulkPromoteNotablesRunning || !filteredRecentNotables.some(n => !n.historical && !n.promoted_case_id)"
+                                    class="px-3 py-2 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    {{ bulkPromoteNotablesRunning ? 'Promoting all...' : 'Promote all open to triage' }}
                                 </button>
                             </div>
                         </div>
@@ -403,6 +408,58 @@
                     </div>
                 </div>
 
+                <div class="flex items-center justify-between mt-6">
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-300">Closed Notables Summary</h3>
+                        <p class="text-xs text-gray-500">High-level view of closed historical notables for reference.</p>
+                    </div>
+                    <button
+                        @click="historicalNotablesVisible = !historicalNotablesVisible; if (historicalNotablesVisible && !historicalNotables.length) { loadHistoricalNotables(); }"
+                        class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">
+                        {{ historicalNotablesVisible ? 'Hide closed notables' : 'Show closed notables' }}
+                    </button>
+                </div>
+
+                <div v-if="historicalNotablesVisible" class="bg-gray-800 border border-gray-700 rounded-lg p-4 mt-3">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-lg font-bold text-blue-400">Closed Notables</h3>
+                            <p class="text-xs text-gray-400">Compact summary of closed notables for quick baseline reference.</p>
+                        </div>
+                        <button @click="loadHistoricalNotables" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                    </div>
+                    <div v-if="!historicalNotables.length" class="text-gray-500 text-xs">No historical pasted notables loaded yet.</div>
+                    <div v-else class="overflow-x-auto">
+                        <table class="min-w-full text-xs text-gray-200">
+                            <thead>
+                                <tr class="border-b border-gray-700 text-gray-400">
+                                    <th class="px-2 py-1 text-left">ID</th>
+                                    <th class="px-2 py-1 text-left">Title / Rule</th>
+                                    <th class="px-2 py-1 text-left">Host</th>
+                                    <th class="px-2 py-1 text-left">User</th>
+                                    <th class="px-2 py-1 text-left">Urgency</th>
+                                    <th class="px-2 py-1 text-left">Disposition</th>
+                                    <th class="px-2 py-1 text-left">Saved</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="item in historicalNotables" :key="item.id" class="border-b border-gray-800">
+                                    <td class="px-2 py-1 align-top">{{ item.id }}</td>
+                                    <td class="px-2 py-1 align-top">
+                                        <div class="font-semibold text-blue-300">{{ item.title || 'Untitled notable' }}</div>
+                                        <div v-if="item.correlation_search" class="text-[11px] text-gray-400">{{ item.correlation_search }}</div>
+                                    </td>
+                                    <td class="px-2 py-1 align-top">{{ item.host || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.user || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.urgency || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.disposition || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.saved_at ? new Date(item.saved_at).toLocaleString() : 'n/a' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
                 <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
                     <div class="flex space-x-2 mb-4">
                         <input 
@@ -416,6 +473,14 @@
                             <option value="suspicious">Suspicious</option>
                             <option value="malicious">Malicious</option>
                         </select>
+                        <label class="flex items-center text-xs text-gray-300 space-x-1">
+                            <input
+                                type="checkbox"
+                                :checked="areAllTriageCasesSelected()"
+                                @change="toggleSelectAllTriageCases($event)"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
+                            <span>Select all</span>
+                        </label>
                         <label class="flex items-center text-xs text-gray-300 space-x-1">
                             <input
                                 type="checkbox"
@@ -1618,11 +1683,12 @@
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
-                    triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
                     triageNotableDetails: {},
                     selectedTriageCaseIds: [],
                     showOpenNotablesOnly: true,
+                    historicalNotablesVisible: false,
+                    historicalNotables: [],
                     notablePasteText: '',
                     notableRedactionEnabled: true,
                     notableHistorical: false,
@@ -1630,6 +1696,7 @@
                     notablePasteResult: null,
                     notablePromotingId: null,
                     selectedNotableIds: [],
+                    bulkPromoteNotablesRunning: false,
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
@@ -1915,13 +1982,52 @@
                         }
                     }
 
-                    if (countHeadings <= 0) {
+                    if (countHeadings <= 2) {
                         return 1;
                     }
                     return countHeadings;
                 }
             },
             methods: {
+                async loadHistoricalNotables() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables/historical', { params: { limit: 20 } });
+                        this.historicalNotables = res.data || [];
+                    } catch (err) {
+                        console.error('Failed to load historical pasted notables:', err);
+                        this.historicalNotables = [];
+                    }
+                },
+                areAllPastedNotablesSelected() {
+                    const items = this.filteredRecentNotables;
+                    if (!items.length) {
+                        return false;
+                    }
+                    return items.every(n => this.selectedNotableIds.includes(n.id));
+                },
+                toggleSelectAllPastedNotables(event) {
+                    const checked = event.target.checked;
+                    if (checked) {
+                        this.selectedNotableIds = this.filteredRecentNotables.map(n => n.id);
+                    } else {
+                        this.selectedNotableIds = [];
+                    }
+                },
+                areAllTriageCasesSelected() {
+                    const items = this.filteredTriageData;
+                    if (!items.length) {
+                        return false;
+                    }
+                    return items.every(c => this.selectedTriageCaseIds.includes(c.case_id));
+                },
+                toggleSelectAllTriageCases(event) {
+                    const checked = event.target.checked;
+                    if (checked) {
+                        this.selectedTriageCaseIds = this.filteredTriageData.map(c => c.case_id);
+                    } else {
+                        this.selectedTriageCaseIds = [];
+                    }
+                },
                 getNotablePocSummary(notable) {
                     const fields = notable?.fields || notable || {};
                     const pocEntries = [];
@@ -2059,14 +2165,8 @@
                         this.notablePasteText = '';
                         this.loadRecentNotables();
                         this.loadDbStats();
-                        const count = res.data.segment_count || 1;
-                        if (count > 1) {
-                            alert('Saved ' + count + ' notables from this paste');
-                        } else {
-                            alert('Pasted notable saved and sanitized successfully');
-                        }
                     } catch (err) {
-                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                        console.error('Failed to save pasted notable:', err.response?.data?.detail || err.message);
                     } finally {
                         this.notablePasteSaving = false;
                     }
@@ -2108,7 +2208,7 @@
                 },
                 async promoteNotableToTriage(notable) {
                     if (notable && notable.historical && !notable.promoted_case_id) {
-                        alert('Closed (historical) pasted notables are already saved to the database for baseline comparison and cannot be promoted to triage.');
+                        console.warn('Historical pasted notables are not promoted to triage.');
                         return;
                     }
                     this.notablePromotingId = notable.id;
@@ -2118,14 +2218,38 @@
                         await this.loadTriageData();
                         await this.loadAnalysisCases();
                         await this.loadDbStats();
-                        const caseId = res.data.case_id;
-                        if (caseId) {
-                            alert('Notable promoted to triage as ' + caseId);
-                        }
                     } catch (err) {
-                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                        console.error('Failed to promote notable to triage:', err.response?.data?.detail || err.message);
                     } finally {
                         this.notablePromotingId = null;
+                    }
+                },
+                async promoteAllOpenPastedNotables() {
+                    if (this.bulkPromoteNotablesRunning) {
+                        return;
+                    }
+
+                    const candidates = this.filteredRecentNotables.filter(n => !n.historical && !n.promoted_case_id);
+                    if (!candidates.length) {
+                        return;
+                    }
+
+                    this.bulkPromoteNotablesRunning = true;
+                    try {
+                        for (const notable of candidates) {
+                            try {
+                                await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                            } catch (err) {
+                                console.error('Failed to promote notable', notable.id, ':', err.response?.data?.detail || err.message);
+                            }
+                        }
+
+                        await this.loadRecentNotables();
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } finally {
+                        this.bulkPromoteNotablesRunning = false;
                     }
                 },
                 jumpToTriageCase(caseId) {
