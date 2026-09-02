@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
+from types import SimpleNamespace
 import os
 import sys
 import json
@@ -554,6 +555,10 @@ NOTABLE_FIELD_ALIASES = [
     ("User Category", "user_category"),
     ("User", "user"),
     ("Value", "value"),
+    # Additional Fields block can appear as "Additional Fields\tValue\tAction"
+    # in some export formats; treat the heading itself as the label so the
+    # whole block is captured into additional_fields_value.
+    ("Additional Fields", "additional_fields_value"),
 ]
 
 NOTABLE_FIELD_LABELS = {
@@ -919,6 +924,27 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
 
     additional_fields = (fields.get("additional_fields_value") or "").strip()
     if additional_fields:
+        # Some Incident Review exports only expose the glued
+        # "Destination <host><score>Risk Score" pattern inside the
+        # Additional Fields block, while the parsed destination value has
+        # already been truncated to "<host><score>". Use the additional
+        # fields text to safely peel the score digit back off when it
+        # matches the numeric risk_score.
+        dest_val_af = (fields.get("destination") or "").strip()
+        risk_val_af = (fields.get("risk_score") or "").strip()
+        if dest_val_af and risk_val_af and risk_val_af.isdigit() and len(risk_val_af) == 1:
+            # Look for the exact "Destination <dest_val>Risk Score" glue
+            # pattern in the Additional Fields text.
+            pattern = re.compile(
+                r"Destination\s+" + re.escape(dest_val_af) + r"\s*Risk Score",
+                flags=re.IGNORECASE,
+            )
+            if pattern.search(additional_fields):
+                # If the last character of dest_val matches the
+                # risk_score digit, drop it to recover the host.
+                if dest_val_af[-1] == risk_val_af:
+                    fields["destination"] = dest_val_af[:-1]
+
         if not fields.get("actor"):
             actor_match = re.search(r"ActionActor\s*([^\s]+)", additional_fields, flags=re.IGNORECASE)
             if actor_match:
@@ -935,6 +961,29 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
         if host_from_desc:
             fields["destination"] = host_from_desc
 
+    # Handle Destination + Risk Score glue *before* generic tail trimming
+    # so we can still see the "Risk Score" label when present.
+    dest_val = fields.get("destination") or ""
+    lower_dest = dest_val.lower()
+    rs_idx = lower_dest.find("risk score")
+    if rs_idx != -1:
+        risk_val = (fields.get("risk_score") or "").strip()
+
+        # Find the last non-space character immediately before the
+        # "Risk Score" label.
+        lookback = rs_idx - 1
+        while lookback >= 0 and dest_val[lookback].isspace():
+            lookback -= 1
+
+        host_part = dest_val[:rs_idx]
+        if lookback >= 0 and dest_val[lookback].isdigit() and risk_val and risk_val.isdigit() and dest_val[lookback] == risk_val:
+            # Drop the score digit from the host portion.
+            host_part = dest_val[:lookback]
+
+        fields["destination"] = host_part.strip()
+
+    # Now that Destination is cleaned up, apply generic glued-tail trimming
+    # to host/destination/ip fields.
     for key in ["host", "source_ip", "destination", "destination_ip"]:
         entity_value = (fields.get(key) or "").strip()
         if entity_value:
@@ -967,13 +1016,6 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
             cleaned = value[:idx].strip()
             fields[key] = cleaned
 
-    # If destination still contains a concatenated "Risk Score" label,
-    # trim it off to recover the hostname.
-    dest_val = fields.get("destination") or ""
-    rs_idx = dest_val.lower().find("risk score")
-    if rs_idx != -1:
-        fields["destination"] = dest_val[:rs_idx].strip()
-
     # Defensive fallback: if Destination looks like a hostname followed by a
     # bare integer (e.g., "NDC45-790 80" where 80 is actually a risk score
     # or some other numeric suffix), drop the trailing number and keep just
@@ -984,6 +1026,19 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     host_num_match = re.match(r"^([A-Za-z0-9._-]+)\s+\d{1,3}$", stripped)
     if host_num_match:
         fields["destination"] = host_num_match.group(1)
+
+    # Rule-aware glue fix: for Suspicious LotL outbound notables, some
+    # exports glue the risk score digit directly onto the hostname in the
+    # Destination field (e.g., "NDC45-790" with Risk Score 0 and a header
+    # line of "NDC45-79"). When the rule identity indicates the LotL
+    # outbound family and the last character of the destination matches the
+    # single-digit risk_score, treat that digit as the score and peel it off
+    # the hostname.
+    corr_anchor = (fields.get("correlation_search") or fields.get("title") or "").lower()
+    risk_val = (fields.get("risk_score") or "").strip()
+    if stripped and risk_val and len(risk_val) == 1 and stripped.endswith(risk_val):
+        if "suspicious lotl" in corr_anchor or "lotl_outbound_connection" in corr_anchor:
+            fields["destination"] = stripped[:-1]
 
     # If host/source/destination IP values were masked, keep them if they are
     # still single-token placeholders, but reject obviously merged artifacts.
@@ -1122,10 +1177,12 @@ def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_
     else:
         missing.append("primary entity")
 
+    # Treat history/analyst context as an optional bonus signal: if present,
+    # boost the score slightly, but do not flag its absence as a "missing
+    # anchor". This avoids noisy "history or analyst context" warnings for
+    # clean, first-time notables while still rewarding richer pastes.
     if has_context:
         score += 10
-    else:
-        missing.append("history or analyst context")
 
     if has_status_bundle:
         score += 10
@@ -2324,16 +2381,25 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        # For historical (closed) pasted notables, retain the underlying
-        # record in the database and simply hide it from the recent list so
-        # stats and closed-notables summaries remain accurate.
+        # For historical (closed) or triaged pasted notables, retain the
+        # underlying record in the database and simply hide it from the
+        # recent list so stats and triage cases retain full context.
+        # Only un-promoted, non-historical drafts are actually deleted.
         try:
             payload = json.loads(event.raw) if event.raw else {}
         except Exception:
             payload = {}
 
-        if payload.get("historical"):
+        is_historical = bool(payload.get("historical"))
+        promoted_case_id = payload.get("promoted_case_id")
+        is_triaged = bool(promoted_case_id)
+
+        if is_historical or is_triaged:
             payload["hidden_from_recent"] = True
+            # Optional marker so future maintenance jobs know this was
+            # protected from deletion because it backs a triage case.
+            if is_triaged:
+                payload["protected_triaged"] = True
             event.raw = json.dumps(payload)
         else:
             db.delete(event)
@@ -2407,8 +2473,14 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                if payload_raw.get("historical"):
+                is_historical = bool(payload_raw.get("historical"))
+                promoted_case_id = payload_raw.get("promoted_case_id")
+                is_triaged = bool(promoted_case_id)
+
+                if is_historical or is_triaged:
                     payload_raw["hidden_from_recent"] = True
+                    if is_triaged:
+                        payload_raw["protected_triaged"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
                     db.delete(event)
@@ -2631,27 +2703,39 @@ def analyze_case(request: AnalyzeRequest):
         if case.rule_id:
             detection_rule = db.query(ESCorrelationRule).filter(ESCorrelationRule.rule_id == case.rule_id).first()
 
+        # Helper to normalize wrapped ES rule labels like
+        # "Endpoint - <Rule Name> - Rule" down to a common core so that
+        # truncated correlation_search values (e.g. "Endpoint - Suspicious LotL")
+        # still map to the canonical ESCorrelationRule entry
+        # "Suspicious LotL Process Outbound Connection".
+        def _normalize_rule_label(text: str) -> str:
+            s = (text or "").lower().strip()
+            # Drop common wrapper prefixes/suffixes used in ES UI labels
+            s = re.sub(r"^endpoint\s*-\s*", "", s)
+            s = re.sub(r"\s*-\s*rule$", "", s)
+            return s
+
         # If rule_id is missing or could not be resolved, fall back to a
-        # relaxed rule_name match similar to the triage promotion logic so
+        # normalized rule_name match similar to the triage promotion logic so
         # Suspicious LotL and related rules still map to their canonical
-        # ESCorrelationRule entries even when the case's rule_name includes
-        # wrapper text like "Endpoint - <Rule Name> - Rule".
+        # ESCorrelationRule entries even when the case's rule_name is a
+        # truncated wrapper label.
         if not detection_rule and case.rule_name:
-            anchor = case.rule_name.strip().lower()
+            anchor = _normalize_rule_label(case.rule_name)
             if anchor:
                 rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
 
-                # Prefer exact rule_name match first
+                # Prefer exact normalized rule_name match first
                 for r in rules:
-                    name = (r.rule_name or "").strip().lower()
+                    name = _normalize_rule_label(r.rule_name or "")
                     if name and name == anchor:
                         detection_rule = r
                         break
 
-                # Fallback: relaxed contains-based match
+                # Fallback: relaxed contains-based match on normalized labels
                 if not detection_rule:
                     for r in rules:
-                        name = (r.rule_name or "").strip().lower()
+                        name = _normalize_rule_label(r.rule_name or "")
                         if not name:
                             continue
                         if anchor in name or name in anchor:
@@ -2754,7 +2838,7 @@ def analyze_case(request: AnalyzeRequest):
         if detection_rule:
             rule_id = (detection_rule.rule_id or "").strip()
 
-            # Base queries explicitly keyed to this rule_id
+            # Base queries explicitly keyed to this rule_id from the database
             supportive_query_defs.extend(
                 db.query(SupportiveQuery).filter(SupportiveQuery.rule_id == rule_id).all()
             )
@@ -2769,6 +2853,39 @@ def analyze_case(request: AnalyzeRequest):
                 for q in extras:
                     if q.title not in existing_titles:
                         supportive_query_defs.append(q)
+
+            # Fallback: if no DB-backed supportive queries exist for this rule,
+            # look for static definitions in supportive_rules.json so that
+            # "main" SPL still appears alongside phase-2 queries.
+            if not supportive_query_defs:
+                try:
+                    platform_root = get_platform_root()
+                    supportive_path = os.path.join(platform_root, "supportive_rules.json")
+                    if os.path.exists(supportive_path):
+                        with open(supportive_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        for entry in data.get("rules", []):
+                            if (entry.get("rule_id") or "").strip() == rule_id:
+                                for sq in entry.get("supportive_queries", []):
+                                    spl_value = (sq.get("spl_query") or "").strip()
+                                    if not spl_value:
+                                        continue
+                                    title = (sq.get("title") or "").strip() or "Supportive Query"
+                                    desc = sq.get("description") or ""
+                                    supportive_query_defs.append(
+                                        SimpleNamespace(
+                                            id=None,
+                                            rule_id=rule_id,
+                                            title=title,
+                                            description=desc,
+                                            spl_query=spl_value,
+                                        )
+                                    )
+                                break
+                except Exception:
+                    # Best-effort only; if anything goes wrong we fall back to
+                    # having no static supportive queries for this rule.
+                    pass
 
         db.close()
 
@@ -3389,6 +3506,38 @@ def list_rules():
                 "spl_query": sq.spl_query,
             })
 
+        # Best-effort static fallback: load supportive_rules.json so rules
+        # without DB-backed SupportiveQuery rows still surface their
+        # "main" SPL templates in the UI.
+        static_supportive_by_rule: Dict[str, List[Dict[str, Any]]] = {}
+        try:
+            platform_root = get_platform_root()
+            supportive_path = os.path.join(platform_root, "supportive_rules.json")
+            if os.path.exists(supportive_path):
+                with open(supportive_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                for entry in data.get("rules", []):
+                    rule_key = (entry.get("rule_id") or "").strip()
+                    if not rule_key:
+                        continue
+                    items: List[Dict[str, Any]] = []
+                    for sq in entry.get("supportive_queries", []):
+                        spl_value = (sq.get("spl_query") or "").strip()
+                        if not spl_value:
+                            continue
+                        title = (sq.get("title") or "").strip() or "Supportive Query"
+                        desc = sq.get("description") or ""
+                        items.append({
+                            "id": None,
+                            "title": title,
+                            "description": desc,
+                            "spl_query": spl_value,
+                        })
+                    if items:
+                        static_supportive_by_rule[rule_key] = items
+        except Exception:
+            static_supportive_by_rule = {}
+
         def supportive_for_rule(rule_obj) -> List[Dict[str, Any]]:
             # Return supportive queries for a given rule.
             # In addition to queries explicitly keyed to this rule_id, we
@@ -3396,14 +3545,14 @@ def list_rules():
             # rule whose ID starts with ``lotl_`` automatically inherits the
             # supportive queries defined under the canonical
             # ``lotl_outbound_connection`` family, unless duplicates exist.
-            # This lets future LotL notables reuse the same investigation
-            # SPL without duplicating query definitions in the database.
+            # When no DB-backed queries exist, we fall back to static
+            # definitions in supportive_rules.json so "main" SPL still
+            # appears in the UI.
 
             rule_id = (rule_obj.rule_id or "").strip()
             base = list(by_rule.get(rule_id, []))
 
-            # LotL family sharing: treat any "lotl_*" rule as part of the
-            # same investigative family and reuse the canonical queries.
+            # LotL family sharing using DB-backed queries first.
             canonical_lotl_id = "lotl_outbound_connection"
             if rule_id.startswith("lotl_") and rule_id != canonical_lotl_id:
                 extras = by_rule.get(canonical_lotl_id, []) or []
@@ -3411,6 +3560,18 @@ def list_rules():
                 for q in extras:
                     if q["title"] not in existing_titles:
                         base.append(q)
+
+            # Static fallback when no DB-backed queries exist.
+            if not base:
+                base = list(static_supportive_by_rule.get(rule_id, []))
+
+                # LotL family sharing for static templates as well.
+                if rule_id.startswith("lotl_") and rule_id != canonical_lotl_id:
+                    extras = static_supportive_by_rule.get(canonical_lotl_id, []) or []
+                    existing_titles = {q["title"] for q in base}
+                    for q in extras:
+                        if q["title"] not in existing_titles:
+                            base.append(q)
 
             return base
 
