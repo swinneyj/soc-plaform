@@ -1517,16 +1517,41 @@ def db_stats():
         triage_count = db.query(TriageResult).count()
         splunk_count = db.query(SplunkEvent).count()
         analysis_count = db.query(AnalysisResult).count()
+        # Derive verdict breakdown for triage cases
         verdict_rows = db.query(
             TriageResult.verdict,
             func.count(TriageResult.verdict)
         ).group_by(TriageResult.verdict).all()
+
+        # Derive counts for pasted notables, broken down by historical flag
+        pasted_events = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).all()
+
+        pasted_notables_total = len(pasted_events)
+        pasted_notables_historical = 0
+        pasted_notables_open = 0
+
+        for event in pasted_events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                payload = {}
+
+            if payload.get("historical"):
+                pasted_notables_historical += 1
+            else:
+                pasted_notables_open += 1
+
         db.close()
         return {
             "triage_cases": triage_count,
             "splunk_events": splunk_count,
             "analyses": analysis_count,
-            "verdict_breakdown": {row[0]: row[1] for row in verdict_rows}
+            "verdict_breakdown": {row[0]: row[1] for row in verdict_rows},
+            "pasted_notables_total": pasted_notables_total,
+            "pasted_notables_open": pasted_notables_open,
+            "pasted_notables_historical": pasted_notables_historical,
         }
     except Exception as e:
         return {"triage_cases": 0, "error": str(e)}
