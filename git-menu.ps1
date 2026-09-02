@@ -186,6 +186,36 @@ function Get-MergedLocalWorkBranches {
 	)
 }
 
+function Get-RemoteCleanupCandidates {
+	$currentBranch = Get-CurrentBranch
+	$mergedLocalWorkBranches = @(Get-MergedLocalWorkBranches)
+	$remoteWorkBranches = @(Get-RemoteWorkBranches)
+
+	$options = @()
+	foreach ($branch in $remoteWorkBranches) {
+		if ($branch -eq $currentBranch) {
+			continue
+		}
+
+		if ((Test-LocalBranchExists -BranchName $branch) -and ($mergedLocalWorkBranches -notcontains $branch)) {
+			continue
+		}
+
+		$description = if (Test-LocalBranchExists -BranchName $branch) {
+			'merged locally too'
+		} else {
+			'remote only'
+		}
+
+		$options += [pscustomobject]@{
+			Name = $branch
+			Description = $description
+		}
+	}
+
+	return @($options | Sort-Object Name)
+}
+
 function Get-RecommendedWorkBranch {
 	$currentBranch = Get-CurrentBranch
 	$localWorkBranches = @(Get-LocalWorkBranches)
@@ -454,21 +484,8 @@ function Show-BranchChooserHelp {
 }
 
 function Show-CleanupCandidates {
-	$currentBranch = Get-CurrentBranch
-	$mergedIntoMain = @(
-		git for-each-ref --format='%(refname:short)' --merged refs/heads/main refs/heads |
-		Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-	)
-
-	$localCleanupCandidates = @(
-		$mergedIntoMain |
-		Where-Object {
-			$_ -ne 'main' -and
-			$_ -ne $DemoBranch -and
-			$_ -ne $currentBranch
-		} |
-		Sort-Object
-	)
+	$localCleanupCandidates = @(Get-MergedLocalWorkBranches)
+	$remoteCleanupCandidates = @(Get-RemoteCleanupCandidates)
 
 	Write-Host "`n--- Cleanup Ideas ---" -ForegroundColor Yellow
 	Write-Host 'These local branches are already merged into main.' -ForegroundColor Yellow
@@ -481,6 +498,80 @@ function Show-CleanupCandidates {
 	}
 
 	Write-Host ""
+	Write-Host 'These remote work branches look like cleanup candidates too.' -ForegroundColor Yellow
+	if ($remoteCleanupCandidates.Count -eq 0) {
+		Write-Host '  No remote cleanup candidates found.' -ForegroundColor DarkGray
+	} else {
+		foreach ($branch in $remoteCleanupCandidates) {
+			Write-Host (("  - {0} ({1})" -f $branch.Name, $branch.Description)) -ForegroundColor DarkGray
+		}
+	}
+
+	Write-Host ""
+	Write-Host 'Use this cleanup menu to actually delete one after you review the list.' -ForegroundColor DarkGray
+	Write-Host ""
+	Wait-ForUser
+}
+
+function Invoke-DeleteLocalBranchWorkflow {
+	$localCleanupCandidates = @(Get-MergedLocalWorkBranches)
+	$options = @(
+		$localCleanupCandidates |
+		ForEach-Object {
+			[pscustomobject]@{
+				Name = $_
+				Description = 'merged into main'
+			}
+		}
+	)
+
+	$branchToDelete = Select-BranchFromList -Title 'Delete a local merged branch' -Options $options
+	if ([string]::IsNullOrWhiteSpace($branchToDelete)) {
+		Write-Host 'Local branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	$confirmDelete = Read-Host (("Delete local branch '{0}' now? This does not delete origin/{0}. (y/N)" -f $branchToDelete))
+	if ($confirmDelete -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Local branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	Invoke-GitCommand -Args @('branch', '-D', $branchToDelete) | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host (("`n[+] Deleted local branch '{0}'." -f $branchToDelete)) -ForegroundColor Green
+	} else {
+		Write-Warning 'Local branch deletion failed. Review the git output above.'
+	}
+
+	Wait-ForUser
+}
+
+function Invoke-DeleteRemoteBranchWorkflow {
+	$remoteCleanupCandidates = @(Get-RemoteCleanupCandidates)
+	$branchToDelete = Select-BranchFromList -Title 'Delete a remote branch' -Options $remoteCleanupCandidates
+	if ([string]::IsNullOrWhiteSpace($branchToDelete)) {
+		Write-Host 'Remote branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	$confirmDelete = Read-Host (("Delete remote branch 'origin/{0}' now? This affects the shared repo. (y/N)" -f $branchToDelete))
+	if ($confirmDelete -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Remote branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	Invoke-GitCommand -Args @('push', 'origin', '--delete', $branchToDelete) | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host (("`n[+] Deleted remote branch 'origin/{0}'." -f $branchToDelete)) -ForegroundColor Green
+	} else {
+		Write-Warning 'Remote branch deletion failed. Review the git output above.'
+	}
+
 	Wait-ForUser
 }
 
@@ -500,19 +591,23 @@ function Invoke-PruneRemoteRefs {
 function Show-CleanupMenu {
 	while ($true) {
 		Write-Host "`n--- CLEANUP TOOLS ---" -ForegroundColor Cyan
-		Write-Host '1. Which local branches can I clean up?' -ForegroundColor Yellow
-		Write-Host '2. Remove stale remote branch refs' -ForegroundColor Yellow
-		Write-Host '3. Show raw git status' -ForegroundColor Yellow
-		Write-Host '4. Back' -ForegroundColor Yellow
+		Write-Host '1. Which branches can I clean up?' -ForegroundColor Yellow
+		Write-Host '2. Delete a local merged branch' -ForegroundColor Yellow
+		Write-Host '3. Delete a remote branch' -ForegroundColor Yellow
+		Write-Host '4. Remove stale remote branch refs' -ForegroundColor Yellow
+		Write-Host '5. Show raw git status' -ForegroundColor Yellow
+		Write-Host '6. Back' -ForegroundColor Yellow
 
-		$cleanupChoice = Read-Host 'Select an option (1-4)'
+		$cleanupChoice = Read-Host 'Select an option (1-6)'
 
 		switch ($cleanupChoice) {
 			'1' { Show-CleanupCandidates }
-			'2' { Invoke-PruneRemoteRefs }
-			'3' { Show-DetailedStatus }
-			'4' { return }
-			default { Write-Warning 'Invalid selection. Please choose 1-4.' }
+			'2' { Invoke-DeleteLocalBranchWorkflow }
+			'3' { Invoke-DeleteRemoteBranchWorkflow }
+			'4' { Invoke-PruneRemoteRefs }
+			'5' { Show-DetailedStatus }
+			'6' { return }
+			default { Write-Warning 'Invalid selection. Please choose 1-6.' }
 		}
 	}
 }
