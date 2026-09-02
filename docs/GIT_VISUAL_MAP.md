@@ -14,22 +14,27 @@ Use it when you need to answer:
 There are four Git roles that matter here:
 
 1. `main`
-    The stable baseline.
-2. `feature/*`
-    The branch where active work happens.
+    The protected baseline. Do not do normal coding here.
+2. work/staging branches
+    These are the branches where people actively code.
 3. `staging`
-    The integration checkpoint.
+    The one configured demo branch used to combine selected work for the meeting.
 4. `main promotion`
-    The explicit final step after staging is validated.
+    The explicit final step after the demo branch is validated.
 
 ```mermaid
 flowchart LR
-     A[origin/main<br/>stable baseline] --> B[local main]
-     B --> C[local feature/*<br/>active work]
-     C --> D[origin/feature/*]
-     D --> E[origin/staging<br/>integration checkpoint]
-     E --> F[local staging]
-     F --> G[origin/main<br/>explicit promotion]
+    A[origin/main<br/>protected baseline] --> B[local main]
+    B --> C[work/staging branch A]
+    B --> D[work/staging branch B]
+    B --> E[work/staging branch C]
+    C --> F[origin/work branch A]
+    D --> G[origin/work branch B]
+    E --> H[origin/work branch C]
+    F --> I[origin/staging<br/>one configured demo branch]
+    G --> I
+    H --> I
+    I --> J[origin/main<br/>final approved merge]
 ```
 
 ## Why Raw Pull Is Risky Here
@@ -54,32 +59,34 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[Need latest main?] --> B[Sync local main from origin/main]
-    B --> C[Create or switch to feature branch]
-    C --> D[Commit and push feature branch]
-    D --> E[Merge feature into staging]
-    E --> F[Validate staging]
-    F --> G[Promote staging into main]
+    B --> C[Create or switch to a work/staging branch]
+    C --> D[Commit and push that branch]
+    D --> E[Choose branches for the meeting]
+    E --> F[Merge selected branches into the one demo branch]
+    F --> G[Validate the demo branch]
+    G --> H[Merge the approved demo branch into main]
 ```
 
 ## Menu Flow
 
 ```mermaid
 flowchart TD
-    A[Run git-menu.ps1] --> B[Sync main or staging]
-    B --> C[Create feature branch]
-    C --> D[Push current branch]
-    D --> E[Merge feature into staging]
-    E --> F[Promote staging into main]
+    A[Run git-menu.ps1] --> B[Refresh main]
+    B --> C[Open or create a work branch]
+    C --> D[Push current work branch]
+    D --> E[Open the configured demo branch]
+    E --> F[Bring selected work into the demo branch]
+    F --> G[Ship the approved demo branch to main]
 ```
 
 ## Decision Rules
 
-- If a coworker is still pushing to `origin/main`, wait.
+- Do not do normal coding on `main`.
 - If you have local edits, do not raw `git pull`.
 - If you need the latest shared code, use `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`.
-- If you are doing active work, do it on `feature/*`, not on `main`.
-- If you want to validate integration, merge feature work into `staging` first.
-- Only update `main` through explicit staging promotion.
+- If you are doing active work, do it on a work/staging branch, not on `main`.
+- Only use the one configured demo branch to combine selected work for the meeting.
+- Only update `main` through the approved demo branch.
 - If a merge conflict happens, resolve only the direct overlap, then revalidate.
 
 ## Script Entry Points
