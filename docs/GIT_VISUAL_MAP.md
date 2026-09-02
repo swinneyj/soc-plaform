@@ -15,8 +15,8 @@ There are four Git roles that matter here:
 
 1. `main`
     The stable baseline.
-2. `feature/*`
-    The branch where active work happens.
+2. `work branches`
+    The branches where active coding happens.
 3. `staging`
     The integration checkpoint.
 4. `main promotion`
@@ -25,8 +25,8 @@ There are four Git roles that matter here:
 ```mermaid
 flowchart LR
      A[origin/main<br/>stable baseline] --> B[local main]
-     B --> C[local feature/*<br/>active work]
-     C --> D[origin/feature/*]
+    B --> C[local work branch<br/>active work]
+    C --> D[origin/work branch]
      D --> E[origin/staging<br/>integration checkpoint]
      E --> F[local staging]
      F --> G[origin/main<br/>explicit promotion]
@@ -54,9 +54,9 @@ flowchart TD
 ```mermaid
 flowchart TD
     A[Need latest main?] --> B[Sync local main from origin/main]
-    B --> C[Create or switch to feature branch]
-    C --> D[Commit and push feature branch]
-    D --> E[Merge feature into staging]
+    B --> C[Create or switch to a work branch]
+    C --> D[Commit and push that work branch]
+    D --> E[Merge work branch into staging]
     E --> F[Validate staging]
     F --> G[Promote staging into main]
 ```
@@ -65,20 +65,28 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Run git-menu.ps1] --> B[Sync main or staging]
-    B --> C[Create feature branch]
-    C --> D[Push current branch]
-    D --> E[Merge feature into staging]
+    A[Run git-menu.ps1] --> B[Start or continue coding]
+    B --> C[Save and share current work branch]
+    C --> D[Open demo branch]
+    D --> E[Bring work into staging]
     E --> F[Promote staging into main]
 ```
+
+## Branch Helper View
+
+The branch helper is organized by lifecycle so the choice is easier to read:
+
+- Active local work branches: normal branches you can code on now.
+- Already merged into main: usually safe to ignore or clean up later.
+- Remote-only branches: usually older shared leftovers unless someone told you to use one.
 
 ## Decision Rules
 
 - If a coworker is still pushing to `origin/main`, wait.
 - If you have local edits, do not raw `git pull`.
 - If you need the latest shared code, use `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`.
-- If you are doing active work, do it on `feature/*`, not on `main`.
-- If you want to validate integration, merge feature work into `staging` first.
+- If you are doing active work, do it on a work branch, not on `main`.
+- If you want to validate integration, merge work branches into `staging` first.
 - Only update `main` through explicit staging promotion.
 - If a merge conflict happens, resolve only the direct overlap, then revalidate.
 
