@@ -153,7 +153,13 @@ function Invoke-SafeSyncWorkflow {
     powershell.exe -ExecutionPolicy Bypass -File $SyncScript -UpstreamBranch $BranchName -AutoCheckpoint
 
     if ($LASTEXITCODE -eq 0) {
-        Write-Host "`n[+] Safe sync workflow completed for '$BranchName'." -ForegroundColor Green
+        if ($BranchName -eq 'staging') {
+            Write-Host "`n[+] You are now on 'staging' and up to date with origin/staging." -ForegroundColor Green
+        } elseif ($BranchName -eq 'main') {
+            Write-Host "`n[+] You are now on 'main' and up to date with origin/main." -ForegroundColor Green
+        } else {
+            Write-Host "`n[+] Safe sync workflow completed for '$BranchName'." -ForegroundColor Green
+        }
     } else {
         Write-Warning "Safe sync workflow stopped. Review the output above for conflicts or validation errors."
     }
@@ -325,10 +331,10 @@ while ($true) {
 
     Show-Status
 
-    Write-Host "1. Update main           (get latest stable baseline)"
+    Write-Host "1. Pull main             (switch to main and get latest)"
     Write-Host "2. Start feature work    (create or switch feature branch)"
     Write-Host "3. Push my branch        (save and share current work)"
-    Write-Host "4. Update staging        (get latest shared checkpoint)"
+    Write-Host "4. Pull staging          (switch to staging and get latest)"
     Write-Host "5. Stage a feature       (move feature into staging)"
     Write-Host "6. Ship staging to main  (final promotion step)"
     Write-Host "7. View detailed git status"
