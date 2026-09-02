@@ -80,6 +80,106 @@ class AnalyzeRequest(BaseModel):
     case_id: str
     model: str = "llama3.1:8b"
     context: str = ""
+    prior_analysis: str = ""
+    analysis_stage: str = "initial"
+
+
+def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
+    response_text = response_text or ""
+    phase2_queries: List[Dict[str, Any]] = []
+    start_marker = "PHASE2_QUERIES_JSON_START"
+    end_marker = "PHASE2_QUERIES_JSON_END"
+    start_idx = response_text.find(start_marker)
+    end_idx = response_text.find(end_marker)
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        raw_block = response_text[start_idx + len(start_marker):end_idx]
+        arr_start = raw_block.find("[")
+        arr_end = raw_block.rfind("]")
+        json_block = ""
+        if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
+            json_block = raw_block[arr_start:arr_end + 1].strip()
+        else:
+            json_block = raw_block.strip()
+        try:
+            parsed_block = json.loads(json_block)
+            if isinstance(parsed_block, list):
+                for idx, item in enumerate(parsed_block, 1):
+                    title = ""
+                    spl_value = ""
+                    desc = ""
+
+                    if isinstance(item, dict):
+                        title_keys = ["title", "name", "query_name"]
+                        spl_keys = ["spl", "query", "sql", "code"]
+                        desc_keys = ["description", "desc", "notes"]
+
+                        for k in title_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                title = str(item.get(k)).strip()
+                                break
+
+                        for k in spl_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                spl_value = str(item.get(k)).strip()
+                                break
+
+                        for k in desc_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                desc = str(item.get(k)).strip()
+                                break
+                    elif isinstance(item, str):
+                        spl_value = item.strip()
+                        title = f"Phase 2 Query {idx}"
+
+                    title = title or f"Phase 2 Query {idx}"
+                    if spl_value:
+                        phase2_queries.append({
+                            "title": title,
+                            "spl": spl_value,
+                            "description": desc,
+                        })
+        except Exception:
+            phase2_queries = []
+
+    return phase2_queries
+
+
+def _build_supportive_phase2_fallback(
+    supportive_query_defs,
+    prior_analysis: str,
+    response_text: str,
+) -> List[Dict[str, Any]]:
+    response_text = response_text or ""
+    prior_analysis = prior_analysis or ""
+    if not supportive_query_defs:
+        return []
+
+    analysis_text = f"{prior_analysis} {response_text}".lower()
+    scored_queries: List[tuple[int, Dict[str, Any]]] = []
+
+    for query_def in supportive_query_defs:
+        title = (getattr(query_def, "title", "") or "").strip()
+        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
+        description = (getattr(query_def, "description", "") or "").strip()
+        if not title or not spl_query:
+            continue
+
+        score = 0
+        query_text = f"{title} {description} {spl_query}".lower()
+        for token in ["host", "user", "process", "parent", "source", "destination", "ip", "timeline", "recent", "auth", "ssh", "root"]:
+            if token in analysis_text and token in query_text:
+                score += 2
+        if any(token in query_text for token in ["confirm", "validate", "timeline", "recent", "activity"]):
+            score += 1
+
+        scored_queries.append((score, {
+            "title": title,
+            "spl": spl_query,
+            "description": description or "Use this query to collect disposition-driving follow-up evidence for the current hypothesis.",
+        }))
+
+    scored_queries.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored_queries[:3]]
 
 
 class InvestigationEvidenceEntryPayload(BaseModel):
@@ -2636,30 +2736,50 @@ def analyze_case(request: AnalyzeRequest):
 
         db.close()
 
+        prior_analysis = (request.prior_analysis or "").strip()
+        analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
+        prior_analysis_marker = "PHASE2_QUERIES_JSON_START"
+        prior_analysis_marker_idx = prior_analysis.find(prior_analysis_marker)
+        if prior_analysis_marker_idx != -1:
+            prior_analysis = prior_analysis[:prior_analysis_marker_idx].strip()
+        if len(prior_analysis) > 8000:
+            prior_analysis = prior_analysis[:8000].strip()
+
         client = get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 
         # 3. Assemble Prompt with Detection Science and explicit response structure
+        prompt_intro = (
+            "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
+            "Your response MUST be structured into the following sections (in order):\n"
+            "1. Initial Thoughts\n"
+            "2. Key Questions\n"
+            "3. Investigative Analysis\n"
+            "4. Supportive Query Recommendations (Phase 2 SPL)\n"
+            "5. Triage Verdict\n"
+            "6. Structured Closure Notes\n\n"
+            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
+            "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface.\n\n"
+        )
+        if prior_analysis:
+            prompt_intro += (
+                "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
+                "Reassess that hypothesis against the newest evidence, call out what still remains unresolved, and tighten the likely disposition. "
+                "Your follow-up queries must be the smallest set of high-value checks most likely to change the disposition decision between true positive, benign positive, false positive, or undetermined. "
+                "Prefer confirmatory or falsifying queries over broad exploratory searches.\n\n"
+            )
+        prompt_intro += (
+            "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
+            "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
+            "PHASE2_QUERIES_JSON_START\n"
+            "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
+            "PHASE2_QUERIES_JSON_END\n"
+        )
+
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
-            (
-                "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
-                "Your response MUST be structured into the following sections (in order):\n"
-                "1. Initial Thoughts\n"
-                "2. Key Questions\n"
-                "3. Investigative Analysis\n"
-                "4. Supportive Query Recommendations (Phase 2 SPL)\n"
-                "5. Triage Verdict\n"
-                "6. Structured Closure Notes\n\n"
-                "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
-                "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface.\n\n"
-                "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
-                "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
-                "PHASE2_QUERIES_JSON_START\n"
-                "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
-                "PHASE2_QUERIES_JSON_END\n"
-            ),
+            prompt_intro,
         ]
 
         if detection_rule:
@@ -2679,6 +2799,11 @@ def analyze_case(request: AnalyzeRequest):
         prompt_parts.append("\n\n=== CURRENT CASE ===")
         prompt_parts.append(f"Case ID: {case.case_id} | Rule: {case.rule_name} | Initial Verdict: {case.verdict}")
         prompt_parts.append(f"Summary: {case.analysis_summary}")
+
+        if prior_analysis:
+            prompt_parts.append("\n\n=== PREVIOUS ANALYSIS HYPOTHESIS ===")
+            prompt_parts.append(f"Analysis Stage: {analysis_stage}")
+            prompt_parts.append(prior_analysis)
 
         if source_notable_payload:
             prompt_parts.append("\n\n=== SOURCE NOTABLE EVIDENCE ===")
@@ -2746,79 +2871,68 @@ def analyze_case(request: AnalyzeRequest):
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
 
-        # Attempt to extract a structured JSON block of phase-2 SPL
-        # recommendations from the model's response. This block is delimited
-        # by the PHASE2_QUERIES_JSON_START/END markers we instructed the
-        # model to emit.
         response_text = result["response"] or ""
-        phase2_queries: List[Dict[str, Any]] = []
-        start_marker = "PHASE2_QUERIES_JSON_START"
-        end_marker = "PHASE2_QUERIES_JSON_END"
-        start_idx = response_text.find(start_marker)
-        end_idx = response_text.find(end_marker)
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            # Extract the region between the markers and then trim down to the
-            # JSON array itself so we are resilient to markdown decorations
-            # like "**PHASE2_QUERIES_JSON_START**".
-            raw_block = response_text[start_idx + len(start_marker):end_idx]
-            # Look for the first '[' and the last ']' within this region.
-            arr_start = raw_block.find("[")
-            arr_end = raw_block.rfind("]")
-            json_block = ""
-            if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
-                json_block = raw_block[arr_start:arr_end + 1].strip()
-            else:
-                json_block = raw_block.strip()
-            try:
-                parsed_block = json.loads(json_block)
-                if isinstance(parsed_block, list):
-                    for idx, item in enumerate(parsed_block, 1):
-                        # Accept either dict-style entries or bare strings.
-                        title = ""
-                        spl_value = ""
-                        desc = ""
+        phase2_queries = _extract_phase2_queries(response_text)
 
-                        if isinstance(item, dict):
-                            # Be lenient about key names: handle common variants.
-                            title_keys = ["title", "name", "query_name"]
-                            spl_keys = ["spl", "query", "sql", "code"]
-                            desc_keys = ["description", "desc", "notes"]
+        if not phase2_queries:
+            fallback_prompt_parts = [
+                "You are generating follow-up SOC investigation queries from an existing analysis.",
+                "Return ONLY a JSON array. Do not include markdown fences, prose, headings, or commentary.",
+                "Each JSON item must have keys: title, spl, description.",
+                "Generate 1-3 high-value SPL queries that would most directly change the disposition decision between true positive, benign positive, false positive, or undetermined.",
+                "Prefer confirmatory or falsifying checks over broad exploratory searches.",
+                f"Case ID: {case.case_id}",
+                f"Rule: {case.rule_name}",
+            ]
+            if detection_rule:
+                fallback_prompt_parts.append(f"Rule Description: {detection_rule.description}")
+                if detection_rule.drilldown_fields:
+                    fallback_prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
+            if supportive_query_defs:
+                fallback_prompt_parts.append("Candidate Supportive Query Templates:")
+                for idx, q in enumerate(supportive_query_defs[:5], 1):
+                    fallback_prompt_parts.append(f"[{idx}] {q.title}: {q.spl_query}")
+            if source_notable_payload and source_notable_payload.get("fields"):
+                fallback_prompt_parts.append("Case Fields:")
+                for k, v in list(source_notable_payload["fields"].items())[:20]:
+                    fallback_prompt_parts.append(f"- {k}: {v}")
+            if supportive_results:
+                fallback_prompt_parts.append("Saved Investigation Evidence:")
+                for idx, res in enumerate(supportive_results[:5], 1):
+                    fallback_prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(res['raw_result'])}")
+            fallback_prompt_parts.append("Previous/Current Analysis:")
+            fallback_prompt_parts.append(prior_analysis or response_text[:6000])
+            fallback_prompt_parts.append(
+                "Return valid JSON like: [{\"title\":\"...\",\"spl\":\"search ...\",\"description\":\"...\"}]"
+            )
 
-                            for k in title_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    title = str(item.get(k)).strip()
-                                    break
+            fallback_result = client.generate("\n".join(fallback_prompt_parts), model=model)
+            if fallback_result.get("success"):
+                fallback_response_text = (fallback_result.get("response") or "").strip()
+                try:
+                    parsed_fallback = json.loads(fallback_response_text)
+                    if isinstance(parsed_fallback, list):
+                        phase2_queries = _extract_phase2_queries(
+                            "PHASE2_QUERIES_JSON_START\n"
+                            + fallback_response_text
+                            + "\nPHASE2_QUERIES_JSON_END"
+                        )
+                except Exception:
+                    phase2_queries = _extract_phase2_queries(fallback_response_text)
 
-                            for k in spl_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    spl_value = str(item.get(k)).strip()
-                                    break
-
-                            for k in desc_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    desc = str(item.get(k)).strip()
-                                    break
-                        elif isinstance(item, str):
-                            # Treat bare strings as SPL bodies with a generic title.
-                            spl_value = item.strip()
-                            title = f"Phase 2 Query {idx}"
-
-                        title = title or f"Phase 2 Query {idx}"
-
-                        if spl_value:
-                            phase2_queries.append({
-                                "title": title,
-                                "spl": spl_value,
-                                "description": desc,
-                            })
-            except Exception:
-                # If parsing fails, we silently ignore and leave phase2_queries empty.
-                phase2_queries = []
+        if not phase2_queries:
+            phase2_queries = _build_supportive_phase2_fallback(
+                supportive_query_defs,
+                prior_analysis,
+                response_text,
+            )
 
         return {
             "case_id": case_id,
             "model": model,
             "analysis": response_text,
+            "analysis_stage": analysis_stage,
+            "used_prior_analysis": bool(prior_analysis),
             "detection_science_applied": bool(detection_rule),
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
