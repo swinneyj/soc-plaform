@@ -1920,27 +1920,38 @@
                             return byId;
                         }
                     }
-
-                    const caseRule = (case_.rule_name || '').toLowerCase().trim();
+                    const caseRuleRaw = (case_.rule_name || '');
+                    const caseRule = caseRuleRaw.toLowerCase().trim();
                     if (!caseRule) {
                         return null;
                     }
 
-                    // Prefer exact name match first
+                    // Normalize wrapped ES labels like
+                    // "Endpoint - <Rule Name> - Rule" down to a core
+                    // so truncated correlation_search values still map
+                    // to the canonical rule.
+                    const normalizeRuleLabel = (text) => {
+                        let s = (text || '').toLowerCase().trim();
+                        s = s.replace(/^endpoint\s*-\s*/, '');
+                        s = s.replace(/\s*-\s*rule$/, '');
+                        return s;
+                    };
+
+                    const caseCore = normalizeRuleLabel(caseRuleRaw);
+
+                    // Prefer exact normalized name match first
                     let rule = this.availableRules.find(
-                        r => (r.rule_name || '').toLowerCase().trim() === caseRule
+                        r => normalizeRuleLabel(r.rule_name || '') === caseCore
                     );
                     if (rule) {
                         return rule;
                     }
 
-                    // Fallback: many ES rules are wrapped like
-                    // "Endpoint - <Rule Name> - Rule". Use a relaxed
-                    // contains-based match so cases with that wrapped
-                    // name still map to the underlying correlation rule.
+                    // Fallback: relaxed contains-based match on
+                    // normalized labels.
                     rule = this.availableRules.find(r => {
-                        const name = (r.rule_name || '').toLowerCase().trim();
-                        return !!name && (caseRule.includes(name) || name.includes(caseRule));
+                        const nameCore = normalizeRuleLabel(r.rule_name || '');
+                        return !!nameCore && (caseCore.includes(nameCore) || nameCore.includes(caseCore));
                     });
 
                     return rule || null;
