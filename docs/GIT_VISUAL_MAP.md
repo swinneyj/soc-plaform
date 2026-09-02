@@ -11,16 +11,25 @@ Use it when you need to answer:
 
 ## Core Mental Model
 
-There are two Git states that matter most here:
+There are four Git roles that matter here:
 
-1. `origin/main`
-   The shared team baseline.
-2. local `main`
-   Your synced local baseline.
+1. `main`
+    The stable baseline.
+2. `feature/*`
+    The branch where active work happens.
+3. `staging`
+    The integration checkpoint.
+4. `main promotion`
+    The explicit final step after staging is validated.
 
 ```mermaid
 flowchart LR
-    A[origin/main<br/>team baseline] --> B[local main<br/>synced local baseline]
+     A[origin/main<br/>stable baseline] --> B[local main]
+     B --> C[local feature/*<br/>active work]
+     C --> D[origin/feature/*]
+     D --> E[origin/staging<br/>integration checkpoint]
+     E --> F[local staging]
+     F --> G[origin/main<br/>explicit promotion]
 ```
 
 ## Why Raw Pull Is Risky Here
@@ -44,25 +53,23 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A[Coworker still pushing?] -->|Yes| B[Wait]
-    B --> C[Validate local stack only]
-    A -->|No| D[Run sync_upstream_safe.ps1 -AutoCheckpoint]
-    D --> E{Conflict?}
-    E -- Yes --> F[Resolve conflicted files only]
-    F --> G[git add resolved files]
-    G --> H[git commit]
-    E -- No --> I[Run troubleshooter]
-    H --> I
-    I --> J[Run smoke test]
+    A[Need latest main?] --> B[Sync local main from origin/main]
+    B --> C[Create or switch to feature branch]
+    C --> D[Commit and push feature branch]
+    D --> E[Merge feature into staging]
+    E --> F[Validate staging]
+    F --> G[Promote staging into main]
 ```
 
-## Push Flow
+## Menu Flow
 
 ```mermaid
 flowchart TD
-    A[Local stack passes smoke test] --> B[Run git-menu.ps1]
-    B --> C[Commit changes on local main]
-    C --> D[Push main]
+    A[Run git-menu.ps1] --> B[Sync main or staging]
+    B --> C[Create feature branch]
+    C --> D[Push current branch]
+    D --> E[Merge feature into staging]
+    E --> F[Promote staging into main]
 ```
 
 ## Decision Rules
@@ -70,7 +77,9 @@ flowchart TD
 - If a coworker is still pushing to `origin/main`, wait.
 - If you have local edits, do not raw `git pull`.
 - If you need the latest shared code, use `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`.
-- If you want to share your validated work, use `git-menu.ps1` from `main`.
+- If you are doing active work, do it on `feature/*`, not on `main`.
+- If you want to validate integration, merge feature work into `staging` first.
+- Only update `main` through explicit staging promotion.
 - If a merge conflict happens, resolve only the direct overlap, then revalidate.
 
 ## Script Entry Points
@@ -78,4 +87,5 @@ flowchart TD
 - safe sync: `scripts\sync_upstream_safe.ps1 -AutoCheckpoint`
 - validate local state: `scripts\troubleshoot_platform.ps1`
 - validate live stack: `scripts\troubleshoot_platform.ps1 -RunSmokeTest`
-- commit and push main: `git-menu.ps1`
+- branch-aware workflow menu: `git-menu.ps1`
+- commit, push, or merge a target branch: `git-sync.ps1`

@@ -1,8 +1,8 @@
 param (
     [string]$Message = "",  # auto-filled below if not provided
     [string]$Branch = "main",
+    [string]$MergeFrom = "",
     [switch]$All,
-    [string]$MergeFrom,       # Optional: merge origin/<branch> into this branch before syncing
     [switch]$PreferRemote,    # On conflict, remote history wins (local conflicting commits discarded)
     [switch]$PreferLocal      # On conflict, local history wins (force-push to remote)
 )
@@ -20,9 +20,39 @@ function Invoke-GitSafe {
     }
 }
 
+function Test-GitRef {
+    param(
+        [Parameter(Mandatory = $true)][string]$Ref
+    )
+
+    & git show-ref --verify --quiet $Ref
+    return ($LASTEXITCODE -eq 0)
+}
+
+function Resolve-MergeSource {
+    param(
+        [Parameter(Mandatory = $true)][string]$SourceBranch
+    )
+
+    if (Test-GitRef -Ref "refs/heads/$SourceBranch") {
+        return $SourceBranch
+    }
+
+    Invoke-GitSafe -Command "git fetch origin $SourceBranch" -ErrorMessage "Failed to fetch origin/$SourceBranch."
+
+    if (Test-GitRef -Ref "refs/remotes/origin/$SourceBranch") {
+        return "origin/$SourceBranch"
+    }
+
+    throw "Merge source '$SourceBranch' was not found locally or on origin."
+}
+
 try {
     if ($PreferRemote -and $PreferLocal) {
         throw "Cannot use both -PreferRemote and -PreferLocal. Choose one conflict policy or neither."
+    }
+    if ($MergeFrom -and $MergeFrom.Trim() -eq $Branch) {
+        throw "Merge source and target branch are both '$Branch'. Choose a different source branch."
     }
     # Ensure we're in a Git repo
     $status = git status 2>$null
@@ -69,8 +99,12 @@ try {
 
     # If no commit message was provided, generate a timestamped default.
     if (-not $PSBoundParameters.ContainsKey('Message') -or -not $Message) {
-        $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
-        $Message = "SOC sync - $timestamp"
+        if ($MergeFrom) {
+            $Message = "Merge $MergeFrom into $Branch"
+        } else {
+            $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm'
+            $Message = "SOC sync - $timestamp"
+        }
     }
 
     # Optionally limit staged files in the future; for now, stage all tracked + new files
@@ -92,36 +126,10 @@ try {
         Invoke-GitSafe -Command "git commit -m `"$Message`"" -ErrorMessage "Git commit failed."
     }
 
-    # Optionally merge a source branch (typically a feature/test branch) into
-    # this branch before pushing, so origin/<MergeFrom> is integrated.
     if ($MergeFrom) {
-        if ($MergeFrom -eq $Branch) {
-            throw "-MergeFrom branch '$MergeFrom' cannot be the same as target branch '$Branch'."
-        }
-
-        Write-Host "[*] Fetching origin to prepare merge from '$MergeFrom'..." -ForegroundColor Cyan
-        Invoke-GitSafe -Command "git fetch origin" -ErrorMessage "git fetch failed before merge."
-
-        # Verify that origin/<MergeFrom> exists
-        git show-ref --verify "refs/remotes/origin/$MergeFrom" >$null 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            throw "Remote branch 'origin/$MergeFrom' not found. Ensure it exists and is pushed before using -MergeFrom."
-        }
-
-        Write-Host "[*] Merging origin/$MergeFrom into $Branch..." -ForegroundColor Cyan
-        try {
-            Invoke-GitSafe -Command "git merge --no-ff --no-edit origin/$MergeFrom" -ErrorMessage "git merge from origin/$MergeFrom into $Branch failed."
-        }
-        catch {
-            Write-Warning "Merge from origin/$MergeFrom into $Branch encountered conflicts. Aborting merge."
-            git merge --abort 2>$null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Warning "git merge --abort did not complete cleanly. Repository may still be mid-merge; resolve manually."
-            }
-
-            Write-Warning "Resolve merge conflicts between $Branch and origin/$MergeFrom manually, then rerun git-sync.ps1 (optionally without -MergeFrom)."
-            throw $_
-        }
+        $mergeSourceRef = Resolve-MergeSource -SourceBranch $MergeFrom.Trim()
+        Write-Host "[*] Merging $mergeSourceRef into $Branch..." -ForegroundColor Cyan
+        Invoke-GitSafe -Command "git merge --no-ff $mergeSourceRef -m `"$Message`"" -ErrorMessage "Git merge failed. Resolve conflicts manually, then rerun git-sync.ps1."
     }
 
     # Always attempt to push, even if this run had nothing new to commit,
@@ -138,15 +146,26 @@ try {
     # Try to reconcile with remote via pull --rebase. If this hits conflicts,
     # either apply the chosen conflict policy or abort safely.
     try {
-        Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed."
+        if ($MergeFrom) {
+            Invoke-GitSafe -Command "git pull --no-rebase origin $Branch" -ErrorMessage "git pull origin failed."
+        } else {
+            Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed."
+        }
     }
     catch {
-        Write-Warning "git pull --rebase encountered conflicts."
+        Write-Warning "git pull encountered conflicts."
 
-        # Always undo the in-progress rebase first so the repo is not left stuck.
-        git rebase --abort 2>$null
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warning "git rebase --abort did not complete cleanly. Repository may still be mid-rebase; resolve manually."
+        if ($MergeFrom) {
+            git merge --abort 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "git merge --abort did not complete cleanly. Repository may still be mid-merge; resolve manually."
+            }
+        } else {
+            # Always undo the in-progress rebase first so the repo is not left stuck.
+            git rebase --abort 2>$null
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warning "git rebase --abort did not complete cleanly. Repository may still be mid-rebase; resolve manually."
+            }
         }
 
         if ($PreferRemote) {
@@ -171,7 +190,7 @@ try {
         }
 
         # Default safe behavior: leave repo clean and require manual conflict resolution.
-        Write-Warning "Aborting rebase to restore previous state. Remote contains conflicting changes. Review and resolve conflicts (e.g., by pulling and merging manually), then rerun git-sync.ps1."
+        Write-Warning "Aborting automatic reconciliation to restore previous state. Remote contains conflicting changes. Review and resolve conflicts, then rerun git-sync.ps1."
         throw $_
     }
 
