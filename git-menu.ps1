@@ -331,10 +331,17 @@ while ($true) {
 
     Show-Status
 
+<<<<<<< HEAD
     Write-Host "1. Pull main             (switch to main and get latest)"
     Write-Host "2. Start feature work    (create or switch feature branch)"
     Write-Host "3. Push my branch        (save and share current work)"
     Write-Host "4. Pull staging          (switch to staging and get latest)"
+=======
+    Write-Host "1. Update main           (get latest stable baseline)"
+    Write-Host "2. Start feature work    (create or switch feature branch)"
+    Write-Host "3. Push my branch        (save and share current work)"
+    Write-Host "4. Update staging        (get latest shared checkpoint)"
+>>>>>>> staging
     Write-Host "5. Stage a feature       (move feature into staging)"
     Write-Host "6. Ship staging to main  (final promotion step)"
     Write-Host "7. View detailed git status"
