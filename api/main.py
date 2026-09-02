@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
+from types import SimpleNamespace
 import os
 import sys
 import json
@@ -2618,7 +2619,7 @@ def analyze_case(request: AnalyzeRequest):
         if detection_rule:
             rule_id = (detection_rule.rule_id or "").strip()
 
-            # Base queries explicitly keyed to this rule_id
+            # Base queries explicitly keyed to this rule_id from the database
             supportive_query_defs.extend(
                 db.query(SupportiveQuery).filter(SupportiveQuery.rule_id == rule_id).all()
             )
@@ -2633,6 +2634,39 @@ def analyze_case(request: AnalyzeRequest):
                 for q in extras:
                     if q.title not in existing_titles:
                         supportive_query_defs.append(q)
+
+            # Fallback: if no DB-backed supportive queries exist for this rule,
+            # look for static definitions in supportive_rules.json so that
+            # "main" SPL still appears alongside phase-2 queries.
+            if not supportive_query_defs:
+                try:
+                    platform_root = get_platform_root()
+                    supportive_path = os.path.join(platform_root, "supportive_rules.json")
+                    if os.path.exists(supportive_path):
+                        with open(supportive_path, "r", encoding="utf-8") as f:
+                            data = json.load(f)
+                        for entry in data.get("rules", []):
+                            if (entry.get("rule_id") or "").strip() == rule_id:
+                                for sq in entry.get("supportive_queries", []):
+                                    spl_value = (sq.get("spl_query") or "").strip()
+                                    if not spl_value:
+                                        continue
+                                    title = (sq.get("title") or "").strip() or "Supportive Query"
+                                    desc = sq.get("description") or ""
+                                    supportive_query_defs.append(
+                                        SimpleNamespace(
+                                            id=None,
+                                            rule_id=rule_id,
+                                            title=title,
+                                            description=desc,
+                                            spl_query=spl_value,
+                                        )
+                                    )
+                                break
+                except Exception:
+                    # Best-effort only; if anything goes wrong we fall back to
+                    # having no static supportive queries for this rule.
+                    pass
 
         db.close()
 
