@@ -10,7 +10,6 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
-from types import SimpleNamespace
 import os
 import sys
 import json
@@ -81,6 +80,625 @@ class AnalyzeRequest(BaseModel):
     case_id: str
     model: str = "llama3.1:8b"
     context: str = ""
+    prior_analysis: str = ""
+    analysis_stage: str = "initial"
+
+
+def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
+    response_text = response_text or ""
+    phase2_queries: List[Dict[str, Any]] = []
+    start_marker = "PHASE2_QUERIES_JSON_START"
+    end_marker = "PHASE2_QUERIES_JSON_END"
+    start_idx = response_text.find(start_marker)
+    end_idx = response_text.find(end_marker)
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        raw_block = response_text[start_idx + len(start_marker):end_idx]
+        arr_start = raw_block.find("[")
+        arr_end = raw_block.rfind("]")
+        json_block = ""
+        if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
+            json_block = raw_block[arr_start:arr_end + 1].strip()
+        else:
+            json_block = raw_block.strip()
+        try:
+            parsed_block = json.loads(json_block)
+            if isinstance(parsed_block, list):
+                for idx, item in enumerate(parsed_block, 1):
+                    title = ""
+                    spl_value = ""
+                    desc = ""
+
+                    if isinstance(item, dict):
+                        title_keys = ["title", "name", "query_name"]
+                        spl_keys = ["spl", "query", "sql", "code"]
+                        desc_keys = ["description", "desc", "notes"]
+
+                        for k in title_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                title = str(item.get(k)).strip()
+                                break
+
+                        for k in spl_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                spl_value = str(item.get(k)).strip()
+                                break
+
+                        for k in desc_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                desc = str(item.get(k)).strip()
+                                break
+                    elif isinstance(item, str):
+                        spl_value = item.strip()
+                        title = f"Phase 2 Query {idx}"
+
+                    title = title or f"Phase 2 Query {idx}"
+                    if spl_value:
+                        phase2_queries.append({
+                            "title": title,
+                            "spl": spl_value,
+                            "description": desc,
+                        })
+        except Exception:
+            phase2_queries = []
+
+    return phase2_queries
+
+
+def _normalize_phase2_text(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _looks_like_spl_query(query_text: str) -> bool:
+    query = (query_text or "").strip().lower()
+    if not query:
+        return False
+    if re.match(r"^select\b", query):
+        return False
+    spl_markers = ["index=", "|", "sourcetype=", "eventcode=", "tstats", "from datamodel", "search ", "stats ", "table ", "`"]
+    return any(marker in query for marker in spl_markers)
+
+
+def _ground_phase2_queries(
+    phase2_queries: List[Dict[str, Any]],
+    supportive_query_defs,
+) -> List[Dict[str, Any]]:
+    title_to_def = {}
+    spl_to_def = {}
+    for query_def in supportive_query_defs or []:
+        title = (getattr(query_def, "title", "") or "").strip()
+        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
+        description = (getattr(query_def, "description", "") or "").strip()
+        if not title or not spl_query:
+            continue
+        payload = {
+            "title": title,
+            "spl": spl_query,
+            "description": description or "Use this query to collect disposition-driving follow-up evidence for the current hypothesis.",
+        }
+        title_to_def[_normalize_phase2_text(title)] = payload
+        spl_to_def[_normalize_phase2_text(spl_query)] = payload
+
+    grounded: List[Dict[str, Any]] = []
+    seen_titles = set()
+
+    for query in phase2_queries or []:
+        title = (query.get("title") or "").strip()
+        spl_query = (query.get("spl") or "").strip()
+        matched = None
+
+        if title:
+            matched = title_to_def.get(_normalize_phase2_text(title))
+        if not matched and spl_query:
+            matched = spl_to_def.get(_normalize_phase2_text(spl_query))
+
+        if matched:
+            dedupe_key = _normalize_phase2_text(matched["title"])
+            if dedupe_key not in seen_titles:
+                grounded.append(dict(matched))
+                seen_titles.add(dedupe_key)
+            continue
+
+        if title_to_def:
+            continue
+
+        if title and spl_query and _looks_like_spl_query(spl_query):
+            dedupe_key = _normalize_phase2_text(title)
+            if dedupe_key not in seen_titles:
+                grounded.append({
+                    "title": title,
+                    "spl": spl_query,
+                    "description": (query.get("description") or "").strip(),
+                })
+                seen_titles.add(dedupe_key)
+
+    if grounded:
+        return grounded
+
+    if title_to_def:
+        return _build_supportive_phase2_fallback(supportive_query_defs, "", "")
+
+    return []
+
+
+def _format_grounded_phase2_section(phase2_queries: List[Dict[str, Any]]) -> str:
+    lines = ["### Supportive Query Recommendations (Phase 2 SPL)"]
+    if not phase2_queries:
+        lines.append("Use the grounded Phase 2 cards below to run follow-up SPL after reviewing the current hypothesis.")
+        return "\n\n".join(lines)
+
+    lines.append("Use the grounded Phase 2 cards below for follow-up SPL. Recommended checks:")
+    for idx, query in enumerate(phase2_queries[:3], 1):
+        title = (query.get("title") or f"Phase 2 Query {idx}").strip()
+        description = (query.get("description") or "Run this query to collect follow-up evidence.").strip()
+        lines.append(f"{idx}. {title}: {description}")
+    return "\n\n".join(lines)
+
+
+def _format_state_label(value: str) -> str:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return "Undetermined"
+    if raw == "false_positive":
+        return "False Positive"
+    return " ".join(part.capitalize() for part in raw.split("_"))
+
+
+def _format_state_verdict_section(investigation_state: Dict[str, Any]) -> str:
+    disposition = _format_state_label(investigation_state.get("provisional_disposition") or "undetermined")
+    status = _format_state_label(investigation_state.get("loop_status") or "collecting_evidence")
+    confidence = float(investigation_state.get("disposition_confidence") or 0.0)
+    blockers = investigation_state.get("closure_blockers") or []
+
+    lines = ["### Triage Verdict", ""]
+    lines.append(f"Current evidence-driven disposition: {disposition}.")
+    lines.append(f"Investigation loop status: {status} ({confidence * 100:.0f}% confidence).")
+    if blockers:
+        lines.append("")
+        lines.append("Closure remains blocked by:")
+        for item in blockers[:4]:
+            lines.append(f"- {item}")
+    return "\n".join(lines).strip()
+
+
+def _format_state_closure_section(investigation_state: Dict[str, Any]) -> str:
+    disposition = _format_state_label(investigation_state.get("provisional_disposition") or "undetermined")
+    status = (investigation_state.get("loop_status") or "collecting_evidence").strip().lower()
+    next_actions = investigation_state.get("recommended_next_actions") or []
+    blockers = investigation_state.get("closure_blockers") or []
+
+    lines = ["### Structured Closure Notes", ""]
+    if status != "ready_for_closure":
+        lines.append("Closure note generation is deferred until the investigation state is closure-ready.")
+        lines.append(f"Current disposition: {disposition}.")
+        if blockers:
+            lines.append("")
+            lines.append("Outstanding blockers:")
+            for item in blockers[:4]:
+                lines.append(f"- {item}")
+        if next_actions:
+            lines.append("")
+            lines.append("Next best actions before closure:")
+            for item in next_actions[:4]:
+                title = (item.get("title") or "Next action").strip()
+                description = (item.get("description") or "").strip()
+                if description:
+                    lines.append(f"- {title}: {description}")
+                else:
+                    lines.append(f"- {title}")
+        return "\n".join(lines).strip()
+
+    lines.append(f"Closure-ready disposition: {disposition}.")
+    lines.append("Use the saved evidence timeline and required closure fields to generate the final operator note.")
+    return "\n".join(lines).strip()
+
+
+def _apply_investigation_state_to_analysis_text(analysis_text: str, investigation_state: Dict[str, Any]) -> str:
+    verdict_section = _format_state_verdict_section(investigation_state)
+    closure_section = _format_state_closure_section(investigation_state)
+
+    verdict_pattern = re.compile(
+        r"(?:^|\n)(?:###\s+)?Triage Verdict[\s\S]*?(?=\n(?:###\s+)?Structured Closure Notes\b|$)",
+        flags=re.IGNORECASE,
+    )
+    closure_pattern = re.compile(
+        r"(?:^|\n)(?:###\s+)?Structured Closure Notes[\s\S]*$",
+        flags=re.IGNORECASE,
+    )
+
+    updated = analysis_text or ""
+    if verdict_pattern.search(updated):
+        updated = verdict_pattern.sub("\n\n" + verdict_section + "\n\n", updated, count=1)
+    else:
+        updated = f"{updated}\n\n{verdict_section}".strip()
+
+    if closure_pattern.search(updated):
+        updated = closure_pattern.sub("\n\n" + closure_section, updated, count=1)
+    else:
+        updated = f"{updated}\n\n{closure_section}".strip()
+
+    return updated.strip()
+
+
+def _sanitize_analysis_text(response_text: str, phase2_queries: List[Dict[str, Any]]) -> str:
+    cleaned = response_text or ""
+    cleaned = re.sub(
+        r"\*{0,2}PHASE2_QUERIES_JSON_START\*{0,2}[\s\S]*?(?:\*{0,2}PHASE2_QUERIES_JSON_END\*{0,2}|$)",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+
+    section_text = _format_grounded_phase2_section(phase2_queries)
+    section_pattern = re.compile(
+        r"(?:^|\n)(?:###\s+)?Supportive Query Recommendations \(Phase 2 SPL\)[\s\S]*?(?=\n(?:###\s+)?(?:Triage Verdict|Structured Closure Notes)\b|$)",
+        flags=re.IGNORECASE,
+    )
+    if section_pattern.search(cleaned):
+        cleaned = section_pattern.sub("\n\n" + section_text + "\n\n", cleaned, count=1)
+    elif phase2_queries:
+        triage_pattern = re.compile(r"\n(?:###\s+)?Triage Verdict\b", flags=re.IGNORECASE)
+        triage_match = triage_pattern.search(cleaned)
+        if triage_match:
+            cleaned = cleaned[:triage_match.start()].rstrip() + "\n\n" + section_text + "\n\n" + cleaned[triage_match.start():].lstrip()
+        else:
+            cleaned = f"{cleaned}\n\n{section_text}".strip()
+
+    return cleaned.strip()
+
+
+def _extract_analysis_sections(response_text: str) -> Dict[str, str]:
+    headings = {
+        "initial thoughts",
+        "key questions",
+        "investigative analysis",
+        "supportive query recommendations (phase 2 spl)",
+        "triage verdict",
+        "structured closure notes",
+    }
+
+    sections: Dict[str, List[str]] = {}
+    current_heading = None
+    lines = (response_text or "").replace("\r\n", "\n").split("\n")
+    for index, line in enumerate(lines):
+        normalized = re.sub(r"^#+\s*", "", line).strip().rstrip(":").lower()
+        if normalized in headings:
+            current_heading = normalized
+            sections.setdefault(current_heading, [])
+            continue
+
+        if current_heading and re.match(r"^[-=]{3,}\s*$", line.strip()):
+            continue
+
+        if current_heading:
+            sections[current_heading].append(line)
+
+    return {
+        key: "\n".join(value).strip()
+        for key, value in sections.items()
+        if "\n".join(value).strip()
+    }
+
+
+def _extract_question_items(section_text: str) -> List[str]:
+    questions = []
+    for raw_line in (section_text or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        line = re.sub(r"^[\-*•]+\s*", "", line)
+        line = re.sub(r"^\d+[\.)]\s*", "", line)
+        line = line.strip()
+        if line:
+            questions.append(line)
+    return questions
+
+
+def _infer_disposition_label(candidate_text: str, fallback: str) -> str:
+    text = (candidate_text or "").strip().lower()
+    if "false positive" in text:
+        return "false_positive"
+    if "benign" in text:
+        return "benign"
+    if "true positive" in text or "malicious" in text:
+        return "malicious"
+    if "undetermined" in text:
+        return "undetermined"
+    if "suspicious" in text:
+        return "suspicious"
+    return (fallback or "undetermined").strip().lower() or "undetermined"
+
+
+def _parse_json_list(value: str) -> List[Any]:
+    try:
+        parsed = json.loads(value) if value else []
+    except Exception:
+        parsed = []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _parse_json_object(value: str) -> Dict[str, Any]:
+    try:
+        parsed = json.loads(value) if value else {}
+    except Exception:
+        parsed = {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _is_substantive_evidence_value(value: str) -> bool:
+    cleaned = (value or "").strip()
+    if not cleaned:
+        return False
+
+    normalized = cleaned.lower()
+    if normalized in {"test", "testing", "todo", "tbd", "n/a", "na", "none", "pending", "unknown"}:
+        return False
+
+    alnum_count = len(re.sub(r"[^a-z0-9]", "", normalized))
+    return alnum_count >= 8
+
+
+def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
+    analyst_summary = (raw_result.get("analyst_summary") or "").strip()
+    result_text = (raw_result.get("result_text") or "").strip()
+    if _is_substantive_evidence_value(analyst_summary):
+        return analyst_summary[:180]
+    if _is_substantive_evidence_value(result_text):
+        return result_text[:180]
+    return ""
+
+
+def _serialize_investigation_state_record(record) -> Dict[str, Any]:
+    if not record:
+        return {}
+    return {
+        "case_id": record.case_id,
+        "rule_id": record.rule_id,
+        "current_hypothesis": record.current_hypothesis or "",
+        "provisional_disposition": record.provisional_disposition or "undetermined",
+        "disposition_confidence": record.disposition_confidence if record.disposition_confidence is not None else 0.0,
+        "loop_status": record.loop_status or "collecting_evidence",
+        "iteration_count": record.iteration_count or 0,
+        "unresolved_questions": _parse_json_list(record.unresolved_questions),
+        "closure_blockers": _parse_json_list(record.closure_blockers),
+        "recommended_next_actions": _parse_json_list(record.recommended_next_actions),
+        "evidence_summary": _parse_json_object(record.evidence_summary),
+        "last_analysis_stage": record.last_analysis_stage or "initial",
+        "updated_at": record.updated_at.isoformat() if getattr(record, "updated_at", None) else None,
+    }
+
+
+def _build_investigation_state(
+    case,
+    analysis_text: str,
+    phase2_queries: List[Dict[str, Any]],
+    supportive_results: List[Dict[str, Any]],
+    analysis_stage: str,
+    previous_state: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    previous_state = previous_state or {}
+    sections = _extract_analysis_sections(analysis_text)
+    initial_thoughts = sections.get("initial thoughts", "").strip()
+    key_questions = _extract_question_items(sections.get("key questions", ""))
+    verdict_text = sections.get("triage verdict", "")
+
+    current_hypothesis = initial_thoughts or (case.analysis_summary or "").strip()
+    provisional_disposition = _infer_disposition_label(verdict_text, case.verdict)
+
+    evidence_by_finding = {"supports": 0, "refutes": 0, "neutral": 0}
+    evidence_by_source: Dict[str, int] = {}
+    evidence_timeline = []
+    titles_with_saved_results = set()
+    substantive_evidence_count = 0
+    pending_evidence_count = 0
+    support_strength = 0
+    refute_strength = 0
+
+    for item in supportive_results:
+        raw_result = item.get("raw_result") or {}
+        finding_type = (raw_result.get("finding_type") or "neutral").strip().lower()
+        if finding_type not in evidence_by_finding:
+            finding_type = "neutral"
+        source_system = (item.get("source_system") or "unknown").strip() or "unknown"
+        title = (item.get("query_title") or "").strip()
+
+        observation_summary = _summarize_evidence_observation(raw_result)
+        has_substantive_observation = bool(observation_summary)
+        if has_substantive_observation:
+            substantive_evidence_count += 1
+            evidence_by_finding[finding_type] += 1
+            evidence_by_source[source_system] = evidence_by_source.get(source_system, 0) + 1
+            if finding_type == "supports":
+                support_strength += 1
+            elif finding_type == "refutes":
+                refute_strength += 1
+        else:
+            pending_evidence_count += 1
+
+        if title:
+            evidence_timeline.append({
+                "title": title,
+                "source_system": source_system,
+                "finding_type": finding_type,
+                "summary": observation_summary,
+                "has_substantive_observation": has_substantive_observation,
+                "created_at": item.get("created_at"),
+            })
+
+        if has_substantive_observation:
+            titles_with_saved_results.add(title.lower())
+
+    evidence_count = substantive_evidence_count
+    unresolved_questions = key_questions[:6]
+
+    if support_strength >= 2 and refute_strength == 0:
+        provisional_disposition = "malicious" if case.verdict == "malicious" else "suspicious"
+    elif refute_strength >= 2 and support_strength == 0:
+        if case.verdict == "benign":
+            provisional_disposition = "benign"
+        else:
+            provisional_disposition = "false_positive"
+
+    if support_strength > refute_strength and support_strength > 0 and not current_hypothesis:
+        current_hypothesis = "Saved evidence currently supports the active detection hypothesis more than it refutes it."
+    elif refute_strength > support_strength and refute_strength > 0 and not current_hypothesis:
+        current_hypothesis = "Saved evidence currently weakens the active detection hypothesis and suggests a benign or false-positive path."
+
+    closure_blockers = []
+    if evidence_count == 0:
+        closure_blockers.append("No saved investigative evidence exists yet for this case.")
+    if unresolved_questions:
+        closure_blockers.append("Open investigative questions remain unresolved.")
+    if provisional_disposition in {"suspicious", "undetermined"}:
+        closure_blockers.append("Disposition is still tentative and needs more validating evidence.")
+    if evidence_by_finding["supports"] == 0 and evidence_by_finding["refutes"] == 0:
+        closure_blockers.append("No evidence has been marked as supporting or refuting the working hypothesis.")
+    if pending_evidence_count > 0:
+        closure_blockers.append("Some saved query entries do not yet contain substantive analyst observations.")
+
+    recommended_next_actions = []
+    for query in phase2_queries:
+        title = (query.get("title") or "").strip()
+        if not title or title.lower() in titles_with_saved_results:
+            continue
+        recommended_next_actions.append({
+            "type": "query",
+            "title": title,
+            "description": (query.get("description") or "Run this query and save the result as evidence.").strip(),
+        })
+    if not recommended_next_actions:
+        for question in unresolved_questions[:3]:
+            recommended_next_actions.append({
+                "type": "question",
+                "title": "Resolve open question",
+                "description": question,
+            })
+    if pending_evidence_count > 0:
+        recommended_next_actions.insert(0, {
+            "type": "evidence",
+            "title": "Convert saved query placeholders into real evidence",
+            "description": "Replace generic notes like test/TBD with concrete results and mark whether each finding supports or refutes the hypothesis.",
+        })
+
+    confidence = float(case.confidence_score or 0.5)
+    confidence += min(0.22, substantive_evidence_count * 0.05)
+    if support_strength >= 2 and refute_strength == 0:
+        confidence += 0.08
+    elif refute_strength >= 2 and support_strength == 0:
+        confidence += 0.08
+    if evidence_by_finding["supports"] and evidence_by_finding["refutes"]:
+        confidence -= 0.08
+    if pending_evidence_count > 0:
+        confidence -= min(0.08, pending_evidence_count * 0.02)
+    if provisional_disposition in {"suspicious", "undetermined"}:
+        confidence = min(confidence, 0.78)
+    confidence = max(0.1, min(0.95, confidence))
+
+    if closure_blockers and evidence_count == 0:
+        loop_status = "collecting_evidence"
+    elif (
+        provisional_disposition in {"benign", "malicious", "false_positive"}
+        and confidence >= 0.8
+        and evidence_by_finding["supports"] + evidence_by_finding["refutes"] >= 2
+        and not unresolved_questions
+        and pending_evidence_count == 0
+    ):
+        loop_status = "ready_for_closure"
+    elif (
+        evidence_by_finding["supports"] + evidence_by_finding["refutes"] >= 2
+        and confidence >= 0.7
+        and pending_evidence_count == 0
+    ):
+        loop_status = "ready_for_disposition_review"
+    elif closure_blockers:
+        loop_status = "needs_more_evidence"
+    else:
+        loop_status = "ready_for_disposition_review"
+
+    evidence_summary = {
+        "total_items": evidence_count,
+        "saved_entries": len(supportive_results),
+        "substantive_items": substantive_evidence_count,
+        "pending_items": pending_evidence_count,
+        "by_finding": evidence_by_finding,
+        "by_source_system": evidence_by_source,
+        "recent_titles": evidence_timeline[-5:],
+        "timeline": evidence_timeline[-8:],
+    }
+
+    previous_iterations = int(previous_state.get("iteration_count") or 0)
+    return {
+        "case_id": case.case_id,
+        "rule_id": case.rule_id or "",
+        "current_hypothesis": current_hypothesis,
+        "provisional_disposition": provisional_disposition,
+        "disposition_confidence": round(confidence, 3),
+        "loop_status": loop_status,
+        "iteration_count": previous_iterations + 1,
+        "unresolved_questions": unresolved_questions,
+        "closure_blockers": list(dict.fromkeys(closure_blockers)),
+        "recommended_next_actions": recommended_next_actions[:5],
+        "evidence_summary": evidence_summary,
+        "last_analysis_stage": analysis_stage,
+    }
+
+
+def _upsert_investigation_state(db, model_cls, state_payload: Dict[str, Any]):
+    record = db.query(model_cls).filter(model_cls.case_id == state_payload["case_id"]).first()
+    if record is None:
+        record = model_cls(case_id=state_payload["case_id"])
+        db.add(record)
+
+    record.rule_id = state_payload.get("rule_id") or ""
+    record.current_hypothesis = state_payload.get("current_hypothesis") or ""
+    record.provisional_disposition = state_payload.get("provisional_disposition") or "undetermined"
+    record.disposition_confidence = state_payload.get("disposition_confidence") or 0.0
+    record.loop_status = state_payload.get("loop_status") or "collecting_evidence"
+    record.iteration_count = int(state_payload.get("iteration_count") or 0)
+    record.unresolved_questions = json.dumps(state_payload.get("unresolved_questions") or [], ensure_ascii=False)
+    record.closure_blockers = json.dumps(state_payload.get("closure_blockers") or [], ensure_ascii=False)
+    record.recommended_next_actions = json.dumps(state_payload.get("recommended_next_actions") or [], ensure_ascii=False)
+    record.evidence_summary = json.dumps(state_payload.get("evidence_summary") or {}, ensure_ascii=False)
+    record.last_analysis_stage = state_payload.get("last_analysis_stage") or "initial"
+    return record
+
+
+def _build_supportive_phase2_fallback(
+    supportive_query_defs,
+    prior_analysis: str,
+    response_text: str,
+) -> List[Dict[str, Any]]:
+    response_text = response_text or ""
+    prior_analysis = prior_analysis or ""
+    if not supportive_query_defs:
+        return []
+
+    analysis_text = f"{prior_analysis} {response_text}".lower()
+    scored_queries: List[tuple[int, Dict[str, Any]]] = []
+
+    for query_def in supportive_query_defs:
+        title = (getattr(query_def, "title", "") or "").strip()
+        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
+        description = (getattr(query_def, "description", "") or "").strip()
+        if not title or not spl_query:
+            continue
+
+        score = 0
+        query_text = f"{title} {description} {spl_query}".lower()
+        for token in ["host", "user", "process", "parent", "source", "destination", "ip", "timeline", "recent", "auth", "ssh", "root"]:
+            if token in analysis_text and token in query_text:
+                score += 2
+        if any(token in query_text for token in ["confirm", "validate", "timeline", "recent", "activity"]):
+            score += 1
+
+        scored_queries.append((score, {
+            "title": title,
+            "spl": spl_query,
+            "description": description or "Use this query to collect disposition-driving follow-up evidence for the current hypothesis.",
+        }))
+
+    scored_queries.sort(key=lambda item: item[0], reverse=True)
+    return [item[1] for item in scored_queries[:3]]
 
 
 class InvestigationEvidenceEntryPayload(BaseModel):
@@ -555,10 +1173,6 @@ NOTABLE_FIELD_ALIASES = [
     ("User Category", "user_category"),
     ("User", "user"),
     ("Value", "value"),
-    # Additional Fields block can appear as "Additional Fields\tValue\tAction"
-    # in some export formats; treat the heading itself as the label so the
-    # whole block is captured into additional_fields_value.
-    ("Additional Fields", "additional_fields_value"),
 ]
 
 NOTABLE_FIELD_LABELS = {
@@ -924,27 +1538,6 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
 
     additional_fields = (fields.get("additional_fields_value") or "").strip()
     if additional_fields:
-        # Some Incident Review exports only expose the glued
-        # "Destination <host><score>Risk Score" pattern inside the
-        # Additional Fields block, while the parsed destination value has
-        # already been truncated to "<host><score>". Use the additional
-        # fields text to safely peel the score digit back off when it
-        # matches the numeric risk_score.
-        dest_val_af = (fields.get("destination") or "").strip()
-        risk_val_af = (fields.get("risk_score") or "").strip()
-        if dest_val_af and risk_val_af and risk_val_af.isdigit() and len(risk_val_af) == 1:
-            # Look for the exact "Destination <dest_val>Risk Score" glue
-            # pattern in the Additional Fields text.
-            pattern = re.compile(
-                r"Destination\s+" + re.escape(dest_val_af) + r"\s*Risk Score",
-                flags=re.IGNORECASE,
-            )
-            if pattern.search(additional_fields):
-                # If the last character of dest_val matches the
-                # risk_score digit, drop it to recover the host.
-                if dest_val_af[-1] == risk_val_af:
-                    fields["destination"] = dest_val_af[:-1]
-
         if not fields.get("actor"):
             actor_match = re.search(r"ActionActor\s*([^\s]+)", additional_fields, flags=re.IGNORECASE)
             if actor_match:
@@ -961,29 +1554,6 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
         if host_from_desc:
             fields["destination"] = host_from_desc
 
-    # Handle Destination + Risk Score glue *before* generic tail trimming
-    # so we can still see the "Risk Score" label when present.
-    dest_val = fields.get("destination") or ""
-    lower_dest = dest_val.lower()
-    rs_idx = lower_dest.find("risk score")
-    if rs_idx != -1:
-        risk_val = (fields.get("risk_score") or "").strip()
-
-        # Find the last non-space character immediately before the
-        # "Risk Score" label.
-        lookback = rs_idx - 1
-        while lookback >= 0 and dest_val[lookback].isspace():
-            lookback -= 1
-
-        host_part = dest_val[:rs_idx]
-        if lookback >= 0 and dest_val[lookback].isdigit() and risk_val and risk_val.isdigit() and dest_val[lookback] == risk_val:
-            # Drop the score digit from the host portion.
-            host_part = dest_val[:lookback]
-
-        fields["destination"] = host_part.strip()
-
-    # Now that Destination is cleaned up, apply generic glued-tail trimming
-    # to host/destination/ip fields.
     for key in ["host", "source_ip", "destination", "destination_ip"]:
         entity_value = (fields.get(key) or "").strip()
         if entity_value:
@@ -1016,6 +1586,13 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
             cleaned = value[:idx].strip()
             fields[key] = cleaned
 
+    # If destination still contains a concatenated "Risk Score" label,
+    # trim it off to recover the hostname.
+    dest_val = fields.get("destination") or ""
+    rs_idx = dest_val.lower().find("risk score")
+    if rs_idx != -1:
+        fields["destination"] = dest_val[:rs_idx].strip()
+
     # Defensive fallback: if Destination looks like a hostname followed by a
     # bare integer (e.g., "NDC45-790 80" where 80 is actually a risk score
     # or some other numeric suffix), drop the trailing number and keep just
@@ -1026,19 +1603,6 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     host_num_match = re.match(r"^([A-Za-z0-9._-]+)\s+\d{1,3}$", stripped)
     if host_num_match:
         fields["destination"] = host_num_match.group(1)
-
-    # Rule-aware glue fix: for Suspicious LotL outbound notables, some
-    # exports glue the risk score digit directly onto the hostname in the
-    # Destination field (e.g., "NDC45-790" with Risk Score 0 and a header
-    # line of "NDC45-79"). When the rule identity indicates the LotL
-    # outbound family and the last character of the destination matches the
-    # single-digit risk_score, treat that digit as the score and peel it off
-    # the hostname.
-    corr_anchor = (fields.get("correlation_search") or fields.get("title") or "").lower()
-    risk_val = (fields.get("risk_score") or "").strip()
-    if stripped and risk_val and len(risk_val) == 1 and stripped.endswith(risk_val):
-        if "suspicious lotl" in corr_anchor or "lotl_outbound_connection" in corr_anchor:
-            fields["destination"] = stripped[:-1]
 
     # If host/source/destination IP values were masked, keep them if they are
     # still single-token placeholders, but reject obviously merged artifacts.
@@ -1177,12 +1741,10 @@ def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_
     else:
         missing.append("primary entity")
 
-    # Treat history/analyst context as an optional bonus signal: if present,
-    # boost the score slightly, but do not flag its absence as a "missing
-    # anchor". This avoids noisy "history or analyst context" warnings for
-    # clean, first-time notables while still rewarding richer pastes.
     if has_context:
         score += 10
+    else:
+        missing.append("history or analyst context")
 
     if has_status_bundle:
         score += 10
@@ -1514,6 +2076,62 @@ def derive_triage_confidence(disposition: str) -> float:
         return 0.8
     return 0.6
 
+
+def _normalize_rule_match_text(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _resolve_correlation_rule(db, correlation_model, anchor_text: str):
+    anchor = _normalize_rule_match_text(anchor_text)
+    if not anchor:
+        return None
+
+    rules = db.query(correlation_model).filter(correlation_model.enabled == 1).all()
+
+    for rule in rules:
+        name = _normalize_rule_match_text(rule.rule_name or "")
+        if name and name == anchor:
+            return rule
+
+    for rule in rules:
+        name = _normalize_rule_match_text(rule.rule_name or "")
+        if not name:
+            continue
+        if anchor in name or name in anchor:
+            return rule
+
+    anchor_tokens = {
+        token for token in anchor.split()
+        if token not in {"endpoint", "network", "rule", "alert", "detection"}
+    }
+    if not anchor_tokens:
+        return None
+
+    best_rule = None
+    best_score = 0
+    for rule in rules:
+        name_tokens = {
+            token for token in _normalize_rule_match_text(rule.rule_name or "").split()
+            if token not in {"endpoint", "network", "rule", "alert", "detection"}
+        }
+        if not name_tokens:
+            continue
+
+        overlap = anchor_tokens & name_tokens
+        if not overlap:
+            continue
+
+        score = len(overlap)
+        if anchor_tokens.issubset(name_tokens):
+            score += 10
+
+        if score > best_score:
+            best_rule = rule
+            best_score = score
+
+    return best_rule
+
 # Routes
 @app.get("/health", tags=["System"])
 def health():
@@ -1815,6 +2433,51 @@ def get_triage_case(case_id: str):
             "analysis_summary": result.analysis_summary,
             "remediation_steps": result.remediation_steps,
             "triaged_at": result.triaged_at.isoformat()
+        }
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
+def get_investigation_state(case_id: str):
+    """Return the latest persisted investigation loop state for a case."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, InvestigationState
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        state = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
+        if state:
+            return _serialize_investigation_state_record(state)
+
+        return {
+            "case_id": case.case_id,
+            "rule_id": case.rule_id or "",
+            "current_hypothesis": (case.analysis_summary or "").strip(),
+            "provisional_disposition": (case.verdict or "undetermined").strip().lower(),
+            "disposition_confidence": float(case.confidence_score or 0.0),
+            "loop_status": "collecting_evidence",
+            "iteration_count": 0,
+            "unresolved_questions": [],
+            "closure_blockers": ["No persisted investigation state yet. Run analysis to initialize the loop."],
+            "recommended_next_actions": [],
+            "evidence_summary": {
+                "total_items": 0,
+                "by_finding": {"supports": 0, "refutes": 0, "neutral": 0},
+                "by_source_system": {},
+                "recent_titles": [],
+            },
+            "last_analysis_stage": "initial",
+            "updated_at": None,
         }
     finally:
         try:
@@ -2381,25 +3044,16 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        # For historical (closed) or triaged pasted notables, retain the
-        # underlying record in the database and simply hide it from the
-        # recent list so stats and triage cases retain full context.
-        # Only un-promoted, non-historical drafts are actually deleted.
+        # For historical (closed) pasted notables, retain the underlying
+        # record in the database and simply hide it from the recent list so
+        # stats and closed-notables summaries remain accurate.
         try:
             payload = json.loads(event.raw) if event.raw else {}
         except Exception:
             payload = {}
 
-        is_historical = bool(payload.get("historical"))
-        promoted_case_id = payload.get("promoted_case_id")
-        is_triaged = bool(promoted_case_id)
-
-        if is_historical or is_triaged:
+        if payload.get("historical"):
             payload["hidden_from_recent"] = True
-            # Optional marker so future maintenance jobs know this was
-            # protected from deletion because it backs a triage case.
-            if is_triaged:
-                payload["protected_triaged"] = True
             event.raw = json.dumps(payload)
         else:
             db.delete(event)
@@ -2473,14 +3127,8 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                is_historical = bool(payload_raw.get("historical"))
-                promoted_case_id = payload_raw.get("promoted_case_id")
-                is_triaged = bool(promoted_case_id)
-
-                if is_historical or is_triaged:
+                if payload_raw.get("historical"):
                     payload_raw["hidden_from_recent"] = True
-                    if is_triaged:
-                        payload_raw["protected_triaged"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
                     db.delete(event)
@@ -2554,27 +3202,8 @@ def promote_notable_to_triage(event_id: int):
         # Try to resolve a stable rule_id from the ES correlation rules
         # table so future cases for the same rule consistently reuse the
         # same supportive queries and templates.
-        resolved_rule_id = None
-        anchor = (correlation_search or "").strip().lower()
-        if anchor:
-            rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
-
-            # 1) Prefer exact rule_name match
-            for r in rules:
-                name = (r.rule_name or "").strip().lower()
-                if name and name == anchor:
-                    resolved_rule_id = r.rule_id
-                    break
-
-            # 2) Fallback to relaxed contains-based match
-            if not resolved_rule_id:
-                for r in rules:
-                    name = (r.rule_name or "").strip().lower()
-                    if not name:
-                        continue
-                    if anchor in name or name in anchor:
-                        resolved_rule_id = r.rule_id
-                        break
+        resolved_rule = _resolve_correlation_rule(db, ESCorrelationRule, correlation_search)
+        resolved_rule_id = resolved_rule.rule_id if resolved_rule else None
 
         summary_parts = [title]
         if disposition:
@@ -2687,7 +3316,7 @@ def analyze_case(request: AnalyzeRequest):
         context = request.context
 
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState
         from services.ollama_service import get_ollama_client
 
         db = SessionLocal()
@@ -2698,49 +3327,24 @@ def analyze_case(request: AnalyzeRequest):
             db.close()
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
+        previous_state_record = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
+        previous_state_payload = _serialize_investigation_state_record(previous_state_record) if previous_state_record else {}
+
         # 2. Fetch Detection Science from ESCorrelationRule
         detection_rule = None
         if case.rule_id:
             detection_rule = db.query(ESCorrelationRule).filter(ESCorrelationRule.rule_id == case.rule_id).first()
 
-        # Helper to normalize wrapped ES rule labels like
-        # "Endpoint - <Rule Name> - Rule" down to a common core so that
-        # truncated correlation_search values (e.g. "Endpoint - Suspicious LotL")
-        # still map to the canonical ESCorrelationRule entry
-        # "Suspicious LotL Process Outbound Connection".
-        def _normalize_rule_label(text: str) -> str:
-            s = (text or "").lower().strip()
-            # Drop common wrapper prefixes/suffixes used in ES UI labels
-            s = re.sub(r"^endpoint\s*-\s*", "", s)
-            s = re.sub(r"\s*-\s*rule$", "", s)
-            return s
-
         # If rule_id is missing or could not be resolved, fall back to a
-        # normalized rule_name match similar to the triage promotion logic so
+        # relaxed rule_name match similar to the triage promotion logic so
         # Suspicious LotL and related rules still map to their canonical
-        # ESCorrelationRule entries even when the case's rule_name is a
-        # truncated wrapper label.
+        # ESCorrelationRule entries even when the case's rule_name includes
+        # wrapper text like "Endpoint - <Rule Name> - Rule".
         if not detection_rule and case.rule_name:
-            anchor = _normalize_rule_label(case.rule_name)
-            if anchor:
-                rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
-
-                # Prefer exact normalized rule_name match first
-                for r in rules:
-                    name = _normalize_rule_label(r.rule_name or "")
-                    if name and name == anchor:
-                        detection_rule = r
-                        break
-
-                # Fallback: relaxed contains-based match on normalized labels
-                if not detection_rule:
-                    for r in rules:
-                        name = _normalize_rule_label(r.rule_name or "")
-                        if not name:
-                            continue
-                        if anchor in name or name in anchor:
-                            detection_rule = r
-                            break
+            detection_rule = _resolve_correlation_rule(db, ESCorrelationRule, case.rule_name)
+            if detection_rule and case.rule_id != detection_rule.rule_id:
+                case.rule_id = detection_rule.rule_id
+                db.commit()
 
         # Load pasted-notable events, baselines, and supportive queries
         pasted_events = db.query(SplunkEvent).filter(
@@ -2838,7 +3442,7 @@ def analyze_case(request: AnalyzeRequest):
         if detection_rule:
             rule_id = (detection_rule.rule_id or "").strip()
 
-            # Base queries explicitly keyed to this rule_id from the database
+            # Base queries explicitly keyed to this rule_id
             supportive_query_defs.extend(
                 db.query(SupportiveQuery).filter(SupportiveQuery.rule_id == rule_id).all()
             )
@@ -2854,65 +3458,54 @@ def analyze_case(request: AnalyzeRequest):
                     if q.title not in existing_titles:
                         supportive_query_defs.append(q)
 
-            # Fallback: if no DB-backed supportive queries exist for this rule,
-            # look for static definitions in supportive_rules.json so that
-            # "main" SPL still appears alongside phase-2 queries.
-            if not supportive_query_defs:
-                try:
-                    platform_root = get_platform_root()
-                    supportive_path = os.path.join(platform_root, "supportive_rules.json")
-                    if os.path.exists(supportive_path):
-                        with open(supportive_path, "r", encoding="utf-8") as f:
-                            data = json.load(f)
-                        for entry in data.get("rules", []):
-                            if (entry.get("rule_id") or "").strip() == rule_id:
-                                for sq in entry.get("supportive_queries", []):
-                                    spl_value = (sq.get("spl_query") or "").strip()
-                                    if not spl_value:
-                                        continue
-                                    title = (sq.get("title") or "").strip() or "Supportive Query"
-                                    desc = sq.get("description") or ""
-                                    supportive_query_defs.append(
-                                        SimpleNamespace(
-                                            id=None,
-                                            rule_id=rule_id,
-                                            title=title,
-                                            description=desc,
-                                            spl_query=spl_value,
-                                        )
-                                    )
-                                break
-                except Exception:
-                    # Best-effort only; if anything goes wrong we fall back to
-                    # having no static supportive queries for this rule.
-                    pass
-
         db.close()
+
+        prior_analysis = (request.prior_analysis or "").strip()
+        analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
+        prior_analysis_marker = "PHASE2_QUERIES_JSON_START"
+        prior_analysis_marker_idx = prior_analysis.find(prior_analysis_marker)
+        if prior_analysis_marker_idx != -1:
+            prior_analysis = prior_analysis[:prior_analysis_marker_idx].strip()
+        if len(prior_analysis) > 8000:
+            prior_analysis = prior_analysis[:8000].strip()
 
         client = get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 
         # 3. Assemble Prompt with Detection Science and explicit response structure
+        prompt_intro = (
+            "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
+            "Your response MUST be structured into the following sections (in order):\n"
+            "1. Initial Thoughts\n"
+            "2. Key Questions\n"
+            "3. Investigative Analysis\n"
+            "4. Supportive Query Recommendations (Phase 2 SPL)\n"
+            "5. Triage Verdict\n"
+            "6. Structured Closure Notes\n\n"
+            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
+            "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface. "
+            "If supportive SPL templates are provided, only use those templates and adapt placeholders conservatively; do not invent SQL, table names, or unrelated SPL. "
+            "In the narrative Phase 2 section, summarize the recommended query titles and purpose only; the machine-readable JSON block is the only place where full query text should appear.\n\n"
+        )
+        if prior_analysis:
+            prompt_intro += (
+                "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
+                "Reassess that hypothesis against the newest evidence, call out what still remains unresolved, and tighten the likely disposition. "
+                "Your follow-up queries must be the smallest set of high-value checks most likely to change the disposition decision between true positive, benign positive, false positive, or undetermined. "
+                "Prefer confirmatory or falsifying queries over broad exploratory searches.\n\n"
+            )
+        prompt_intro += (
+            "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
+            "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
+            "PHASE2_QUERIES_JSON_START\n"
+            "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
+            "PHASE2_QUERIES_JSON_END\n"
+        )
+
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
-            (
-                "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
-                "Your response MUST be structured into the following sections (in order):\n"
-                "1. Initial Thoughts\n"
-                "2. Key Questions\n"
-                "3. Investigative Analysis\n"
-                "4. Supportive Query Recommendations (Phase 2 SPL)\n"
-                "5. Triage Verdict\n"
-                "6. Structured Closure Notes\n\n"
-                "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
-                "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface.\n\n"
-                "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
-                "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
-                "PHASE2_QUERIES_JSON_START\n"
-                "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
-                "PHASE2_QUERIES_JSON_END\n"
-            ),
+            prompt_intro,
         ]
 
         if detection_rule:
@@ -2932,6 +3525,29 @@ def analyze_case(request: AnalyzeRequest):
         prompt_parts.append("\n\n=== CURRENT CASE ===")
         prompt_parts.append(f"Case ID: {case.case_id} | Rule: {case.rule_name} | Initial Verdict: {case.verdict}")
         prompt_parts.append(f"Summary: {case.analysis_summary}")
+
+        if previous_state_payload:
+            prompt_parts.append("\n\n=== INVESTIGATION LOOP STATE ===")
+            prompt_parts.append(f"Loop Status: {previous_state_payload.get('loop_status')}")
+            prompt_parts.append(f"Iteration Count: {previous_state_payload.get('iteration_count')}")
+            prompt_parts.append(f"Current Hypothesis: {previous_state_payload.get('current_hypothesis')}")
+            prompt_parts.append(f"Provisional Disposition: {previous_state_payload.get('provisional_disposition')}")
+            prompt_parts.append(f"Disposition Confidence: {previous_state_payload.get('disposition_confidence')}")
+            unresolved = previous_state_payload.get("unresolved_questions") or []
+            if unresolved:
+                prompt_parts.append("Open Questions:")
+                for item in unresolved[:5]:
+                    prompt_parts.append(f"- {item}")
+            blockers = previous_state_payload.get("closure_blockers") or []
+            if blockers:
+                prompt_parts.append("Closure Blockers:")
+                for item in blockers[:5]:
+                    prompt_parts.append(f"- {item}")
+
+        if prior_analysis:
+            prompt_parts.append("\n\n=== PREVIOUS ANALYSIS HYPOTHESIS ===")
+            prompt_parts.append(f"Analysis Stage: {analysis_stage}")
+            prompt_parts.append(prior_analysis)
 
         if source_notable_payload:
             prompt_parts.append("\n\n=== SOURCE NOTABLE EVIDENCE ===")
@@ -2999,79 +3615,82 @@ def analyze_case(request: AnalyzeRequest):
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
 
-        # Attempt to extract a structured JSON block of phase-2 SPL
-        # recommendations from the model's response. This block is delimited
-        # by the PHASE2_QUERIES_JSON_START/END markers we instructed the
-        # model to emit.
         response_text = result["response"] or ""
-        phase2_queries: List[Dict[str, Any]] = []
-        start_marker = "PHASE2_QUERIES_JSON_START"
-        end_marker = "PHASE2_QUERIES_JSON_END"
-        start_idx = response_text.find(start_marker)
-        end_idx = response_text.find(end_marker)
-        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-            # Extract the region between the markers and then trim down to the
-            # JSON array itself so we are resilient to markdown decorations
-            # like "**PHASE2_QUERIES_JSON_START**".
-            raw_block = response_text[start_idx + len(start_marker):end_idx]
-            # Look for the first '[' and the last ']' within this region.
-            arr_start = raw_block.find("[")
-            arr_end = raw_block.rfind("]")
-            json_block = ""
-            if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
-                json_block = raw_block[arr_start:arr_end + 1].strip()
-            else:
-                json_block = raw_block.strip()
-            try:
-                parsed_block = json.loads(json_block)
-                if isinstance(parsed_block, list):
-                    for idx, item in enumerate(parsed_block, 1):
-                        # Accept either dict-style entries or bare strings.
-                        title = ""
-                        spl_value = ""
-                        desc = ""
+        phase2_queries = _extract_phase2_queries(response_text)
 
-                        if isinstance(item, dict):
-                            # Be lenient about key names: handle common variants.
-                            title_keys = ["title", "name", "query_name"]
-                            spl_keys = ["spl", "query", "sql", "code"]
-                            desc_keys = ["description", "desc", "notes"]
+        if not phase2_queries:
+            fallback_prompt_parts = [
+                "You are generating follow-up SOC investigation queries from an existing analysis.",
+                "Return ONLY a JSON array. Do not include markdown fences, prose, headings, or commentary.",
+                "Each JSON item must have keys: title, spl, description.",
+                "Generate 1-3 high-value SPL queries that would most directly change the disposition decision between true positive, benign positive, false positive, or undetermined.",
+                "Prefer confirmatory or falsifying checks over broad exploratory searches.",
+                f"Case ID: {case.case_id}",
+                f"Rule: {case.rule_name}",
+            ]
+            if detection_rule:
+                fallback_prompt_parts.append(f"Rule Description: {detection_rule.description}")
+                if detection_rule.drilldown_fields:
+                    fallback_prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
+            if supportive_query_defs:
+                fallback_prompt_parts.append("Candidate Supportive Query Templates:")
+                for idx, q in enumerate(supportive_query_defs[:5], 1):
+                    fallback_prompt_parts.append(f"[{idx}] {q.title}: {q.spl_query}")
+            if source_notable_payload and source_notable_payload.get("fields"):
+                fallback_prompt_parts.append("Case Fields:")
+                for k, v in list(source_notable_payload["fields"].items())[:20]:
+                    fallback_prompt_parts.append(f"- {k}: {v}")
+            if supportive_results:
+                fallback_prompt_parts.append("Saved Investigation Evidence:")
+                for idx, res in enumerate(supportive_results[:5], 1):
+                    fallback_prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(res['raw_result'])}")
+            fallback_prompt_parts.append("Previous/Current Analysis:")
+            fallback_prompt_parts.append(prior_analysis or response_text[:6000])
+            fallback_prompt_parts.append(
+                "Return valid JSON like: [{\"title\":\"...\",\"spl\":\"search ...\",\"description\":\"...\"}]"
+            )
 
-                            for k in title_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    title = str(item.get(k)).strip()
-                                    break
+            fallback_result = client.generate("\n".join(fallback_prompt_parts), model=model)
+            if fallback_result.get("success"):
+                fallback_response_text = (fallback_result.get("response") or "").strip()
+                try:
+                    parsed_fallback = json.loads(fallback_response_text)
+                    if isinstance(parsed_fallback, list):
+                        phase2_queries = _extract_phase2_queries(
+                            "PHASE2_QUERIES_JSON_START\n"
+                            + fallback_response_text
+                            + "\nPHASE2_QUERIES_JSON_END"
+                        )
+                except Exception:
+                    phase2_queries = _extract_phase2_queries(fallback_response_text)
 
-                            for k in spl_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    spl_value = str(item.get(k)).strip()
-                                    break
+        if not phase2_queries:
+            phase2_queries = _build_supportive_phase2_fallback(
+                supportive_query_defs,
+                prior_analysis,
+                response_text,
+            )
 
-                            for k in desc_keys:
-                                if k in item and (item.get(k) or "").strip():
-                                    desc = str(item.get(k)).strip()
-                                    break
-                        elif isinstance(item, str):
-                            # Treat bare strings as SPL bodies with a generic title.
-                            spl_value = item.strip()
-                            title = f"Phase 2 Query {idx}"
-
-                        title = title or f"Phase 2 Query {idx}"
-
-                        if spl_value:
-                            phase2_queries.append({
-                                "title": title,
-                                "spl": spl_value,
-                                "description": desc,
-                            })
-            except Exception:
-                # If parsing fails, we silently ignore and leave phase2_queries empty.
-                phase2_queries = []
+        phase2_queries = _ground_phase2_queries(phase2_queries, supportive_query_defs)
+        display_analysis = _sanitize_analysis_text(response_text, phase2_queries)
+        investigation_state = _build_investigation_state(
+            case,
+            display_analysis,
+            phase2_queries,
+            supportive_results,
+            analysis_stage,
+            previous_state_payload,
+        )
+        display_analysis = _apply_investigation_state_to_analysis_text(display_analysis, investigation_state)
+        _upsert_investigation_state(db, InvestigationState, investigation_state)
+        db.commit()
 
         return {
             "case_id": case_id,
             "model": model,
-            "analysis": response_text,
+            "analysis": display_analysis,
+            "analysis_stage": analysis_stage,
+            "used_prior_analysis": bool(prior_analysis),
             "detection_science_applied": bool(detection_rule),
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
@@ -3087,6 +3706,7 @@ def analyze_case(request: AnalyzeRequest):
             ],
             "prior_closures": prior_closures,
             "phase2_queries": phase2_queries,
+            "investigation_state": investigation_state,
         }
     except HTTPException:
         raise
@@ -3506,38 +4126,6 @@ def list_rules():
                 "spl_query": sq.spl_query,
             })
 
-        # Best-effort static fallback: load supportive_rules.json so rules
-        # without DB-backed SupportiveQuery rows still surface their
-        # "main" SPL templates in the UI.
-        static_supportive_by_rule: Dict[str, List[Dict[str, Any]]] = {}
-        try:
-            platform_root = get_platform_root()
-            supportive_path = os.path.join(platform_root, "supportive_rules.json")
-            if os.path.exists(supportive_path):
-                with open(supportive_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                for entry in data.get("rules", []):
-                    rule_key = (entry.get("rule_id") or "").strip()
-                    if not rule_key:
-                        continue
-                    items: List[Dict[str, Any]] = []
-                    for sq in entry.get("supportive_queries", []):
-                        spl_value = (sq.get("spl_query") or "").strip()
-                        if not spl_value:
-                            continue
-                        title = (sq.get("title") or "").strip() or "Supportive Query"
-                        desc = sq.get("description") or ""
-                        items.append({
-                            "id": None,
-                            "title": title,
-                            "description": desc,
-                            "spl_query": spl_value,
-                        })
-                    if items:
-                        static_supportive_by_rule[rule_key] = items
-        except Exception:
-            static_supportive_by_rule = {}
-
         def supportive_for_rule(rule_obj) -> List[Dict[str, Any]]:
             # Return supportive queries for a given rule.
             # In addition to queries explicitly keyed to this rule_id, we
@@ -3545,14 +4133,14 @@ def list_rules():
             # rule whose ID starts with ``lotl_`` automatically inherits the
             # supportive queries defined under the canonical
             # ``lotl_outbound_connection`` family, unless duplicates exist.
-            # When no DB-backed queries exist, we fall back to static
-            # definitions in supportive_rules.json so "main" SPL still
-            # appears in the UI.
+            # This lets future LotL notables reuse the same investigation
+            # SPL without duplicating query definitions in the database.
 
             rule_id = (rule_obj.rule_id or "").strip()
             base = list(by_rule.get(rule_id, []))
 
-            # LotL family sharing using DB-backed queries first.
+            # LotL family sharing: treat any "lotl_*" rule as part of the
+            # same investigative family and reuse the canonical queries.
             canonical_lotl_id = "lotl_outbound_connection"
             if rule_id.startswith("lotl_") and rule_id != canonical_lotl_id:
                 extras = by_rule.get(canonical_lotl_id, []) or []
@@ -3560,18 +4148,6 @@ def list_rules():
                 for q in extras:
                     if q["title"] not in existing_titles:
                         base.append(q)
-
-            # Static fallback when no DB-backed queries exist.
-            if not base:
-                base = list(static_supportive_by_rule.get(rule_id, []))
-
-                # LotL family sharing for static templates as well.
-                if rule_id.startswith("lotl_") and rule_id != canonical_lotl_id:
-                    extras = static_supportive_by_rule.get(canonical_lotl_id, []) or []
-                    existing_titles = {q["title"] for q in base}
-                    for q in extras:
-                        if q["title"] not in existing_titles:
-                            base.append(q)
 
             return base
 

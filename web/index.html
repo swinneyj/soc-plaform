@@ -729,6 +729,99 @@
                         </div>
                     </div>
 
+                    <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-4 mt-4">
+                        <div class="flex items-start justify-between gap-3">
+                            <div>
+                                <h3 class="text-sm font-semibold text-blue-300">Investigation Loop State</h3>
+                                <p class="text-[11px] text-gray-400">Track what the case currently suggests, what is still blocking closure, and whether the next loop needs more evidence.</p>
+                            </div>
+                            <div class="text-right text-[11px] text-gray-400">
+                                <p>Iteration {{ investigationState.iteration_count || 0 }}</p>
+                                <p v-if="investigationState.updated_at">Updated {{ new Date(investigationState.updated_at).toLocaleString() }}</p>
+                            </div>
+                        </div>
+
+                        <div class="flex flex-wrap gap-2 text-xs">
+                            <span class="px-2 py-1 rounded border border-blue-500 text-blue-200 bg-blue-950">
+                                Status: {{ formatLoopStatus(investigationState.loop_status) }}
+                            </span>
+                            <span class="px-2 py-1 rounded border border-amber-500 text-amber-200 bg-amber-950">
+                                Disposition: {{ formatDispositionLabel(investigationState.provisional_disposition) }}
+                            </span>
+                            <span class="px-2 py-1 rounded border border-emerald-500 text-emerald-200 bg-emerald-950">
+                                Confidence: {{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%
+                            </span>
+                        </div>
+
+                        <div>
+                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Current Hypothesis</p>
+                            <p class="text-sm text-gray-200 whitespace-pre-wrap">{{ investigationState.current_hypothesis || 'No persisted hypothesis yet.' }}</p>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
+                                <p class="text-gray-400">Substantive Evidence</p>
+                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.substantive_items ?? investigationState.evidence_summary?.total_items ?? 0 }}</p>
+                            </div>
+                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
+                                <p class="text-gray-400">Supports / Refutes</p>
+                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.by_finding?.supports || 0 }} / {{ investigationState.evidence_summary?.by_finding?.refutes || 0 }}</p>
+                            </div>
+                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
+                                <p class="text-gray-400">Pending / Neutral</p>
+                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.pending_items || 0 }} / {{ investigationState.evidence_summary?.by_finding?.neutral || 0 }}</p>
+                            </div>
+                        </div>
+
+                        <div v-if="investigationState.closure_blockers && investigationState.closure_blockers.length">
+                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Closure Blockers</p>
+                            <div class="flex flex-wrap gap-2">
+                                <span v-for="item in investigationState.closure_blockers" :key="'blocker:' + item" class="bg-red-950 border border-red-700 text-red-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
+                            </div>
+                        </div>
+
+                        <div v-if="investigationState.unresolved_questions && investigationState.unresolved_questions.length">
+                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Open Questions</p>
+                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
+                                <li v-for="item in investigationState.unresolved_questions" :key="'question:' + item">{{ item }}</li>
+                            </ul>
+                        </div>
+
+                        <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length">
+                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Next Best Actions</p>
+                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
+                                <li v-for="item in investigationState.recommended_next_actions" :key="'action:' + item.title + item.description">
+                                    <span class="font-semibold text-blue-300">{{ item.title }}</span>
+                                    <span v-if="item.description">: {{ item.description }}</span>
+                                </li>
+                            </ul>
+                        </div>
+
+                        <div v-if="investigationState.evidence_summary?.timeline && investigationState.evidence_summary.timeline.length">
+                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Evidence Timeline</p>
+                            <div class="space-y-2">
+                                <div
+                                    v-for="item in investigationState.evidence_summary.timeline"
+                                    :key="'timeline:' + item.title + item.created_at + item.source_system"
+                                    class="bg-gray-800 border border-gray-700 rounded p-3"
+                                >
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div>
+                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
+                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
+                                        </div>
+                                        <div class="text-right text-[11px] text-gray-500">
+                                            <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
+                                            <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
+                                        </div>
+                                    </div>
+                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
+                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div v-if="analysisRule && showPhase1Analysis" class="mt-2">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
@@ -1712,6 +1805,7 @@
                     phase2Model: '',
                     phase2Result: null,
                     analysisSourceNotable: null,
+                    investigationState: null,
                     enrichmentManualResults: {},
                     enrichmentFindingTypes: {},
                     placeholderAliases: {},
@@ -2086,6 +2180,7 @@
                 },
                 onAnalysisCaseChanged() {
                     this.analysisResult = null;
+                    this.investigationState = null;
                     this.enrichmentManualResults = {};
                     this.enrichmentFindingTypes = {};
                     this.supportiveManualResults = {};
@@ -2113,6 +2208,7 @@
                             this.loadSavedSupportiveEvidence(caseId);
                             this.loadSavedEnrichmentEvidence(caseId);
                             this.loadSavedPhase2Evidence(caseId);
+                            this.loadInvestigationState(caseId);
                 },
                 async loadTriageData() {
                     try {
@@ -2689,6 +2785,19 @@
                     this.currentTab = 'analysis';
                     this.onAnalysisCaseChanged();
                 },
+                async loadInvestigationState(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
+                        this.investigationState = res.data;
+                    } catch (err) {
+                        console.error('Failed to load investigation state:', err);
+                        this.investigationState = null;
+                    }
+                },
                 async runAnalysis() {
                     if (!this.analysisCaseId || !this.analysisModel) {
                         alert('Please select a case ID and model');
@@ -2702,11 +2811,18 @@
                         await this.saveEnrichmentEvidence({ silent: true });
 
                         let combinedContext = this.analysisContext || '';
+                        const priorAnalysisText = (
+                            (this.phase2Result && this.phase2Result.analysis) ||
+                            (this.analysisResult && this.analysisResult.analysis) ||
+                            ''
+                        ).toString().trim();
 
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
                             model: this.analysisModel,
-                            context: combinedContext
+                            context: combinedContext,
+                            prior_analysis: priorAnalysisText,
+                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
                         });
                         // Ignore stale responses if a newer analysis has been started or cancelled.
                         if (requestId === this.analysisRequestId) {
@@ -2722,6 +2838,7 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.analysisResult = newResult;
+                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -2807,11 +2924,18 @@
                         await this.savePhase2Evidence({ silent: true });
 
                         let combinedContext = this.analysisContext || '';
+                        const priorAnalysisText = (
+                            (this.phase2Result && this.phase2Result.analysis) ||
+                            (this.analysisResult && this.analysisResult.analysis) ||
+                            ''
+                        ).toString().trim();
 
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
                             model: effectiveModel,
-                            context: combinedContext
+                            context: combinedContext,
+                            prior_analysis: priorAnalysisText,
+                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
                         });
                         if (requestId === this.analysisRequestId) {
                             const newResult = res.data;
@@ -2824,6 +2948,7 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.phase2Result = newResult;
+                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -3038,6 +3163,7 @@
                         phase2FindingTypes: this.phase2FindingTypes,
                         analysisResult: this.analysisResult,
                         phase2Result: this.phase2Result,
+                        investigationState: this.investigationState,
                     };
 
                     try {
@@ -3096,9 +3222,28 @@
                         if (snapshot.phase2Result) {
                             this.phase2Result = snapshot.phase2Result;
                         }
+                        if (snapshot.investigationState) {
+                            this.investigationState = snapshot.investigationState;
+                        }
                     } catch (err) {
                         console.error('Failed to load analysis state:', err);
                     }
+                },
+                formatLoopStatus(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Unknown';
+                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+                },
+                formatDispositionLabel(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Undetermined';
+                    if (raw === 'false_positive') return 'False Positive';
+                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+                },
+                formatFindingLabel(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Neutral';
+                    return raw.charAt(0).toUpperCase() + raw.slice(1);
                 },
                 cancelAnalysis() {
                     // Invalidate any in-flight analysis responses and clear the running flag.
