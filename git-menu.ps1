@@ -390,9 +390,9 @@ function Show-BranchGuide {
 	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor $MenuTextColor
 	Write-Host 'main        = safe starting point only' -ForegroundColor $MenuMutedColor
 	Write-Host 'work branch = where you normally code' -ForegroundColor $MenuMutedColor
-	Write-Host (("demo branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor $MenuMutedColor
+	Write-Host (("staging branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor $MenuMutedColor
 	Write-Host ""
-	Write-Host 'Normal flow: main -> your work branch -> demo branch -> main' -ForegroundColor $MenuTextColor
+	Write-Host 'Normal flow: main -> your work branch -> staging -> main' -ForegroundColor $MenuTextColor
 	Write-Host ""
 	Wait-ForUser
 }
@@ -440,7 +440,7 @@ function Show-BranchChooserHelp {
 	}
 
 	Write-Host ""
-	Write-Host (("Demo branch: {0}" -f $DemoBranch)) -ForegroundColor $MenuTextColor
+	Write-Host (("Staging branch: {0}" -f $DemoBranch)) -ForegroundColor $MenuTextColor
 	Write-Host '  Ignore this for normal coding. Use it only when combining work for the meeting.' -ForegroundColor $MenuMutedColor
 
 	Write-Host ""
@@ -466,7 +466,7 @@ function Show-BranchChooserHelp {
 	Write-Host ""
 	Write-Host 'What to do next:' -ForegroundColor $MenuTextColor
 	Write-Host '  If you want to start or continue coding, use one branch from the active local work list.' -ForegroundColor $MenuMutedColor
-	Write-Host '  If you are ready to combine branches for the meeting, use main menu option 4.' -ForegroundColor $MenuMutedColor
+	Write-Host '  If you are ready to push a work branch into staging, use main menu option 4.' -ForegroundColor $MenuMutedColor
 	Write-Host ""
 	Wait-ForUser
 }
@@ -752,14 +752,14 @@ function Invoke-OpenDemoWorkflow {
 function Invoke-AddWorkToDemoWorkflow {
 	$currentBranch = Get-CurrentBranch
 	if ($currentBranch -ne $DemoBranch -and (Test-WorkingTreeDirty)) {
-		Write-Warning 'You have unsaved changes on your current work branch. Save them with option 2, or stash them manually, before switching to the demo branch.'
+		Write-Warning 'You have unsaved changes on your current work branch. Save them with option 2, or stash them manually, before switching to staging.'
 		Wait-ForUser
 		return
 	}
 
 	$recommendedBranch = if ((Get-BranchCategory -BranchName $currentBranch) -eq 'work') { $currentBranch } else { Get-RecommendedWorkBranch }
 
-	Write-Host "`n--- Bring Work Into Demo ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- Push Work To Staging ---" -ForegroundColor $MenuSubheaderColor
 	if ($recommendedBranch) {
 		Write-Host (("1. Use recommended branch: {0}" -f $recommendedBranch)) -ForegroundColor $MenuTextColor
 		Write-Host '2. Pick a different existing work branch' -ForegroundColor $MenuTextColor
@@ -775,18 +775,18 @@ function Invoke-AddWorkToDemoWorkflow {
 	if ($recommendedBranch) {
 		switch ($workflowChoice) {
 			'1' { $sourceBranch = $recommendedBranch }
-			'2' { $sourceBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to bring into demo' }
+			'2' { $sourceBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to push to staging' }
 			default { }
 		}
 	} else {
 		switch ($workflowChoice) {
-			'1' { $sourceBranch = Select-ExistingWorkBranch -Title 'Choose the work branch to bring into demo' }
+			'1' { $sourceBranch = Select-ExistingWorkBranch -Title 'Choose the work branch to push to staging' }
 			default { }
 		}
 	}
 
 	if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
-		Write-Warning 'Bring-work-into-demo workflow cancelled.'
+		Write-Warning 'Push-to-staging workflow cancelled.'
 		Wait-ForUser
 		return
 	}
@@ -802,10 +802,10 @@ function Invoke-AddWorkToDemoWorkflow {
 		return
 	}
 
-	Write-Host (("`n[+] Syncing demo branch '{0}' before merge..." -f $DemoBranch)) -ForegroundColor Cyan
+	Write-Host (("`n[+] Syncing staging branch '{0}' before merge..." -f $DemoBranch)) -ForegroundColor Cyan
 	powershell.exe -ExecutionPolicy Bypass -File $SyncScript -UpstreamBranch $DemoBranch -AutoCheckpoint
 	if ($LASTEXITCODE -ne 0) {
-		Write-Warning 'Could not sync the demo branch. Merge stopped.'
+		Write-Warning 'Could not sync staging. Merge stopped.'
 		Wait-ForUser
 		return
 	}
@@ -824,9 +824,9 @@ function Invoke-AddWorkToDemoWorkflow {
 
 	& powershell.exe -ExecutionPolicy Bypass -File $PushScript -Branch $DemoBranch -MergeFrom $sourceBranch -Message $mergeMessage
 	if ($LASTEXITCODE -eq 0) {
-		Write-Host (("`n[+] '{0}' was merged into demo branch '{1}'." -f $sourceBranch, $DemoBranch)) -ForegroundColor Green
+		Write-Host (("`n[+] '{0}' was pushed into staging branch '{1}'." -f $sourceBranch, $DemoBranch)) -ForegroundColor Green
 	} else {
-		Write-Warning 'Could not add work to the demo branch. Review the git output above.'
+		Write-Warning 'Could not push work into staging. Review the git output above.'
 	}
 
 	Wait-ForUser
@@ -880,17 +880,17 @@ Initialize-MenuTheme
 while ($true) {
 	$currentBranch = Get-CurrentBranch
 	$startCodingLabel = if ($currentBranch -eq $DemoBranch) { 'Leave demo / start coding' } else { 'Start or continue coding' }
-	$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh demo branch' } else { 'Open demo branch' }
+	$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh staging branch' } else { 'Open staging branch' }
 
 	Write-Host "`n=================================" -ForegroundColor $MenuHeaderColor
 	Write-Host '    SOC GIT WORKFLOW MENU        ' -ForegroundColor $MenuHeaderColor
 	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
-	Write-Host (("Flow: main -> work branches -> {0} -> main" -f $DemoBranch)) -ForegroundColor $MenuSubheaderColor
+	Write-Host (("Flow: main -> work branches -> staging -> main" -f $DemoBranch)) -ForegroundColor $MenuSubheaderColor
 	Show-Status
 	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor $MenuTextColor
 	Write-Host '2. Save and share this branch' -ForegroundColor $MenuTextColor
 	Write-Host (("3. {0}" -f $openDemoLabel)) -ForegroundColor $MenuTextColor
-	Write-Host '4. Bring work into demo' -ForegroundColor $MenuTextColor
+	Write-Host '4. Push work to staging' -ForegroundColor $MenuTextColor
 	Write-Host '5. Ship approved demo to main' -ForegroundColor $MenuTextColor
 	Write-Host '6. Branch help / where should I work?' -ForegroundColor $MenuTextColor
 	Write-Host '7. Exit' -ForegroundColor $MenuTextColor
