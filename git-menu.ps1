@@ -940,7 +940,7 @@ while ($true) {
 	Write-Host '4. Push saved work to staging (direct merge)' -ForegroundColor $MenuTextColor
 	Write-Host '5. Merge approved staging into main' -ForegroundColor $MenuTextColor
 	Write-Host '6. Branch help / cleanup' -ForegroundColor $MenuTextColor
-	Write-Host '7. Exit' -ForegroundColor $MenuTextColor
+	Write-Host '7. Exit / return to intro' -ForegroundColor $MenuTextColor
 	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
 
 	$choice = Read-Host 'Select an option (1-7)'
@@ -952,7 +952,7 @@ while ($true) {
 		'4' { Invoke-AddWorkToDemoWorkflow }
 		'5' { Invoke-FinalMergeWorkflow }
 		'6' { Show-ToolsMenu }
-		'7' { exit }
+			'7' { return }
 		default { Write-Warning 'Invalid selection. Please choose 1-7.' }
 	}
 }

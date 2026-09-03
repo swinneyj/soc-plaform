@@ -14,6 +14,12 @@ if (-not (Test-Path $InputPath)) {
     exit 1
 }
 
+$inputFile = Get-Item $InputPath
+if ($inputFile.Length -le 0) {
+    Write-Error "Input dump file is empty and restore was aborted: $InputPath"
+    exit 1
+}
+
 if (-not $DatabaseUrl) {
     $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
 }

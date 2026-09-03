@@ -12,6 +12,12 @@ if (-not (Test-Path $inputPath)) {
     exit 1
 }
 
+$inputFile = Get-Item $inputPath
+if ($inputFile.Length -le 0) {
+    Write-Error "Shared dump file is empty and will not be restored: $inputPath"
+    exit 1
+}
+
 if (Test-Path $metadataPath) {
     Write-Host "[*] Shared dump metadata:"
     Get-Content $metadataPath -Raw | Write-Host

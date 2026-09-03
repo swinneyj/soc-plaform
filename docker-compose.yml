@@ -10,7 +10,7 @@ services:
       - SOC_PLATFORM_ROOT=/app
       - LOG_LEVEL=INFO
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
-      - DATABASE_URL=${COMPOSE_DATABASE_URL:-postgresql+psycopg2://soc_platform@postgres:5432/soc_platform}
+      - DATABASE_URL=${COMPOSE_DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}
     # Ensure containers can resolve the host's Ollama service on Linux
     extra_hosts:
       - "host.docker.internal:host-gateway"

@@ -716,7 +716,7 @@
                                         ></textarea>
                                     </div>
                                     <div>
-                                        <label class="text-[11px] text-gray-400">Finding</label>
+                                        <label class="text-[11px] text-gray-400">Evidence status</label>
                                         <select
                                             v-model="enrichmentFindingTypes[getEnrichmentKey(q)]"
                                             class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -771,7 +771,7 @@
                                     ></textarea>
                                 </div>
                                 <div class="mt-1">
-                                    <label class="text-[11px] text-gray-400">Finding</label>
+                                    <label class="text-[11px] text-gray-400">Evidence status</label>
                                     <select
                                         v-model="supportiveFindingTypes[getSupportiveKey(q)]"
                                         class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -843,8 +843,38 @@
                             <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
                             saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
                         </p>
+                        <div v-if="analysisResult.timing || analysisResult.ui_timing" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
+                            <p class="text-sm font-semibold text-slate-200">Run Timing</p>
+                            <div class="flex flex-wrap gap-2 text-[11px] text-gray-200">
+                                <span v-if="analysisResult.ui_timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">UI total: {{ formatTimingSeconds(analysisResult.ui_timing.total_seconds) }}</span>
+                                <span v-if="analysisResult.timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">API total: {{ formatTimingSeconds(analysisResult.timing.total_seconds) }}</span>
+                                <span v-if="analysisResult.timing && analysisResult.timing.prompt_chars" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Prompt chars: {{ analysisResult.timing.prompt_chars }}</span>
+                                <span v-if="analysisResult.timing && analysisResult.timing.eval_count" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Generated tokens: {{ analysisResult.timing.eval_count }}</span>
+                            </div>
+                            <div v-if="analysisResult.timing && analysisResult.timing.stage_seconds" class="flex flex-wrap gap-2 text-[11px] text-blue-100">
+                                <span v-for="metric in getTimingStageEntries(analysisResult)" :key="'phase1-timing-' + metric.key" class="bg-blue-950 border border-blue-800 px-2 py-1 rounded">{{ metric.label }}: {{ formatTimingSeconds(metric.seconds) }}</span>
+                            </div>
+                        </div>
                         <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                             <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
+                        </div>
+                        <div v-if="analysisResult.decision_gate" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
+                            <div class="flex items-center justify-between gap-3">
+                                <p class="text-sm font-semibold text-slate-200">Decision Gate</p>
+                                <span class="px-2 py-1 rounded text-[11px] font-semibold"
+                                    :class="analysisResult.decision_gate.enough_to_decide ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-amber-900 text-amber-200 border border-amber-700'">
+                                    {{ analysisResult.decision_gate.enough_to_decide ? 'Enough to decide' : 'Still missing information' }}
+                                </span>
+                            </div>
+                            <p class="text-xs text-gray-300"><span class="font-semibold">Current disposition:</span> {{ analysisResult.decision_gate.current_disposition || 'Undetermined' }}</p>
+                            <p class="text-xs text-gray-300" v-if="analysisResult.decision_gate.confidence_summary"><span class="font-semibold">Why:</span> {{ analysisResult.decision_gate.confidence_summary }}</p>
+                            <div v-if="analysisResult.decision_gate.still_missing && analysisResult.decision_gate.still_missing.length">
+                                <p class="text-[11px] font-semibold text-gray-300 mb-1">Still missing</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <span v-for="item in analysisResult.decision_gate.still_missing" :key="'phase1-missing-' + item" class="bg-gray-800 border border-gray-600 text-gray-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
+                                </div>
+                            </div>
+                            <p class="text-xs text-blue-200" v-if="analysisResult.decision_gate.next_best_action"><span class="font-semibold">Next best action:</span> {{ analysisResult.decision_gate.next_best_action }}</p>
                         </div>
                     </div>
                     <div v-else class="text-xs text-gray-400 mb-2 flex items-center justify-between">
@@ -904,7 +934,7 @@
                     </div>
 
                     <div
-                        v-for="q in analysisResult.phase2_queries"
+                        v-for="q in getActivePhase2Queries()"
                         :key="getPhase2Key(q)"
                         class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2 mb-2"
                     >
@@ -959,7 +989,7 @@
                             ></textarea>
                         </div>
                         <div class="mt-1">
-                            <label class="text-[11px] text-gray-400">Finding</label>
+                            <label class="text-[11px] text-gray-400">Evidence status</label>
                             <select
                                 v-model="phase2FindingTypes[getPhase2Key(q)]"
                                 class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -990,8 +1020,38 @@
                         <span class="font-semibold">{{ phase2Result.supportive_results_count || 0 }}</span>
                         supportive query result{{ (phase2Result.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
                     </p>
+                    <div v-if="phase2Result.timing || phase2Result.ui_timing" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
+                        <p class="text-sm font-semibold text-slate-200">Run Timing</p>
+                        <div class="flex flex-wrap gap-2 text-[11px] text-gray-200">
+                            <span v-if="phase2Result.ui_timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">UI total: {{ formatTimingSeconds(phase2Result.ui_timing.total_seconds) }}</span>
+                            <span v-if="phase2Result.timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">API total: {{ formatTimingSeconds(phase2Result.timing.total_seconds) }}</span>
+                            <span v-if="phase2Result.timing && phase2Result.timing.prompt_chars" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Prompt chars: {{ phase2Result.timing.prompt_chars }}</span>
+                            <span v-if="phase2Result.timing && phase2Result.timing.eval_count" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Generated tokens: {{ phase2Result.timing.eval_count }}</span>
+                        </div>
+                        <div v-if="phase2Result.timing && phase2Result.timing.stage_seconds" class="flex flex-wrap gap-2 text-[11px] text-purple-100">
+                            <span v-for="metric in getTimingStageEntries(phase2Result)" :key="'phase2-timing-' + metric.key" class="bg-purple-950 border border-purple-800 px-2 py-1 rounded">{{ metric.label }}: {{ formatTimingSeconds(metric.seconds) }}</span>
+                        </div>
+                    </div>
                     <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                         <p class="text-gray-300 whitespace-pre-wrap">{{ phase2Result.analysis }}</p>
+                    </div>
+                    <div v-if="phase2Result.decision_gate" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
+                        <div class="flex items-center justify-between gap-3">
+                            <p class="text-sm font-semibold text-slate-200">Decision Gate</p>
+                            <span class="px-2 py-1 rounded text-[11px] font-semibold"
+                                :class="phase2Result.decision_gate.enough_to_decide ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-amber-900 text-amber-200 border border-amber-700'">
+                                {{ phase2Result.decision_gate.enough_to_decide ? 'Enough to decide' : 'Still missing information' }}
+                            </span>
+                        </div>
+                        <p class="text-xs text-gray-300"><span class="font-semibold">Current disposition:</span> {{ phase2Result.decision_gate.current_disposition || 'Undetermined' }}</p>
+                        <p class="text-xs text-gray-300" v-if="phase2Result.decision_gate.confidence_summary"><span class="font-semibold">Why:</span> {{ phase2Result.decision_gate.confidence_summary }}</p>
+                        <div v-if="phase2Result.decision_gate.still_missing && phase2Result.decision_gate.still_missing.length">
+                            <p class="text-[11px] font-semibold text-gray-300 mb-1">Still missing</p>
+                            <div class="flex flex-wrap gap-2">
+                                <span v-for="item in phase2Result.decision_gate.still_missing" :key="'phase2-missing-' + item" class="bg-gray-800 border border-gray-600 text-gray-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
+                            </div>
+                        </div>
+                        <p class="text-xs text-blue-200" v-if="phase2Result.decision_gate.next_best_action"><span class="font-semibold">Next best action:</span> {{ phase2Result.decision_gate.next_best_action }}</p>
                     </div>
                     <div class="text-xs text-gray-400 space-y-1">
                         <p>Model: {{ phase2Result.model }}</p>
@@ -1683,6 +1743,7 @@
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
+                    triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
                     triageNotableDetails: {},
                     selectedTriageCaseIds: [],
@@ -1700,7 +1761,7 @@
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
-                    evidenceFindingOptions: ['supports', 'refutes', 'neutral'],
+                    evidenceFindingOptions: ['supports', 'refutes', 'neutral', 'no_results', 'error'],
                     analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
@@ -2685,37 +2746,39 @@
                     }
 
                     const requestId = ++this.analysisRequestId;
+                    const uiStartedAt = (window.performance && typeof window.performance.now === 'function')
+                        ? window.performance.now()
+                        : Date.now();
                     this.analysisRunning = true;
                     try {
                         await this.saveSupportiveEvidence({ silent: true });
                         await this.saveEnrichmentEvidence({ silent: true });
 
                         let combinedContext = this.analysisContext || '';
-                        const priorAnalysisText = (
-                            (this.phase2Result && this.phase2Result.analysis) ||
-                            (this.analysisResult && this.analysisResult.analysis) ||
-                            ''
-                        ).toString().trim();
-
                         const res = await axios.post(this.apiUrl + '/db/analyze', {
                             case_id: this.analysisCaseId,
                             model: this.analysisModel,
                             context: combinedContext,
-                            prior_analysis: priorAnalysisText,
-                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                            prior_analysis: '',
+                            analysis_stage: 'initial'
                         });
                         // Ignore stale responses if a newer analysis has been started or cancelled.
                         if (requestId === this.analysisRequestId) {
                             const newResult = res.data;
+                            const uiFinishedAt = (window.performance && typeof window.performance.now === 'function')
+                                ? window.performance.now()
+                                : Date.now();
+                            newResult.ui_timing = {
+                                total_seconds: Number((((uiFinishedAt - uiStartedAt) || 0) / 1000).toFixed(3)),
+                            };
                             // If the new response lacks phase2_queries but we previously had
                             // them, preserve the existing list so phase 2 cards do not vanish.
+                            const existingPhase2Queries = this.getActivePhase2Queries();
                             if (
                                 (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
-                                this.analysisResult &&
-                                this.analysisResult.phase2_queries &&
-                                this.analysisResult.phase2_queries.length
+                                existingPhase2Queries.length
                             ) {
-                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                                newResult.phase2_queries = existingPhase2Queries;
                             }
                             this.analysisResult = newResult;
                         }
@@ -2735,6 +2798,15 @@
                         return 'phase2:title:unknown';
                     }
                     return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getActivePhase2Queries() {
+                    if (this.phase2Result && this.phase2Result.phase2_queries && this.phase2Result.phase2_queries.length) {
+                        return this.phase2Result.phase2_queries;
+                    }
+                    if (this.analysisResult && this.analysisResult.phase2_queries && this.analysisResult.phase2_queries.length) {
+                        return this.analysisResult.phase2_queries;
+                    }
+                    return [];
                 },
                 getPhase2KeyFromTitle(title) {
                     const normalized = (title || '').toString().toLowerCase().trim();
@@ -2798,6 +2870,9 @@
                     }
 
                     const requestId = ++this.analysisRequestId;
+                    const uiStartedAt = (window.performance && typeof window.performance.now === 'function')
+                        ? window.performance.now()
+                        : Date.now();
                     this.analysisRunning = true;
                     try {
                         await this.savePhase2Evidence({ silent: true });
@@ -2818,13 +2893,18 @@
                         });
                         if (requestId === this.analysisRequestId) {
                             const newResult = res.data;
+                            const uiFinishedAt = (window.performance && typeof window.performance.now === 'function')
+                                ? window.performance.now()
+                                : Date.now();
+                            newResult.ui_timing = {
+                                total_seconds: Number((((uiFinishedAt - uiStartedAt) || 0) / 1000).toFixed(3)),
+                            };
+                            const existingPhase2Queries = this.getActivePhase2Queries();
                             if (
                                 (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
-                                this.analysisResult &&
-                                this.analysisResult.phase2_queries &&
-                                this.analysisResult.phase2_queries.length
+                                existingPhase2Queries.length
                             ) {
-                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                                newResult.phase2_queries = existingPhase2Queries;
                             }
                             this.phase2Result = newResult;
                         }
@@ -2843,7 +2923,7 @@
                         return;
                     }
 
-                    const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
+                    const phase2Queries = this.getActivePhase2Queries();
                     const entries = [];
                     for (const q of phase2Queries) {
                         const key = this.getPhase2Key(q);
@@ -2858,6 +2938,7 @@
                             query_text: queryText,
                             result_text: resultText,
                             analyst_summary: '',
+                            evidence_status: this.phase2FindingTypes[key] || 'neutral',
                             finding_type: this.phase2FindingTypes[key] || 'neutral',
                         });
                     }
@@ -2886,7 +2967,7 @@
                             const key = this.getPhase2KeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                            this.phase2FindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
                             if (raw.query_text) {
                                 this.phase2EditedQueries[key] = raw.query_text.toString();
                             }
@@ -2914,6 +2995,7 @@
                             query_text: this.renderSupportiveQuery(q),
                             result_text: resultText,
                             analyst_summary: '',
+                            evidence_status: this.supportiveFindingTypes[key] || 'neutral',
                             finding_type: this.supportiveFindingTypes[key] || 'neutral',
                         });
                     }
@@ -2946,6 +3028,7 @@
                             query_text: (q && q.spl ? q.spl : '').toString().trim(),
                             result_text: resultText,
                             analyst_summary: '',
+                            evidence_status: this.enrichmentFindingTypes[key] || 'neutral',
                             finding_type: this.enrichmentFindingTypes[key] || 'neutral',
                         });
                     }
@@ -2974,7 +3057,7 @@
                             const key = this.getSupportiveKeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                            this.supportiveFindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
                         }
                         this.supportiveManualResults = saved;
                     } catch (err) {
@@ -2995,7 +3078,7 @@
                             const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                            this.enrichmentFindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
                         }
                         this.enrichmentManualResults = saved;
                     } catch (err) {
@@ -3020,6 +3103,30 @@
                             console.error('Failed to copy analysis:', err);
                             alert('Failed to copy analysis to clipboard');
                         });
+                },
+                formatTimingSeconds(value) {
+                    const numeric = Number(value);
+                    if (!Number.isFinite(numeric)) {
+                        return 'n/a';
+                    }
+                    return (numeric < 10 ? numeric.toFixed(2) : numeric.toFixed(1)) + 's';
+                },
+                getTimingStageEntries(result) {
+                    const stageSeconds = (result && result.timing && result.timing.stage_seconds) || {};
+                    const labels = {
+                        load_case_context_seconds: 'Load context',
+                        prompt_assembly_seconds: 'Build prompt',
+                        primary_inference_seconds: 'Primary inference',
+                        fallback_inference_seconds: 'Fallback inference',
+                        response_postprocess_seconds: 'Post-process',
+                    };
+                    return Object.entries(stageSeconds)
+                        .filter(([, seconds]) => Number.isFinite(Number(seconds)) && Number(seconds) > 0)
+                        .map(([key, seconds]) => ({
+                            key,
+                            label: labels[key] || key,
+                            seconds: Number(seconds),
+                        }));
                 },
                 saveAnalysisState() {
                     if (!this.analysisCaseId) {
@@ -3224,7 +3331,10 @@
                         return text;
                     }
 
-                    const fields = this.analysisSourceNotable.raw_fields || this.analysisSourceNotable.fields || {};
+                    const fields = {
+                        ...(this.analysisSourceNotable.raw_fields || {}),
+                        ...(this.analysisSourceNotable.fields || {}),
+                    };
 
                     // Dynamic alias map loaded from backend (placeholder_aliases table + JSON seed).
                     // Falls back to built-in defaults if not yet loaded.
