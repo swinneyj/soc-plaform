@@ -14,81 +14,610 @@
 </head>
 <body class="bg-gray-900 text-gray-100" id="app">
     <div class="min-h-screen flex flex-col">
-        <!-- Header (component) -->
-        <header-nav
-            :current-tab="currentTab"
-            :ollama-health="ollamaHealth"
-            :api-healthy="apiHealthy"
-            @change-tab="currentTab = $event"
-        ></header-nav>
+        <!-- Header -->
+        <header class="bg-gray-800 border-b border-gray-700 sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-blue-600 rounded flex items-center justify-center font-bold">S</div>
+                        <div>
+                            <h1 class="text-2xl font-bold">SOC Platform</h1>
+                            <p class="text-xs text-gray-400">Orchestration & Analysis with Local AI</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-sm text-gray-400">API: <span class="text-green-400 font-semibold" id="status">●</span></span>
+                        <span v-if="ollamaHealth.available" class="text-sm text-gray-400">Ollama: <span class="text-green-400 font-semibold">●</span></span>
+                        <span v-else class="text-sm text-gray-400">Ollama: <span class="text-red-400 font-semibold">●</span></span>
+                    </div>
+                </div>
+                <div class="flex space-x-4 overflow-x-auto">
+                    <button @click="currentTab = 'tools'" :class="currentTab === 'tools' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Tools</button>
+                    <button @click="currentTab = 'database'" :class="currentTab === 'database' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Database</button>
+                    <button @click="currentTab = 'analysis'" :class="currentTab === 'analysis' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">AI Analysis</button>
+                    <button @click="currentTab = 'closure'" :class="currentTab === 'closure' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Closure Notes</button>
+                    <button @click="currentTab = 'jobs'" :class="currentTab === 'jobs' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Jobs</button>
+                    <button @click="currentTab = 'reports'" :class="currentTab === 'reports' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Reports</button>
+                    <button @click="currentTab = 'code-review'" :class="currentTab === 'code-review' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Code Review</button>
+                </div>
+            </div>
+        </header>
 
         <!-- Main Content -->
         <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
             <!-- Tools Tab -->
-            <div v-if="currentTab === 'tools'">
-                <tools-tab
-                    :tools="tools"
-                    :tool-search="toolSearch"
-                    :selected-category="selectedCategory"
-                    :tool-args="toolArgs"
-                    :selected-tool-for-execution="selectedToolForExecution"
-                    @update:tool-search="toolSearch = $event"
-                    @update:selected-category="selectedCategory = $event"
-                    @select-tool="selectToolForExecution"
-                    @close-tool-modal="selectedToolForExecution = null"
-                    @execute-tool="executeTool"
-                    @change-tab="currentTab = $event"
-                ></tools-tab>
+            <div v-if="currentTab === 'tools'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Tools Catalog</h2>
+                    <p class="text-gray-400">{{ tools.length }} tools available • Filter and execute SOC tasks</p>
+                </div>
+
+                <div class="bg-blue-950 border border-blue-800 rounded-lg p-4 flex items-start justify-between gap-4">
+                    <div>
+                        <h3 class="text-sm font-semibold text-blue-300">Looking for host owners or contact details?</h3>
+                        <p class="text-sm text-blue-100 mt-1">POC-style fields from pasted notables show up under <span class="font-semibold">Database</span> in Recent Pasted Notables and source notable details.</p>
+                    </div>
+                    <button
+                        @click="currentTab = 'database'"
+                        class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition flex-shrink-0">
+                        Open Database
+                    </button>
+                </div>
+
+                <!-- Search & Filter -->
+                <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <div class="flex items-center justify-between gap-4 mb-3">
+                        <p class="text-sm text-gray-400">Search by tool name, category, or what the tool helps you do.</p>
+                        <p class="text-xs text-gray-500">{{ filteredTools.length }} shown</p>
+                    </div>
+                    <input 
+                        v-model="toolSearch" 
+                        type="text" 
+                        placeholder="Search tools, for example: MDE, IOC, sanitize, report, CVE..." 
+                        class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                    <div class="mt-3 flex flex-wrap space-x-2 gap-2">
+                        <button 
+                            v-for="cat in categories" 
+                            :key="cat"
+                            @click="selectedCategory = selectedCategory === cat ? '' : cat"
+                            :class="selectedCategory === cat ? 'bg-blue-600' : 'bg-gray-700'"
+                            class="px-3 py-1 rounded text-sm hover:bg-blue-500 transition">
+                            {{ cat }}
+                        </button>
+                    </div>
+                </div>
+
+                <div class="space-y-4">
+                    <details
+                        v-for="cat in categories.filter(cat => filteredTools.some(tool => tool.category === cat))"
+                        :key="cat"
+                        open
+                        class="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden"
+                    >
+                        <summary class="list-none cursor-pointer select-none px-4 py-3 bg-gray-900 border-b border-gray-700 flex items-center justify-between">
+                            <div>
+                                <p class="font-semibold text-gray-100">{{ cat }}</p>
+                                <p class="text-xs text-gray-400">{{ filteredTools.filter(tool => tool.category === cat).length }} tool<span v-if="filteredTools.filter(tool => tool.category === cat).length !== 1">s</span></p>
+                            </div>
+                            <span class="text-xs text-gray-500">Expand / collapse</span>
+                        </summary>
+
+                        <table class="w-full text-sm">
+                            <thead class="bg-gray-900/40 border-b border-gray-700">
+                                <tr>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-300">Tool Name</th>
+                                    <th class="px-4 py-3 text-left font-semibold text-gray-300">Description</th>
+                                    <th class="px-4 py-3 text-center font-semibold text-gray-300">Args</th>
+                                    <th class="px-4 py-3 text-center font-semibold text-gray-300">Action</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="tool in filteredTools.filter(tool => tool.category === cat)" :key="tool.name" class="border-b border-gray-700 hover:bg-gray-750 transition">
+                                    <td class="px-4 py-3 align-top">
+                                        <span class="text-blue-400 font-semibold">{{ tool.name }}</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-gray-400 max-w-sm leading-snug align-top">{{ tool.description }}</td>
+                                    <td class="px-4 py-3 text-center align-top">
+                                        <span class="text-xs text-gray-400">{{ tool.arguments ? tool.arguments.length : 0 }}</span>
+                                    </td>
+                                    <td class="px-4 py-3 text-center align-top">
+                                        <button 
+                                            @click="selectToolForExecution(tool)"
+                                            class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                            Run
+                                        </button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </details>
+                </div>
+
+                <div v-if="filteredTools.length === 0" class="bg-gray-800 border border-gray-700 rounded-lg text-center py-8 text-gray-400">
+                    No tools match your search
+                </div>
+
+                <!-- Tool Execution Modal -->
+                <div v-if="selectedToolForExecution" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-blue-400">{{ selectedToolForExecution.name }}</h3>
+                            <button @click="selectedToolForExecution = null" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+                        </div>
+                        
+                        <p class="text-sm text-gray-400 mb-4">{{ selectedToolForExecution.description }}</p>
+                        
+                        <!-- Arguments -->
+                        <div v-if="selectedToolForExecution.arguments && selectedToolForExecution.arguments.length" class="space-y-3 mb-4">
+                            <div v-for="arg in selectedToolForExecution.arguments" :key="arg.flag">
+                                <label class="text-xs text-gray-400">{{ arg.name }}</label>
+                                <input 
+                                    v-model="toolArgs[selectedToolForExecution.name + '_' + arg.flag]" 
+                                    :type="arg.name.includes('file') || arg.name.includes('path') ? 'file' : 'text'"
+                                    :placeholder="arg.description"
+                                    class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-400">
+                            </div>
+                        </div>
+
+                        <div class="flex space-x-2">
+                            <button 
+                                @click="executeTool(selectedToolForExecution)"
+                                class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">
+                                Execute
+                            </button>
+                            <button 
+                                @click="selectedToolForExecution = null"
+                                class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm font-semibold transition">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Database Tab -->
-            <div v-if="currentTab === 'database'">
-                <database-tab
-                    :db-stats="dbStats"
-                    :notable-paste-text="notablePasteText"
-                    :notable-paste-segment-estimate="notablePasteSegmentEstimate"
-                    :notable-redaction-enabled="notableRedactionEnabled"
-                    :notable-historical="notableHistorical"
-                    :notable-paste-saving="notablePasteSaving"
-                    :notable-paste-result="notablePasteResult"
-                    :show-open-notables-only="showOpenNotablesOnly"
-                    :filtered-recent-notables="filteredRecentNotables"
-                    :historical-notables-visible="historicalNotablesVisible"
-                    :historical-notables="historicalNotables"
-                    :filtered-triage-data="filteredTriageData"
-                    :db-search="dbSearch"
-                    :db-verdict-filter="dbVerdictFilter"
-                    :triage-from-pasted-only="triageFromPastedOnly"
-                    :delete-analysis-with-case="deleteAnalysisWithCase"
-                    :selected-notable-ids="selectedNotableIds"
-                    :selected-triage-case-ids="selectedTriageCaseIds"
-                    :triage-notable-details="triageNotableDetails"
-                    @change-tab="currentTab = $event"
-                    @update:notable-paste-text="notablePasteText = $event"
-                    @update:notable-redaction-enabled="notableRedactionEnabled = $event"
-                    @update:notable-historical="notableHistorical = $event"
-                    @save-pasted-notable="savePastedNotable"
-                    @load-historical-notables="loadHistoricalNotables"
-                    @update:historical-notables-visible="historicalNotablesVisible = $event"
-                    @load-recent-notables="loadRecentNotables"
-                    @delete-pasted-notable="deletePastedNotable($event)"
-                    @delete-selected-pasted-notables="deleteSelectedPastedNotables"
-                    @promote-notable-to-triage="promoteNotableToTriage($event)"
-                    @promote-all-open-pasted-notables="promoteAllOpenPastedNotables"
-                    @update:selected-notable-ids="selectedNotableIds = $event"
-                    @update:show-open-notables-only="showOpenNotablesOnly = $event"
-                    @update:db-search="dbSearch = $event"
-                    @update:db-verdict-filter="dbVerdictFilter = $event"
-                    @update:triage-from-pasted-only="triageFromPastedOnly = $event"
-                    @update:selected-triage-case-ids="selectedTriageCaseIds = $event"
-                    @update:delete-analysis-with-case="deleteAnalysisWithCase = $event"
-                    @load-triage-data="loadTriageData"
-                    @delete-triage-case="deleteTriageCase($event)"
-                    @delete-selected-triage-cases="deleteSelectedTriageCases"
-                    @load-triage-notable-details="loadTriageNotableDetails($event)"
-                    @copy-triage-notable-fields="copyTriageNotableFields($event)"
-                    @analyze-case="analyzeCase($event)"
-                ></database-tab>
+            <div v-if="currentTab === 'database'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Triage Database</h2>
+                    <p class="text-gray-400">Browse and query cases from the active database backend</p>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                    <button @click="currentTab = 'database'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">1. Paste a Live Notable</p>
+                        <p class="text-xs text-gray-400 mt-1">Start by saving Incident Review text into the platform.</p>
+                    </button>
+                    <button @click="currentTab = 'analysis'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">2. Analyze a Case</p>
+                        <p class="text-xs text-gray-400 mt-1">Run local AI, review follow-up queries, and gather more evidence.</p>
+                    </button>
+                    <button @click="currentTab = 'closure'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">3. Draft Closure Notes</p>
+                        <p class="text-xs text-gray-400 mt-1">Turn a triaged case into an operator-ready closure note.</p>
+                    </button>
+                    <button @click="currentTab = 'tools'" class="text-left bg-gray-800 border border-gray-700 rounded-lg p-4 hover:border-blue-500 transition">
+                        <p class="text-sm font-semibold text-blue-300">Browse Utility Tools</p>
+                        <p class="text-xs text-gray-400 mt-1">Use the wider tool catalog for one-off parsing, intel, and reporting work.</p>
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Total Cases</p>
+                        <p class="text-3xl font-bold text-blue-400">{{ dbStats.triage_cases }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Malicious</p>
+                        <p class="text-3xl font-bold text-red-400">{{ dbStats.verdict_breakdown?.malicious || 0 }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Suspicious</p>
+                        <p class="text-3xl font-bold text-yellow-400">{{ dbStats.verdict_breakdown?.suspicious || 0 }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Benign</p>
+                        <p class="text-3xl font-bold text-green-400">{{ dbStats.verdict_breakdown?.benign || 0 }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Closed Notables</p>
+                        <p class="text-3xl font-bold text-amber-300">{{ dbStats.pasted_notables_historical || 0 }}</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 class="text-xl font-bold text-blue-400">Paste Splunk Notable</h3>
+                            <p class="text-sm text-gray-400">Paste Incident Review notable text here. The platform will sanitize it with the existing tokenizer and store the sanitized notable in the database.</p>
+                        </div>
+                        <textarea
+                            v-model="notablePasteText"
+                            placeholder="Paste the notable block here..."
+                            class="w-full h-56 px-4 py-3 bg-gray-900 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"></textarea>
+                        <p
+                            v-if="notablePasteSegmentEstimate > 1"
+                            class="text-xs text-amber-300 mt-1"
+                        >
+                            Detected {{ notablePasteSegmentEstimate }} notables in this paste; each will be saved separately.
+                        </p>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableRedactionEnabled"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Apply tokenizer redaction when saving</span>
+                        </label>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableHistorical"
+                                class="form-checkbox h-3 w-3 text-amber-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Mark as closed historical notable</span>
+                        </label>
+                        <div class="flex items-center justify-between">
+                            <p v-if="notablePasteResult" class="text-xs text-gray-400">
+                                <span v-if="(notablePasteResult.segment_count || 1) === 1">
+                                    Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
+                                </span>
+                                <span v-else>
+                                    Saved {{ notablePasteResult.segment_count }} notables (first event {{ notablePasteResult.event_id }}) with {{ notablePasteResult.mapping_entries }} total token mappings.
+                                </span>
+                            </p>
+                            <p v-else class="text-xs text-gray-500">Redaction stays local-first: sanitized text goes to the DB, mapping stays in Active_Workspace.</p>
+                            <button
+                                @click="savePastedNotable"
+                                :disabled="notablePasteSaving || !notablePasteText.trim()"
+                                class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
+                                {{ notablePasteSaving ? 'Saving...' : 'Save Pasted Notable' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+                        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-2 md:gap-4">
+                            <div class="space-y-1">
+                                <h3 class="text-xl font-bold text-blue-400">Recent Pasted Notables</h3>
+                                <p class="text-xs text-gray-400 max-w-xl">
+                                    Sanitized notable records saved from copy/paste workflow. Owner and contact fields are surfaced here when present.
+                                </p>
+                            </div>
+                            <div class="flex flex-wrap items-center gap-2">
+                                <label class="flex items-center text-[11px] text-gray-300 space-x-1">
+                                    <input
+                                        type="checkbox"
+                                        :checked="areAllPastedNotablesSelected()"
+                                        @change="toggleSelectAllPastedNotables($event)"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span class="whitespace-nowrap">Select all</span>
+                                </label>
+                                <label class="flex items-center text-[11px] text-gray-300 space-x-1">
+                                    <input
+                                        type="checkbox"
+                                        v-model="showOpenNotablesOnly"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span class="whitespace-nowrap">Show open pasted notables only</span>
+                                </label>
+                                <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                                <button
+                                    @click="deleteSelectedPastedNotables"
+                                    :disabled="!selectedNotableIds.length"
+                                    class="px-3 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    Delete selected
+                                </button>
+                                <button
+                                    @click="promoteAllOpenPastedNotables"
+                                    :disabled="bulkPromoteNotablesRunning || !filteredRecentNotables.some(n => !n.historical && !n.promoted_case_id)"
+                                    class="px-3 py-2 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    {{ bulkPromoteNotablesRunning ? 'Promoting all...' : 'Promote all open to triage' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <div v-if="filteredRecentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
+                            No pasted notables saved yet.
+                        </div>
+
+                        <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
+                            <div class="flex items-start justify-between gap-4">
+                                <div class="flex items-start gap-2">
+                                    <div class="pt-1">
+                                        <input
+                                            type="checkbox"
+                                            class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded"
+                                            v-model="selectedNotableIds"
+                                            :value="notable.id" />
+                                    </div>
+                                    <div>
+                                        <h4 class="font-bold text-blue-300">{{ notable.title || 'Untitled notable' }}</h4>
+                                        <p class="text-xs text-gray-400">{{ notable.correlation_search || 'No correlation search parsed' }}</p>
+                                    </div>
+                                </div>
+                                <div class="text-right text-xs text-gray-400">
+                                    <button
+                                        @click="deletePastedNotable(notable)"
+                                        class="text-gray-500 hover:text-red-400 mb-1 ml-2"
+                                        title="Remove this pasted notable from the recent list">
+                                        ✕
+                                    </button>
+                                    <p>{{ notable.urgency || 'n/a' }} urgency</p>
+                                    <p>{{ notable.status || 'n/a' }} status</p>
+                                </div>
+                            </div>
+                            <p v-if="notable.promoted_case_id" class="text-xs text-green-400">Promoted to triage as {{ notable.promoted_case_id }}</p>
+                            <div class="flex flex-wrap gap-2 text-xs text-gray-300">
+                                <span v-if="notable.historical" class="bg-gray-800 px-2 py-1 rounded border border-amber-500 text-amber-300">Historical (closed)</span>
+                                <span v-if="notable.disposition" class="bg-gray-800 px-2 py-1 rounded">Disposition: {{ notable.disposition }}</span>
+                                <span v-if="notable.host" class="bg-gray-800 px-2 py-1 rounded">Host: {{ notable.host }}</span>
+                                <span v-if="notable.destination" class="bg-gray-800 px-2 py-1 rounded">Destination: {{ notable.destination }}</span>
+                                <span v-if="notable.username || notable.user" class="bg-gray-800 px-2 py-1 rounded">User: {{ notable.username || notable.user }}</span>
+                            </div>
+                            <div v-if="getNotablePocSummary(notable).length" class="bg-emerald-950 border border-emerald-800 rounded p-3">
+                                <p class="text-[11px] font-semibold text-emerald-300 uppercase tracking-wide mb-2">Points of Contact</p>
+                                <div class="flex flex-wrap gap-2 text-xs text-emerald-100">
+                                    <span v-for="entry in getNotablePocSummary(notable)" :key="entry.label + entry.value" class="bg-emerald-900 px-2 py-1 rounded border border-emerald-700">
+                                        {{ entry.label }}: {{ entry.value }}
+                                    </span>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-500">Saved: {{ new Date(notable.saved_at || notable.time).toLocaleString() }}</p>
+                            <div class="flex items-center justify-between gap-3">
+                                <button
+                                    v-if="notable.historical"
+                                    class="px-3 py-2 bg-gray-700 rounded text-xs font-semibold text-gray-300 cursor-default"
+                                    disabled
+                                >
+                                    {{ notable.promoted_case_id ? 'Already in Triage' : 'Saved to Database' }}
+                                </button>
+                                <button
+                                    v-else
+                                    @click="promoteNotableToTriage(notable)"
+                                    :disabled="notablePromotingId === notable.id || !!notable.promoted_case_id"
+                                    class="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    {{ notable.promoted_case_id ? 'Already in Triage' : (notablePromotingId === notable.id ? 'Promoting...' : 'Promote to Triage') }}
+                                </button>
+                                <button
+                                    v-if="notable.promoted_case_id"
+                                    @click="jumpToTriageCase(notable.promoted_case_id)"
+                                    class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Open in Triage
+                                </button>
+                            </div>
+                            <details class="text-xs text-gray-300">
+                                <summary class="cursor-pointer text-blue-400">Show details</summary>
+                                <div class="mt-2 space-y-2">
+                                    <div v-if="notable.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div v-for="(value, key) in notable.fields" :key="key" class="flex flex-col">
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.sanitized_text }}</pre>
+                                    </div>
+                                    <div v-if="notable.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.history }}</pre>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-between mt-6">
+                    <div>
+                        <h3 class="text-sm font-semibold text-gray-300">Closed Notables Summary</h3>
+                        <p class="text-xs text-gray-500">High-level view of closed historical notables for reference.</p>
+                    </div>
+                    <button
+                        @click="historicalNotablesVisible = !historicalNotablesVisible; if (historicalNotablesVisible && !historicalNotables.length) { loadHistoricalNotables(); }"
+                        class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">
+                        {{ historicalNotablesVisible ? 'Hide closed notables' : 'Show closed notables' }}
+                    </button>
+                </div>
+
+                <div v-if="historicalNotablesVisible" class="bg-gray-800 border border-gray-700 rounded-lg p-4 mt-3">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-lg font-bold text-blue-400">Closed Notables</h3>
+                            <p class="text-xs text-gray-400">Compact summary of closed notables for quick baseline reference.</p>
+                        </div>
+                        <button @click="loadHistoricalNotables" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                    </div>
+                    <div v-if="!historicalNotables.length" class="text-gray-500 text-xs">No historical pasted notables loaded yet.</div>
+                    <div v-else class="overflow-x-auto">
+                        <table class="min-w-full text-xs text-gray-200">
+                            <thead>
+                                <tr class="border-b border-gray-700 text-gray-400">
+                                    <th class="px-2 py-1 text-left">ID</th>
+                                    <th class="px-2 py-1 text-left">Title / Rule</th>
+                                    <th class="px-2 py-1 text-left">Host</th>
+                                    <th class="px-2 py-1 text-left">User</th>
+                                    <th class="px-2 py-1 text-left">Urgency</th>
+                                    <th class="px-2 py-1 text-left">Disposition</th>
+                                    <th class="px-2 py-1 text-left">Saved</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="item in historicalNotables" :key="item.id" class="border-b border-gray-800">
+                                    <td class="px-2 py-1 align-top">{{ item.id }}</td>
+                                    <td class="px-2 py-1 align-top">
+                                        <div class="font-semibold text-blue-300">{{ item.title || 'Untitled notable' }}</div>
+                                        <div v-if="item.correlation_search" class="text-[11px] text-gray-400">{{ item.correlation_search }}</div>
+                                    </td>
+                                    <td class="px-2 py-1 align-top">{{ item.host || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.user || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.urgency || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.disposition || 'n/a' }}</td>
+                                    <td class="px-2 py-1 align-top">{{ item.saved_at ? new Date(item.saved_at).toLocaleString() : 'n/a' }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                    <div class="flex space-x-2 mb-4">
+                        <input 
+                            v-model="dbSearch" 
+                            type="text" 
+                            placeholder="Search case ID or rule..." 
+                            class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                        <select v-model="dbVerdictFilter" class="px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                            <option value="">All Verdicts</option>
+                            <option value="benign">Benign</option>
+                            <option value="suspicious">Suspicious</option>
+                            <option value="malicious">Malicious</option>
+                        </select>
+                        <label class="flex items-center text-xs text-gray-300 space-x-1">
+                            <input
+                                type="checkbox"
+                                :checked="areAllTriageCasesSelected()"
+                                @change="toggleSelectAllTriageCases($event)"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
+                            <span>Select all</span>
+                        </label>
+                        <label class="flex items-center text-xs text-gray-300 space-x-1">
+                            <input
+                                type="checkbox"
+                                v-model="triageFromPastedOnly"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
+                            <span>From pasted notables only</span>
+                        </label>
+                        <button @click="loadTriageData" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
+                        <button
+                            @click="deleteSelectedTriageCases"
+                            :disabled="!selectedTriageCaseIds.length"
+                            class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-sm font-semibold transition">
+                            Delete selected
+                        </button>
+                    </div>
+
+                    <div v-if="filteredTriageData.length === 0" class="text-gray-400 text-center py-8">
+                        No triage cases found. Run analysis or ingest Splunk data.
+                    </div>
+
+                    <div v-for="case_ in filteredTriageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
+                        <div class="flex items-start justify-between mb-2">
+                            <div class="flex items-start gap-2">
+                                <div class="pt-1">
+                                    <input
+                                        type="checkbox"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded"
+                                        v-model="selectedTriageCaseIds"
+                                        :value="case_.case_id" />
+                                </div>
+                                <div>
+                                    <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
+                                    <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
+                                </div>
+                            </div>
+                            <div class="flex flex-col items-end space-y-1">
+                                <span :class="{
+                                    'bg-red-900 text-red-200': case_.verdict === 'malicious',
+                                    'bg-yellow-900 text-yellow-200': case_.verdict === 'suspicious',
+                                    'bg-green-900 text-green-200': case_.verdict === 'benign'
+                                }" class="px-3 py-1 rounded text-xs font-semibold">
+                                    {{ case_.verdict.toUpperCase() }}
+                                </span>
+                                <span
+                                    v-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-blue-200 border border-blue-500"
+                                >
+                                    From pasted notable
+                                </span>
+                            </div>
+                        </div>
+                        <p class="text-sm text-gray-300 mb-2">{{ case_.analysis_summary }}</p>
+                        <div class="text-xs text-gray-400 flex space-x-4">
+                            <span>Confidence: {{ (case_.confidence_score * 100).toFixed(1) }}%</span>
+                            <span>Triaged: {{ new Date(case_.triaged_at).toLocaleString() }}</span>
+                        </div>
+                        <div class="mt-2 flex space-x-2">
+                            <button 
+                                @click="analyzeCase(case_)"
+                                class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                Analyze with AI
+                            </button>
+                            <button
+                                @click="deleteTriageCase(case_)"
+                                class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold transition">
+                                Delete case
+                            </button>
+                        </div>
+                        <details class="mt-2 text-xs text-gray-300">
+                            <summary
+                                class="cursor-pointer text-blue-400"
+                                @click.stop="loadTriageNotableDetails(case_)"
+                            >
+                                Show source notable details
+                            </summary>
+                            <div class="mt-2">
+                                <p v-if="triageNotableDetails[case_.case_id]?.loading">Loading...</p>
+                                <p v-else-if="triageNotableDetails[case_.case_id]?.error" class="text-red-400">
+                                    {{ triageNotableDetails[case_.case_id].error }}
+                                </p>
+                                <div
+                                    v-else-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="space-y-2"
+                                >
+                                    <div class="flex items-center justify-between">
+                                        <div v-if="triageNotableDetails[case_.case_id].data.historical" class="text-amber-300">
+                                            Historical (closed pasted notable)
+                                        </div>
+                                        <button
+                                            @click="copyTriageNotableFields(case_)"
+                                            class="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-200 border border-gray-600"
+                                        >
+                                            Copy fields
+                                        </button>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div v-if="getNotablePocSummary(triageNotableDetails[case_.case_id].data).length" class="mb-3 bg-emerald-950 border border-emerald-800 rounded p-3">
+                                            <p class="text-[11px] font-semibold text-emerald-300 uppercase tracking-wide mb-2">Points of Contact</p>
+                                            <div class="flex flex-wrap gap-2 text-xs text-emerald-100">
+                                                <span
+                                                    v-for="entry in getNotablePocSummary(triageNotableDetails[case_.case_id].data)"
+                                                    :key="entry.label + entry.value"
+                                                    class="bg-emerald-900 px-2 py-1 rounded border border-emerald-700"
+                                                >
+                                                    {{ entry.label }}: {{ entry.value }}
+                                                </span>
+                                            </div>
+                                        </div>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div
+                                                v-for="(value, key) in triageNotableDetails[case_.case_id].data.fields"
+                                                :key="key"
+                                                class="flex flex-col"
+                                            >
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.sanitized_text }}
+                                        </pre>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.history }}
+                                        </pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
             </div>
 
             <!-- Analysis Tab -->
@@ -195,99 +724,6 @@
                                             <option v-for="option in evidenceFindingOptions" :key="'enrich:' + option" :value="option">{{ option }}</option>
                                         </select>
                                     </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-4 mt-4">
-                        <div class="flex items-start justify-between gap-3">
-                            <div>
-                                <h3 class="text-sm font-semibold text-blue-300">Investigation Loop State</h3>
-                                <p class="text-[11px] text-gray-400">Track what the case currently suggests, what is still blocking closure, and whether the next loop needs more evidence.</p>
-                            </div>
-                            <div class="text-right text-[11px] text-gray-400">
-                                <p>Iteration {{ investigationState.iteration_count || 0 }}</p>
-                                <p v-if="investigationState.updated_at">Updated {{ new Date(investigationState.updated_at).toLocaleString() }}</p>
-                            </div>
-                        </div>
-
-                        <div class="flex flex-wrap gap-2 text-xs">
-                            <span class="px-2 py-1 rounded border border-blue-500 text-blue-200 bg-blue-950">
-                                Status: {{ formatLoopStatus(investigationState.loop_status) }}
-                            </span>
-                            <span class="px-2 py-1 rounded border border-amber-500 text-amber-200 bg-amber-950">
-                                Disposition: {{ formatDispositionLabel(investigationState.provisional_disposition) }}
-                            </span>
-                            <span class="px-2 py-1 rounded border border-emerald-500 text-emerald-200 bg-emerald-950">
-                                Confidence: {{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%
-                            </span>
-                        </div>
-
-                        <div>
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Current Hypothesis</p>
-                            <p class="text-sm text-gray-200 whitespace-pre-wrap">{{ investigationState.current_hypothesis || 'No persisted hypothesis yet.' }}</p>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Substantive Evidence</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.substantive_items ?? investigationState.evidence_summary?.total_items ?? 0 }}</p>
-                            </div>
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Supports / Refutes</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.by_finding?.supports || 0 }} / {{ investigationState.evidence_summary?.by_finding?.refutes || 0 }}</p>
-                            </div>
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Pending / Neutral</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.pending_items || 0 }} / {{ investigationState.evidence_summary?.by_finding?.neutral || 0 }}</p>
-                            </div>
-                        </div>
-
-                        <div v-if="investigationState.closure_blockers && investigationState.closure_blockers.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Closure Blockers</p>
-                            <div class="flex flex-wrap gap-2">
-                                <span v-for="item in investigationState.closure_blockers" :key="'blocker:' + item" class="bg-red-950 border border-red-700 text-red-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                            </div>
-                        </div>
-
-                        <div v-if="investigationState.unresolved_questions && investigationState.unresolved_questions.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Open Questions</p>
-                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                                <li v-for="item in investigationState.unresolved_questions" :key="'question:' + item">{{ item }}</li>
-                            </ul>
-                        </div>
-
-                        <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Next Best Actions</p>
-                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                                <li v-for="item in investigationState.recommended_next_actions" :key="'action:' + item.title + item.description">
-                                    <span class="font-semibold text-blue-300">{{ item.title }}</span>
-                                    <span v-if="item.description">: {{ item.description }}</span>
-                                </li>
-                            </ul>
-                        </div>
-
-                        <div v-if="investigationState.evidence_summary?.timeline && investigationState.evidence_summary.timeline.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Evidence Timeline</p>
-                            <div class="space-y-2">
-                                <div
-                                    v-for="item in investigationState.evidence_summary.timeline"
-                                    :key="'timeline:' + item.title + item.created_at + item.source_system"
-                                    class="bg-gray-800 border border-gray-700 rounded p-3"
-                                >
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
-                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
-                                        </div>
-                                        <div class="text-right text-[11px] text-gray-500">
-                                            <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                            <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
-                                        </div>
-                                    </div>
-                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
-                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
                                 </div>
                             </div>
                         </div>
@@ -565,33 +1001,201 @@
             </div>
 
             <!-- Closure Notes Tab -->
-            <div v-if="currentTab === 'closure'">
-                <closure-tab
-                    :triage-data="triageData"
-                    :available-rules="availableRules"
-                    :selected-rule="selectedRule"
-                    :closure-form="closureForm"
-                    :closure-result="closureResult"
-                    :closure-generating="closureGenerating"
-                    :closure-suggested-rule-name="closureSuggestedRuleName"
-                    :closure-suggested-disposition="closureSuggestedDisposition"
-                    @update:closure-form="closureForm = $event"
-                    @select-case="onCaseSelected"
-                    @select-rule="onRuleSelected"
-                    @generate-closure-note="generateClosureNote"
-                    @copy-closure-note="copyToClipboard"
-                    @download-closure-note="downloadClosureNote"
-                ></closure-tab>
+            <div v-if="currentTab === 'closure'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Closure Notes Generator</h2>
+                    <p class="text-gray-400">Generate formatted closure notes for security incidents</p>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Form -->
+                    <div class="lg:col-span-2 space-y-4">
+                        <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-4">
+                            <!-- Case Selector -->
+                            <div>
+                                <label class="text-sm text-gray-400">Select Case</label>
+                                <select v-model="closureForm.caseId" @change="onCaseSelected" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                                    <option value="">-- Choose a case --</option>
+                                    <option v-for="case_ in triageData" :key="case_.case_id" :value="case_.case_id">
+                                        {{ case_.case_id }} - {{ case_.rule_name }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Rule Selector -->
+                            <div>
+                                <label class="text-sm text-gray-400">Select Rule for Closure</label>
+                                <select v-model="closureForm.ruleId" @change="onRuleSelected" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" :disabled="!closureForm.caseId">
+                                    <option value="">-- Choose a rule --</option>
+                                    <option v-for="rule in availableRules" :key="rule.rule_id" :value="rule.rule_id">
+                                        {{ rule.rule_name }} ({{ rule.severity }})
+                                    </option>
+                                </select>
+                                <p v-if="closureSuggestedRuleName || closureSuggestedDisposition" class="mt-1 text-[11px] text-gray-400">
+                                    Suggested rule from triage:
+                                    <span class="font-semibold">{{ closureSuggestedRuleName || 'none' }}</span>
+                                    • Suggested disposition:
+                                    <span class="font-semibold">{{ closureSuggestedDisposition || 'Undetermined' }}</span>
+                                </p>
+                            </div>
+
+                            <!-- Dynamic Field Inputs -->
+                            <div v-if="closureForm.ruleId && selectedRule" class="space-y-3">
+                                <p class="text-xs text-gray-400 font-semibold">Required Fields</p>
+                                <div v-for="field in selectedRule.required_closure_fields" :key="field">
+                                    <!-- Dropdown for justification -->
+                                    <div v-if="field === 'justification'">
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <select 
+                                            v-model="closureForm.fieldValues[field]"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-400 text-sm">
+                                            <option value="">-- Select justification --</option>
+                                            <option value="Approved by security team for authorized activity">Approved by security team for authorized activity</option>
+                                            <option value="Legitimate business process">Legitimate business process</option>
+                                            <option value="Test/training exercise">Test/training exercise</option>
+                                            <option value="Known false positive pattern">Known false positive pattern</option>
+                                            <option value="Misconfigured alert">Misconfigured alert</option>
+                                            <option value="Normal operational behavior">Normal operational behavior</option>
+                                        </select>
+                                    </div>
+                                    <!-- Regular text input for other fields -->
+                                    <div v-else>
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <input 
+                                            v-model="closureForm.fieldValues[field]"
+                                            type="text"
+                                            :placeholder="'Enter ' + field"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Disposition/Status Dropdown -->
+                            <div>
+                                <label class="text-sm text-gray-400">Disposition</label>
+                                <select v-model="closureForm.disposition" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                                    <option value="True Positive">True Positive - Suspicious Activity Confirmed</option>
+                                    <option value="Benign Positive">Benign Positive - Suspicious But Expected</option>
+                                    <option value="False Positive">False Positive - Incorrect Analytic Logic</option>
+                                    <option value="Other">Other</option>
+                                    <option value="Undetermined">Undetermined</option>
+                                </select>
+                            </div>
+
+                            <!-- Analyst Notes -->
+                            <div>
+                                <label class="text-sm text-gray-400">Analyst Notes (Optional)</label>
+                                <textarea 
+                                    v-model="closureForm.analystNotes"
+                                    placeholder="Add any additional notes..."
+                                    class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-16 text-sm"></textarea>
+                            </div>
+
+                            <!-- Generate Button -->
+                            <button 
+                                @click="generateClosureNote"
+                                :disabled="!closureForm.caseId || !closureForm.ruleId || closureGenerating"
+                                class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
+                                {{ closureGenerating ? 'Generating...' : 'Generate Closure Note' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Preview -->
+                    <div class="lg:col-span-1">
+                        <div v-if="closureResult" class="bg-gray-800 border border-green-600 rounded-lg p-6 sticky top-24">
+                            <h3 class="text-lg font-bold text-green-400 mb-3">Generated Note</h3>
+                            <p class="text-xs text-gray-400 mb-2">Disposition: <span class="text-green-400 font-semibold">{{ closureResult.disposition }}</span></p>
+                            <div class="bg-gray-900 rounded p-3 text-xs font-mono overflow-y-auto max-h-96 mb-4 whitespace-pre-wrap text-gray-300">
+                                {{ closureResult.generated_note }}
+                            </div>
+                            <div class="space-y-2">
+                                <button 
+                                    @click="copyToClipboard"
+                                    class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Copy to Clipboard
+                                </button>
+                                <button 
+                                    @click="downloadClosureNote"
+                                    class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Download as .txt
+                                </button>
+                            </div>
+                        </div>
+                        <div v-else class="bg-gray-800 border border-gray-700 rounded-lg p-6 text-center text-gray-400 text-sm">
+                            <p>Generate a closure note to preview it here</p>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             <!-- Jobs Tab -->
-            <div v-if="currentTab === 'jobs'">
-                <jobs-tab :jobs="jobs"></jobs-tab>
+            <div v-if="currentTab === 'jobs'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Job History</h2>
+                    <p class="text-gray-400">Track tool executions and view results</p>
+                </div>
+
+                <div v-if="jobs.length === 0" class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-400">
+                    No jobs yet. Execute a tool to see results here.
+                </div>
+
+                <div v-for="job in jobs" :key="job.job_id" class="bg-gray-800 border border-gray-700 rounded-lg p-5">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-lg font-bold">{{ job.tool_name }}</h3>
+                            <p class="text-xs text-gray-400">ID: {{ job.job_id.slice(0, 8) }}...</p>
+                        </div>
+                        <span :class="{
+                            'bg-yellow-900 text-yellow-200': job.status === 'pending' || job.status === 'running',
+                            'bg-green-900 text-green-200': job.status === 'completed',
+                            'bg-red-900 text-red-200': job.status === 'failed'
+                        }" class="px-3 py-1 rounded text-sm font-semibold">
+                            {{ job.status.toUpperCase() }}
+                        </span>
+                    </div>
+
+                    <div class="text-xs text-gray-400 space-y-1 mb-3">
+                        <p>Created: {{ new Date(job.created_at).toLocaleString() }}</p>
+                        <p v-if="job.completed_at">Completed: {{ new Date(job.completed_at).toLocaleString() }}</p>
+                    </div>
+
+                    <div v-if="job.stdout" class="bg-gray-900 rounded p-3 text-xs font-mono overflow-x-auto mb-3 max-h-40 overflow-y-auto">
+                        <pre>{{ job.stdout }}</pre>
+                    </div>
+
+                    <div v-if="job.stderr" class="bg-red-900 bg-opacity-20 border border-red-700 rounded p-3 text-xs font-mono overflow-x-auto text-red-200 mb-3">
+                        <pre>{{ job.stderr }}</pre>
+                    </div>
+
+                    <div class="text-xs text-gray-400">
+                        Exit Code: <span :class="job.exit_code === 0 ? 'text-green-400' : 'text-red-400'" class="font-bold">{{ job.exit_code }}</span>
+                    </div>
+                </div>
             </div>
 
             <!-- Reports Tab -->
-            <div v-if="currentTab === 'reports'">
-                <reports-tab :reports="reports"></reports-tab>
+            <div v-if="currentTab === 'reports'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Generated Reports</h2>
+                    <p class="text-gray-400">Download briefings and analysis results</p>
+                </div>
+
+                <div v-if="reports.length === 0" class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-400">
+                    No reports generated yet.
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div v-for="report in reports" :key="report.filename" class="bg-gray-800 border border-gray-700 rounded-lg p-5">
+                        <h3 class="text-lg font-bold text-blue-400">{{ report.filename }}</h3>
+                        <p class="text-xs text-gray-400 mt-2">
+                            {{ (report.size / 1024).toFixed(2) }} KB • {{ new Date(report.modified).toLocaleString() }}
+                        </p>
+                        <a :href="'/api/reports/' + report.filename" download :filename="report.filename" class="mt-4 inline-block bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-semibold transition">
+                            Download
+                        </a>
+                    </div>
+                </div>
             </div>
 
                                     <!-- Code Review Tab -->
@@ -1057,7 +1661,6 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
-<<<<<<< HEAD
     <script>
         const { createApp } = Vue;
 
@@ -1109,7 +1712,6 @@
                     phase2Model: '',
                     phase2Result: null,
                     analysisSourceNotable: null,
-                    investigationState: null,
                     enrichmentManualResults: {},
                     enrichmentFindingTypes: {},
                     placeholderAliases: {},
@@ -1318,38 +1920,27 @@
                             return byId;
                         }
                     }
-                    const caseRuleRaw = (case_.rule_name || '');
-                    const caseRule = caseRuleRaw.toLowerCase().trim();
+
+                    const caseRule = (case_.rule_name || '').toLowerCase().trim();
                     if (!caseRule) {
                         return null;
                     }
 
-                    // Normalize wrapped ES labels like
-                    // "Endpoint - <Rule Name> - Rule" down to a core
-                    // so truncated correlation_search values still map
-                    // to the canonical rule.
-                    const normalizeRuleLabel = (text) => {
-                        let s = (text || '').toLowerCase().trim();
-                        s = s.replace(/^endpoint\s*-\s*/, '');
-                        s = s.replace(/\s*-\s*rule$/, '');
-                        return s;
-                    };
-
-                    const caseCore = normalizeRuleLabel(caseRuleRaw);
-
-                    // Prefer exact normalized name match first
+                    // Prefer exact name match first
                     let rule = this.availableRules.find(
-                        r => normalizeRuleLabel(r.rule_name || '') === caseCore
+                        r => (r.rule_name || '').toLowerCase().trim() === caseRule
                     );
                     if (rule) {
                         return rule;
                     }
 
-                    // Fallback: relaxed contains-based match on
-                    // normalized labels.
+                    // Fallback: many ES rules are wrapped like
+                    // "Endpoint - <Rule Name> - Rule". Use a relaxed
+                    // contains-based match so cases with that wrapped
+                    // name still map to the underlying correlation rule.
                     rule = this.availableRules.find(r => {
-                        const nameCore = normalizeRuleLabel(r.rule_name || '');
-                        return !!nameCore && (caseCore.includes(nameCore) || nameCore.includes(caseCore));
+                        const name = (r.rule_name || '').toLowerCase().trim();
+                        return !!name && (caseRule.includes(name) || name.includes(caseRule));
                     });
 
                     return rule || null;
@@ -1484,7 +2075,6 @@
                 },
                 onAnalysisCaseChanged() {
                     this.analysisResult = null;
-                    this.investigationState = null;
                     this.enrichmentManualResults = {};
                     this.enrichmentFindingTypes = {};
                     this.supportiveManualResults = {};
@@ -1512,7 +2102,6 @@
                             this.loadSavedSupportiveEvidence(caseId);
                             this.loadSavedEnrichmentEvidence(caseId);
                             this.loadSavedPhase2Evidence(caseId);
-                            this.loadInvestigationState(caseId);
                 },
                 async loadTriageData() {
                     try {
@@ -2089,19 +2678,6 @@
                     this.currentTab = 'analysis';
                     this.onAnalysisCaseChanged();
                 },
-                async loadInvestigationState(caseId) {
-                    if (!caseId) {
-                        return;
-                    }
-
-                    try {
-                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
-                        this.investigationState = res.data;
-                    } catch (err) {
-                        console.error('Failed to load investigation state:', err);
-                        this.investigationState = null;
-                    }
-                },
                 async runAnalysis() {
                     if (!this.analysisCaseId || !this.analysisModel) {
                         alert('Please select a case ID and model');
@@ -2142,7 +2718,6 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.analysisResult = newResult;
-                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -2252,7 +2827,6 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.phase2Result = newResult;
-                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -2467,7 +3041,6 @@
                         phase2FindingTypes: this.phase2FindingTypes,
                         analysisResult: this.analysisResult,
                         phase2Result: this.phase2Result,
-                        investigationState: this.investigationState,
                     };
 
                     try {
@@ -2526,28 +3099,9 @@
                         if (snapshot.phase2Result) {
                             this.phase2Result = snapshot.phase2Result;
                         }
-                        if (snapshot.investigationState) {
-                            this.investigationState = snapshot.investigationState;
-                        }
                     } catch (err) {
                         console.error('Failed to load analysis state:', err);
                     }
-                },
-                formatLoopStatus(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Unknown';
-                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-                },
-                formatDispositionLabel(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Undetermined';
-                    if (raw === 'false_positive') return 'False Positive';
-                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-                },
-                formatFindingLabel(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Neutral';
-                    return raw.charAt(0).toUpperCase() + raw.slice(1);
                 },
                 cancelAnalysis() {
                     // Invalidate any in-flight analysis responses and clear the running flag.
@@ -3202,15 +3756,6 @@
             }
         }).mount('#app');
     </script>
-=======
-    <script src="components/HeaderNav.js"></script>
-    <script src="components/ToolsTab.js"></script>
-    <script src="components/DatabaseTab.js"></script>
-    <script src="components/ClosureTab.js"></script>
-    <script src="components/JobsTab.js"></script>
-    <script src="components/ReportsTab.js"></script>
-    <script src="app.js"></script>
->>>>>>> feature/snappy-edits
 </body>
 </html>
 
