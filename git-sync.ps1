@@ -134,8 +134,14 @@ try {
 
     # Always attempt to push, even if this run had nothing new to commit,
     # so that previously-created local commits still get synced.
-    Write-Host "[*] Pushing changes to origin/$Branch..." -ForegroundColor Cyan
-    git push origin $Branch
+    if ($Branch -eq "main" -or $Branch -eq "staging") {
+        Write-Host "[*] Syncing core branch '$Branch' directly to Network Drive..." -ForegroundColor Cyan
+        # We pass a flag to tell the network drive to skip executing the background server-side hook text
+        git push origin $Branch -o push_options="skip-preview"
+    } else {
+        Write-Host "[*] Branch '$Branch' recognized as feature. Routing to Local Gitea Preview..." -ForegroundColor Cyan
+        git push local-gitea $Branch
+    }
     if ($LASTEXITCODE -eq 0) {
         Write-Host "[+] Push successful." -ForegroundColor Green
         return
