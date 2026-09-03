@@ -2948,14 +2948,7 @@ def list_recent_notables(
                 except Exception:
                     payload = {}
 
-                # Historical or already-promoted notables should remain in
-                # the database so triage cases can still load their source
-                # details. For these, mark them hidden from the recent list
-                # instead of deleting the underlying row.
-                is_historical = bool(payload.get("historical"))
-                has_promoted_case = bool(payload.get("promoted_case_id"))
-
-                if is_historical or has_promoted_case:
+                if payload.get("historical"):
                     payload["hidden_from_recent"] = True
                     event.raw = json.dumps(payload)
                 else:
@@ -3134,13 +3127,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                is_historical = bool(payload_raw.get("historical"))
-                has_promoted_case = bool(payload_raw.get("promoted_case_id"))
-
-                # Historical or already-promoted notables should remain so
-                # triage cases can still load their source details. Mark them
-                # hidden from the recent list instead of deleting the row.
-                if is_historical or has_promoted_case:
+                if payload_raw.get("historical"):
                     payload_raw["hidden_from_recent"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
