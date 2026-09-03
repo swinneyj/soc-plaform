@@ -16,7 +16,6 @@ $MenuHeaderColor = 'Cyan'
 $MenuSubheaderColor = 'DarkCyan'
 $MenuTextColor = 'Gray'
 $MenuMutedColor = 'DarkGray'
-$MenuHighlightColor = 'White'
 
 function Initialize-MenuTheme {
 	try {
@@ -78,14 +77,14 @@ function Get-ModeLabel {
 	)
 
 	if ($BranchName -eq 'main') {
-		return 'START MODE'
+		return 'MAIN / START ONLY'
 	}
 
 	if ($BranchName -eq $DemoBranch) {
-		return 'DEMO COMBINE MODE'
+		return 'STAGING / COMBINE ONLY'
 	}
 
-	return 'CODING MODE'
+	return 'WORK BRANCH / OK TO CODE'
 }
 
 function Get-WorkGuidance {
@@ -388,8 +387,8 @@ function Show-BranchGuide {
 	$currentBranch = Get-CurrentBranch
 	Write-Host "`n--- Branch Guide ---" -ForegroundColor $MenuSubheaderColor
 	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor $MenuTextColor
-	Write-Host 'main        = safe starting point only' -ForegroundColor $MenuMutedColor
-	Write-Host 'work branch = where you normally code' -ForegroundColor $MenuMutedColor
+	Write-Host 'main           = safe starting point only' -ForegroundColor $MenuMutedColor
+	Write-Host 'work branch    = where you normally code' -ForegroundColor $MenuMutedColor
 	Write-Host (("staging branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor $MenuMutedColor
 	Write-Host ""
 	Write-Host 'Normal flow: main -> your work branch -> staging -> main' -ForegroundColor $MenuTextColor
@@ -415,7 +414,7 @@ function Show-BranchChooserHelp {
 		Write-Host '  You should move off main before coding.' -ForegroundColor $MenuMutedColor
 		Write-Host '  Use main menu option 1 to open or create your work branch.' -ForegroundColor $MenuMutedColor
 	} elseif ($currentBranch -eq $DemoBranch) {
-		Write-Host '  You are in demo mode, not coding mode.' -ForegroundColor $MenuMutedColor
+		Write-Host '  You are in staging mode, not coding mode.' -ForegroundColor $MenuMutedColor
 		Write-Host '  Use main menu option 1 if you want to go back to a normal work branch.' -ForegroundColor $MenuMutedColor
 	} else {
 		Write-Host (("  Stay on '{0}' if this is the branch you are actively coding in." -f $currentBranch)) -ForegroundColor $MenuMutedColor
@@ -589,44 +588,86 @@ function Invoke-StartCodingWorkflow {
 	}
 
 	if ($currentBranch -eq 'main' -and $workingTreeDirty) {
-		Write-Host "`n--- Main Has Unsaved Changes ---" -ForegroundColor Yellow
-		Write-Host 'You already have uncommitted changes on main.' -ForegroundColor Yellow
-		Write-Host 'Those changes should go onto a work branch before you continue.' -ForegroundColor Yellow
-		Write-Host '1. Create a new work branch from these current changes' -ForegroundColor Yellow
-		Write-Host '2. Cancel' -ForegroundColor Yellow
+		Write-Host "`n--- Main Has Unsaved Changes ---" -ForegroundColor $MenuSubheaderColor
+		Write-Host 'You already have uncommitted changes on main.' -ForegroundColor $MenuTextColor
+		Write-Host 'Those changes should go onto a work branch before you continue.' -ForegroundColor $MenuTextColor
+		Write-Host '1. Create a new work branch and keep these current changes' -ForegroundColor $MenuTextColor
+		Write-Host '2. Move these current changes onto an existing work branch' -ForegroundColor $MenuTextColor
+		Write-Host '3. Cancel' -ForegroundColor $MenuTextColor
 
-		$dirtyMainChoice = Read-Host 'Select an option (1-2)'
-		if ($dirtyMainChoice -ne '1') {
-			Write-Warning 'Start-coding workflow cancelled.'
-			Wait-ForUser
-			return
+		$dirtyMainChoice = Read-Host 'Select an option (1-3)'
+		switch ($dirtyMainChoice) {
+			'1' {
+				$newBranchName = Read-Host 'Enter the name of the new work branch for these current changes'
+				if ([string]::IsNullOrWhiteSpace($newBranchName)) {
+					Write-Warning 'No branch name entered. Start-coding workflow cancelled.'
+					Wait-ForUser
+					return
+				}
+
+				$newBranchName = $newBranchName.Trim()
+				if (Test-LocalBranchExists -BranchName $newBranchName) {
+					Write-Warning "Branch '$newBranchName' already exists locally. Start-coding workflow cancelled."
+					Wait-ForUser
+					return
+				}
+
+				Write-Host (("`n[+] Creating new work branch '{0}' from your current changes..." -f $newBranchName)) -ForegroundColor Cyan
+				Invoke-GitCommand -Args @('checkout', '-b', $newBranchName) | Out-Null
+
+				if ($LASTEXITCODE -eq 0) {
+					Write-Host (("`n[+] You are now on work branch '{0}' with your current changes." -f $newBranchName)) -ForegroundColor Green
+				} else {
+					Write-Warning 'Could not create the new work branch from your current changes. Review the git output above.'
+				}
+
+				Wait-ForUser
+				return
+			}
+			'2' {
+				$recommendedBranch = Get-RecommendedWorkBranch
+				$targetBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to receive these current changes'
+				if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+					Write-Warning 'No work branch selected. Start-coding workflow cancelled.'
+					Wait-ForUser
+					return
+				}
+
+				$stashMessage = "move-off-main-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss')
+				Write-Host (("`n[+] Stashing current main changes so they can be moved onto '{0}'..." -f $targetBranch)) -ForegroundColor Cyan
+				& git stash push -u -m $stashMessage | Out-Host
+				if ($LASTEXITCODE -ne 0) {
+					Write-Warning 'Could not stash the current main changes. Review the git output above.'
+					Wait-ForUser
+					return
+				}
+
+				if (-not (Switch-ToBranch -BranchName $targetBranch)) {
+					Write-Warning 'Could not switch to the selected work branch. Attempting to restore your stashed changes on main.'
+					if ((Get-CurrentBranch) -eq 'main') {
+						& git stash pop | Out-Host
+					}
+					Wait-ForUser
+					return
+				}
+
+				Write-Host (("`n[+] Applying those stashed changes onto work branch '{0}'..." -f $targetBranch)) -ForegroundColor Cyan
+				& git stash pop | Out-Host
+				if ($LASTEXITCODE -eq 0) {
+					Write-Host (("`n[+] You are now on work branch '{0}' with your former main changes applied here." -f $targetBranch)) -ForegroundColor Green
+				} else {
+					Write-Warning 'The stash did not apply cleanly. Your changes may still be in the stash list; review the git output above.'
+				}
+
+				Wait-ForUser
+				return
+			}
+			default {
+				Write-Warning 'Start-coding workflow cancelled.'
+				Wait-ForUser
+				return
+			}
 		}
-
-		$newBranchName = Read-Host 'Enter the name of the new work branch for these current changes'
-		if ([string]::IsNullOrWhiteSpace($newBranchName)) {
-			Write-Warning 'No branch name entered. Start-coding workflow cancelled.'
-			Wait-ForUser
-			return
-		}
-
-		$newBranchName = $newBranchName.Trim()
-		if (Test-LocalBranchExists -BranchName $newBranchName) {
-			Write-Warning "Branch '$newBranchName' already exists locally. Start-coding workflow cancelled."
-			Wait-ForUser
-			return
-		}
-
-		Write-Host (("`n[+] Creating new work branch '{0}' from your current changes..." -f $newBranchName)) -ForegroundColor Cyan
-		Invoke-GitCommand -Args @('checkout', '-b', $newBranchName) | Out-Null
-
-		if ($LASTEXITCODE -eq 0) {
-			Write-Host (("`n[+] You are now on work branch '{0}' with your current changes." -f $newBranchName)) -ForegroundColor Green
-		} else {
-			Write-Warning 'Could not create the new work branch from your current changes. Review the git output above.'
-		}
-
-		Wait-ForUser
-		return
 	}
 
 	if (-not (Switch-ToBranch -BranchName 'main')) {
@@ -885,7 +926,7 @@ while ($true) {
 	Write-Host "`n=================================" -ForegroundColor $MenuHeaderColor
 	Write-Host '    SOC GIT WORKFLOW MENU        ' -ForegroundColor $MenuHeaderColor
 	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
-	Write-Host (("Flow: main -> work branches -> staging -> main" -f $DemoBranch)) -ForegroundColor $MenuSubheaderColor
+	Write-Host 'Flow: main -> work branches -> staging -> main' -ForegroundColor $MenuSubheaderColor
 	Show-Status
 	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor $MenuTextColor
 	Write-Host '2. Save and share this branch' -ForegroundColor $MenuTextColor
