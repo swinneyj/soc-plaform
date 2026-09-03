@@ -27,8 +27,10 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      - redis
-      - postgres
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
