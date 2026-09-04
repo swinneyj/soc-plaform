@@ -729,99 +729,6 @@
                         </div>
                     </div>
 
-                    <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-4 mt-4">
-                        <div class="flex items-start justify-between gap-3">
-                            <div>
-                                <h3 class="text-sm font-semibold text-blue-300">Investigation Loop State</h3>
-                                <p class="text-[11px] text-gray-400">Track what the case currently suggests, what is still blocking closure, and whether the next loop needs more evidence.</p>
-                            </div>
-                            <div class="text-right text-[11px] text-gray-400">
-                                <p>Iteration {{ investigationState.iteration_count || 0 }}</p>
-                                <p v-if="investigationState.updated_at">Updated {{ new Date(investigationState.updated_at).toLocaleString() }}</p>
-                            </div>
-                        </div>
-
-                        <div class="flex flex-wrap gap-2 text-xs">
-                            <span class="px-2 py-1 rounded border border-blue-500 text-blue-200 bg-blue-950">
-                                Status: {{ formatLoopStatus(investigationState.loop_status) }}
-                            </span>
-                            <span class="px-2 py-1 rounded border border-amber-500 text-amber-200 bg-amber-950">
-                                Disposition: {{ formatDispositionLabel(investigationState.provisional_disposition) }}
-                            </span>
-                            <span class="px-2 py-1 rounded border border-emerald-500 text-emerald-200 bg-emerald-950">
-                                Confidence: {{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%
-                            </span>
-                        </div>
-
-                        <div>
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Current Hypothesis</p>
-                            <p class="text-sm text-gray-200 whitespace-pre-wrap">{{ investigationState.current_hypothesis || 'No persisted hypothesis yet.' }}</p>
-                        </div>
-
-                        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Substantive Evidence</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.substantive_items ?? investigationState.evidence_summary?.total_items ?? 0 }}</p>
-                            </div>
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Supports / Refutes</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.by_finding?.supports || 0 }} / {{ investigationState.evidence_summary?.by_finding?.refutes || 0 }}</p>
-                            </div>
-                            <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                                <p class="text-gray-400">Pending / Neutral</p>
-                                <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.pending_items || 0 }} / {{ investigationState.evidence_summary?.by_finding?.neutral || 0 }}</p>
-                            </div>
-                        </div>
-
-                        <div v-if="investigationState.closure_blockers && investigationState.closure_blockers.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Closure Blockers</p>
-                            <div class="flex flex-wrap gap-2">
-                                <span v-for="item in investigationState.closure_blockers" :key="'blocker:' + item" class="bg-red-950 border border-red-700 text-red-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                            </div>
-                        </div>
-
-                        <div v-if="investigationState.unresolved_questions && investigationState.unresolved_questions.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Open Questions</p>
-                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                                <li v-for="item in investigationState.unresolved_questions" :key="'question:' + item">{{ item }}</li>
-                            </ul>
-                        </div>
-
-                        <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Next Best Actions</p>
-                            <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                                <li v-for="item in investigationState.recommended_next_actions" :key="'action:' + item.title + item.description">
-                                    <span class="font-semibold text-blue-300">{{ item.title }}</span>
-                                    <span v-if="item.description">: {{ item.description }}</span>
-                                </li>
-                            </ul>
-                        </div>
-
-                        <div v-if="investigationState.evidence_summary?.timeline && investigationState.evidence_summary.timeline.length">
-                            <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Evidence Timeline</p>
-                            <div class="space-y-2">
-                                <div
-                                    v-for="item in investigationState.evidence_summary.timeline"
-                                    :key="'timeline:' + item.title + item.created_at + item.source_system"
-                                    class="bg-gray-800 border border-gray-700 rounded p-3"
-                                >
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
-                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
-                                        </div>
-                                        <div class="text-right text-[11px] text-gray-500">
-                                            <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                            <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
-                                        </div>
-                                    </div>
-                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
-                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
                     <div v-if="analysisRule && showPhase1Analysis" class="mt-2">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
@@ -1458,66 +1365,7 @@
                     
                     <div class="mb-4">
                         <label class="text-xs font-bold text-gray-300 mb-2 block">Code to Review</label>
-
-                        <!-- In-place Find bar (Ctrl+F style) -->
-                        <div class="flex flex-wrap items-center gap-2 mb-2 bg-gray-900/60 border border-gray-700 rounded px-2 py-1.5">
-                            <span class="text-[11px] text-gray-400 font-semibold shrink-0">Find</span>
-                            <input
-                                ref="codeReviewFindInput"
-                                v-model="codeReviewFindTerm"
-                                type="text"
-                                class="flex-1 min-w-[140px] bg-gray-800 text-gray-200 border border-gray-600 rounded px-2 py-1 text-xs font-mono focus:outline-none focus:border-blue-500"
-                                placeholder="Find in code… (Ctrl+F)"
-                                @input="runCodeReviewFind"
-                                @keydown="onCodeReviewFindKeydown"
-                            >
-                            <span class="text-[11px] text-gray-400 tabular-nums shrink-0 min-w-[4.5rem] text-center">
-                                <template v-if="!codeReviewFindTerm.trim()">—</template>
-                                <template v-else-if="codeReviewFindMatches.length === 0">0 matches</template>
-                                <template v-else-if="codeReviewFindIndex < 0">{{ codeReviewFindMatches.length }} matches</template>
-                                <template v-else>{{ codeReviewFindIndex + 1 }} / {{ codeReviewFindMatches.length }}</template>
-                            </span>
-                            <button
-                                type="button"
-                                class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] text-gray-100 disabled:opacity-40"
-                                :disabled="codeReviewFindMatches.length === 0"
-                                @click="codeReviewFindPrev"
-                                title="Previous match (Shift+Enter)"
-                            >↑</button>
-                            <button
-                                type="button"
-                                class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] text-gray-100 disabled:opacity-40"
-                                :disabled="codeReviewFindMatches.length === 0"
-                                @click="codeReviewFindNext"
-                                title="Next match (Enter)"
-                            >↓</button>
-                            <label class="flex items-center gap-1 text-[11px] text-gray-400 cursor-pointer select-none" title="Case sensitive">
-                                <input
-                                    type="checkbox"
-                                    v-model="codeReviewFindCaseSensitive"
-                                    class="h-3 w-3 bg-gray-800 border-gray-600 rounded"
-                                    @change="runCodeReviewFind"
-                                >
-                                <span>Aa</span>
-                            </label>
-                            <button
-                                type="button"
-                                class="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] text-gray-300"
-                                @click="clearCodeReviewFind"
-                                title="Clear find (Esc)"
-                            >✕</button>
-                        </div>
-
-                        <textarea
-                            ref="codeReviewTextarea"
-                            v-model="codeReviewForm.codeSnippet"
-                            class="w-full h-64 bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 font-mono text-xs"
-                            placeholder="Paste your code here..."
-                            @keydown="onCodeReviewTextareaKeydown"
-                        ></textarea>
-                        <p class="mt-1 text-[11px] text-gray-500">
-                            Type in Find → press Enter to jump to a match (highlighted). Enter / Shift+Enter / F3 keep navigating. Ctrl+F returns to the Find box. Esc clears.
-                        </p>
+                        <textarea v-model="codeReviewForm.codeSnippet" class="w-full h-64 bg-gray-800 text-gray-300 border border-gray-600 rounded px-3 py-2 font-mono text-xs" placeholder="Paste your code here..."></textarea>
                     </div>
                     
                     <button @click="submitCodeReview" :disabled="codeReviewRunning || (!codeReviewForm.codeSnippet.trim() && !codeReviewForm.uploadedFile)" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-700 text-white rounded text-sm font-bold">
@@ -1864,7 +1712,6 @@
                     phase2Model: '',
                     phase2Result: null,
                     analysisSourceNotable: null,
-                    investigationState: null,
                     enrichmentManualResults: {},
                     enrichmentFindingTypes: {},
                     placeholderAliases: {},
@@ -1916,13 +1763,7 @@
                     codeReviewSections: [],
                     codeReviewSectionsBusy: false,
                     codeReviewSectionsFilter: '',
-                    codeReviewSectionsCodeOnly: false,
-
-                    // In-place Find (Ctrl+F style) for the Code to Review textarea
-                    codeReviewFindTerm: '',
-                    codeReviewFindCaseSensitive: false,
-                    codeReviewFindMatches: [],   // array of { start, end }
-                    codeReviewFindIndex: -1
+                    codeReviewSectionsCodeOnly: false
                 };
             },
             computed: {
@@ -2079,38 +1920,27 @@
                             return byId;
                         }
                     }
-                    const caseRuleRaw = (case_.rule_name || '');
-                    const caseRule = caseRuleRaw.toLowerCase().trim();
+
+                    const caseRule = (case_.rule_name || '').toLowerCase().trim();
                     if (!caseRule) {
                         return null;
                     }
 
-                    // Normalize wrapped ES labels like
-                    // "Endpoint - <Rule Name> - Rule" down to a core
-                    // so truncated correlation_search values still map
-                    // to the canonical rule.
-                    const normalizeRuleLabel = (text) => {
-                        let s = (text || '').toLowerCase().trim();
-                        s = s.replace(/^endpoint\s*-\s*/, '');
-                        s = s.replace(/\s*-\s*rule$/, '');
-                        return s;
-                    };
-
-                    const caseCore = normalizeRuleLabel(caseRuleRaw);
-
-                    // Prefer exact normalized name match first
+                    // Prefer exact name match first
                     let rule = this.availableRules.find(
-                        r => normalizeRuleLabel(r.rule_name || '') === caseCore
+                        r => (r.rule_name || '').toLowerCase().trim() === caseRule
                     );
                     if (rule) {
                         return rule;
                     }
 
-                    // Fallback: relaxed contains-based match on
-                    // normalized labels.
+                    // Fallback: many ES rules are wrapped like
+                    // "Endpoint - <Rule Name> - Rule". Use a relaxed
+                    // contains-based match so cases with that wrapped
+                    // name still map to the underlying correlation rule.
                     rule = this.availableRules.find(r => {
-                        const nameCore = normalizeRuleLabel(r.rule_name || '');
-                        return !!nameCore && (caseCore.includes(nameCore) || nameCore.includes(caseCore));
+                        const name = (r.rule_name || '').toLowerCase().trim();
+                        return !!name && (caseRule.includes(name) || name.includes(caseRule));
                     });
 
                     return rule || null;
@@ -2245,7 +2075,6 @@
                 },
                 onAnalysisCaseChanged() {
                     this.analysisResult = null;
-                    this.investigationState = null;
                     this.enrichmentManualResults = {};
                     this.enrichmentFindingTypes = {};
                     this.supportiveManualResults = {};
@@ -2273,7 +2102,6 @@
                             this.loadSavedSupportiveEvidence(caseId);
                             this.loadSavedEnrichmentEvidence(caseId);
                             this.loadSavedPhase2Evidence(caseId);
-                            this.loadInvestigationState(caseId);
                 },
                 async loadTriageData() {
                     try {
@@ -2850,19 +2678,6 @@
                     this.currentTab = 'analysis';
                     this.onAnalysisCaseChanged();
                 },
-                async loadInvestigationState(caseId) {
-                    if (!caseId) {
-                        return;
-                    }
-
-                    try {
-                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
-                        this.investigationState = res.data;
-                    } catch (err) {
-                        console.error('Failed to load investigation state:', err);
-                        this.investigationState = null;
-                    }
-                },
                 async runAnalysis() {
                     if (!this.analysisCaseId || !this.analysisModel) {
                         alert('Please select a case ID and model');
@@ -2903,7 +2718,6 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.analysisResult = newResult;
-                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -3013,7 +2827,6 @@
                                 newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
                             this.phase2Result = newResult;
-                            this.investigationState = newResult.investigation_state || this.investigationState;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
@@ -3228,7 +3041,6 @@
                         phase2FindingTypes: this.phase2FindingTypes,
                         analysisResult: this.analysisResult,
                         phase2Result: this.phase2Result,
-                        investigationState: this.investigationState,
                     };
 
                     try {
@@ -3287,28 +3099,9 @@
                         if (snapshot.phase2Result) {
                             this.phase2Result = snapshot.phase2Result;
                         }
-                        if (snapshot.investigationState) {
-                            this.investigationState = snapshot.investigationState;
-                        }
                     } catch (err) {
                         console.error('Failed to load analysis state:', err);
                     }
-                },
-                formatLoopStatus(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Unknown';
-                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-                },
-                formatDispositionLabel(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Undetermined';
-                    if (raw === 'false_positive') return 'False Positive';
-                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
-                },
-                formatFindingLabel(value) {
-                    const raw = (value || '').toString().trim().toLowerCase();
-                    if (!raw) return 'Neutral';
-                    return raw.charAt(0).toUpperCase() + raw.slice(1);
                 },
                 cancelAnalysis() {
                     // Invalidate any in-flight analysis responses and clear the running flag.
@@ -3673,214 +3466,15 @@
                 selectToolForExecution(tool) {
                     this.selectedToolForExecution = tool;
                 },
-
-                // ---- In-place Find helpers for Code to Review textarea ----
-                clearCodeReviewFind() {
-                    this.codeReviewFindTerm = '';
-                    this.codeReviewFindMatches = [];
-                    this.codeReviewFindIndex = -1;
-                },
-                runCodeReviewFind() {
-                    // Recompute matches only. Do NOT focus/select the textarea here —
-                    // that would steal the caret from the Find input on every keystroke.
-                    const term = (this.codeReviewFindTerm || '');
-                    const text = (this.codeReviewForm.codeSnippet || '');
-                    this.codeReviewFindMatches = [];
-                    this.codeReviewFindIndex = -1;
-
-                    if (!term || !text) {
-                        return;
-                    }
-
-                    const caseSensitive = !!this.codeReviewFindCaseSensitive;
-                    const haystack = caseSensitive ? text : text.toLowerCase();
-                    const needle = caseSensitive ? term : term.toLowerCase();
-                    const matches = [];
-                    let from = 0;
-                    while (from < haystack.length) {
-                        const idx = haystack.indexOf(needle, from);
-                        if (idx === -1) break;
-                        matches.push({ start: idx, end: idx + term.length });
-                        from = idx + Math.max(1, term.length);
-                    }
-                    this.codeReviewFindMatches = matches;
-                    // Leave index at -1 until the user presses Enter / Next / Prev
-                },
-                selectCodeReviewFindMatch(index) {
-                    const matches = this.codeReviewFindMatches || [];
-                    if (!matches.length || index < 0 || index >= matches.length) return;
-
-                    this.codeReviewFindIndex = index;
-                    const m = matches[index];
-                    const ta = this.$refs.codeReviewTextarea;
-                    if (!ta) return;
-
-                    // Browsers only paint the selection highlight while the textarea
-                    // has focus. Focus it, select the match, then scroll into view.
-                    // User can press Ctrl+F (or click the Find box) to return to typing.
-                    try {
-                        ta.focus();
-                        ta.setSelectionRange(m.start, m.end);
-                    } catch (e) {
-                        // ignore
-                    }
-
-                    // Accurate scroll: mirror the textarea styles into a hidden div,
-                    // measure the pixel offset of the match, and center it in view.
-                    // Fixes cases where the match was selected but still outside the
-                    // visible area (user had to scroll a little to see the highlight).
-                    try {
-                        this.scrollTextareaToOffset(ta, m.start, m.end);
-                    } catch (e) {
-                        // ignore scroll errors
-                    }
-
-                    // Re-apply selection on next tick (some browsers clear it during scroll)
-                    this.$nextTick(() => {
-                        try {
-                            if (document.activeElement === ta) {
-                                ta.setSelectionRange(m.start, m.end);
-                            }
-                        } catch (e2) { /* ignore */ }
-                    });
-                },
-                scrollTextareaToOffset(ta, start, end) {
-                    if (!ta) return;
-                    const text = ta.value || '';
-                    const style = window.getComputedStyle(ta);
-
-                    // Build a mirror that matches the textarea's typography & width
-                    const mirror = document.createElement('div');
-                    const props = [
-                        'boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
-                        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
-                        'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing',
-                        'textTransform', 'wordSpacing', 'textIndent', 'lineHeight',
-                        'whiteSpace', 'wordWrap', 'wordBreak', 'overflowWrap'
-                    ];
-                    mirror.style.position = 'absolute';
-                    mirror.style.top = '0';
-                    mirror.style.left = '-9999px';
-                    mirror.style.visibility = 'hidden';
-                    mirror.style.height = 'auto';
-                    mirror.style.overflow = 'hidden';
-                    mirror.style.whiteSpace = 'pre-wrap';
-                    mirror.style.wordWrap = 'break-word';
-                    // Match content width (clientWidth already excludes scrollbar)
-                    mirror.style.width = ta.clientWidth + 'px';
-                    props.forEach((p) => {
-                        try { mirror.style[p] = style[p]; } catch (e) { /* ignore */ }
-                    });
-                    // Force pre-wrap so long lines wrap the same way as the textarea
-                    if (!mirror.style.whiteSpace || mirror.style.whiteSpace === 'normal') {
-                        mirror.style.whiteSpace = 'pre-wrap';
-                    }
-
-                    // Text before the match + a marker span at the match position
-                    const before = text.substring(0, start);
-                    const matchText = text.substring(start, Math.max(start, end));
-                    const marker = document.createElement('span');
-                    marker.textContent = matchText || '.';
-                    mirror.textContent = before;
-                    mirror.appendChild(marker);
-                    document.body.appendChild(mirror);
-
-                    const markerTop = marker.offsetTop;
-                    const markerHeight = marker.offsetHeight || parseFloat(style.lineHeight) || 16;
-                    document.body.removeChild(mirror);
-
-                    // Place the match roughly 1/3 down the visible area so context
-                    // above and below is visible, and it is never clipped.
-                    const viewH = ta.clientHeight;
-                    const target = Math.max(0, markerTop - Math.floor(viewH / 3));
-                    const maxScroll = Math.max(0, ta.scrollHeight - viewH);
-                    ta.scrollTop = Math.min(target, maxScroll);
-
-                    // If after scrolling the marker would still be below the fold
-                    // (e.g. very tall wrapped match), nudge so its top is visible.
-                    if (markerTop + markerHeight > ta.scrollTop + viewH) {
-                        ta.scrollTop = Math.min(Math.max(0, markerTop - 8), maxScroll);
-                    }
-                },
-                codeReviewFindNext() {
-                    const n = (this.codeReviewFindMatches || []).length;
-                    if (!n) return;
-                    // First navigation lands on match 0; later ones advance
-                    const next = this.codeReviewFindIndex < 0 ? 0 : (this.codeReviewFindIndex + 1) % n;
-                    this.selectCodeReviewFindMatch(next);
-                },
-                codeReviewFindPrev() {
-                    const n = (this.codeReviewFindMatches || []).length;
-                    if (!n) return;
-                    const prev = this.codeReviewFindIndex < 0 ? (n - 1) : (this.codeReviewFindIndex - 1 + n) % n;
-                    this.selectCodeReviewFindMatch(prev);
-                },
-                onCodeReviewFindKeydown(event) {
-                    if (event.key === 'Enter') {
-                        event.preventDefault();
-                        if (event.shiftKey) {
-                            this.codeReviewFindPrev();
-                        } else {
-                            this.codeReviewFindNext();
-                        }
-                    } else if (event.key === 'Escape') {
-                        event.preventDefault();
-                        this.clearCodeReviewFind();
-                        // return focus to the code box after clearing
-                        this.$nextTick(() => {
-                            const ta = this.$refs.codeReviewTextarea;
-                            if (ta) ta.focus();
-                        });
-                    } else if (event.key === 'F3') {
-                        event.preventDefault();
-                        if (event.shiftKey) this.codeReviewFindPrev();
-                        else this.codeReviewFindNext();
-                    }
-                },
-                onCodeReviewTextareaKeydown(event) {
-                    // Ctrl+F / Cmd+F focuses the find input instead of browser find
-                    if ((event.ctrlKey || event.metaKey) && (event.key === 'f' || event.key === 'F')) {
-                        event.preventDefault();
-                        const input = this.$refs.codeReviewFindInput;
-                        if (input) {
-                            input.focus();
-                            input.select();
-                        }
-                        return;
-                    }
-                    // While a find is active, Enter / Shift+Enter / F3 navigate matches
-                    // so you can keep jumping without going back to the Find box.
-                    const hasMatches = (this.codeReviewFindMatches || []).length > 0;
-                    if (hasMatches && event.key === 'Enter') {
-                        event.preventDefault();
-                        if (event.shiftKey) this.codeReviewFindPrev();
-                        else this.codeReviewFindNext();
-                        return;
-                    }
-                    if (event.key === 'F3') {
-                        event.preventDefault();
-                        if (event.shiftKey) this.codeReviewFindPrev();
-                        else this.codeReviewFindNext();
-                        return;
-                    }
-                    if (event.key === 'Escape' && (this.codeReviewFindTerm || '').trim()) {
-                        event.preventDefault();
-                        this.clearCodeReviewFind();
-                    }
-                },
-                // ---- end in-place Find helpers ----
-
                 handleCodeReviewFile(file) {
                     if (!file) {
                         this.codeReviewForm.uploadedFile = null;
                         this.codeReviewSections = [];
-                        this.clearCodeReviewFind();
                         return;
                     }
 
                     this.codeReviewForm.uploadedFile = file;
                     this.codeReviewSections = [];
-                    this.clearCodeReviewFind();
                     const name = file.name || '';
                     const lowerName = name.toLowerCase();
                     const ext = lowerName.includes('.') ? lowerName.substring(lowerName.lastIndexOf('.') + 1) : '';
@@ -3902,13 +3496,11 @@
                         reader.onload = (e) => {
                             const text = (e.target && e.target.result) || '';
                             this.codeReviewForm.codeSnippet = typeof text === 'string' ? text : '';
-                            this.clearCodeReviewFind();
                         };
                         reader.readAsText(file);
                     } else {
                         // Zip projects can be large; leave textarea empty and route to zip endpoint
                         this.codeReviewForm.codeSnippet = '';
-                        this.clearCodeReviewFind();
                     }
                 },
                 handleFileUpload(event) {
@@ -3943,7 +3535,6 @@
                     const snippet = fullText.slice(start, end);
 
                     this.codeReviewForm.codeSnippet = snippet;
-                    this.clearCodeReviewFind();
                     alert('Focused on a smaller section around the first match. You can refine further or run the review now.');
                 },
                 async detectCodeReviewSections() {
@@ -3976,7 +3567,6 @@
                         return;
                     }
                     this.codeReviewForm.codeSnippet = section.preview;
-                    this.clearCodeReviewFind();
                     const kind = section.kind || 'section';
                     const name = section.name ? ' "' + section.name + '"' : '';
                     alert('Focused on ' + kind + name + '. You can refine further or run the review now.');
@@ -4051,7 +3641,6 @@
                     this.codeReviewForm.codeSnippet = chunks.join('\n');
                     this.codeReviewForm.uploadedFile = null;
                     this.codeReviewSections = [];
-                    this.clearCodeReviewFind();
                 },
                 onCodeReviewDragOver(event) {
                     if (!event.dataTransfer) {
