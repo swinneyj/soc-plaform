@@ -7,12 +7,6 @@ param (
     [switch]$PreferLocal      # On conflict, local history wins (force-push to remote)
 )
 
-# --- DYNAMIC ROUTING CONFIGURATION ---
-$RemoteTarget = "origin"
-if ($Branch -notmatch "main" -and $Branch -notmatch "staging") {
-    $RemoteTarget = "local-gitea"
-}
-
 function Invoke-GitSafe {
     param(
         [Parameter(Mandatory = $true)][string]$Command,
@@ -44,13 +38,13 @@ function Resolve-MergeSource {
         return $SourceBranch
     }
 
-    Invoke-GitSafe -Command "git fetch $RemoteTarget $SourceBranch" -ErrorMessage "Failed to fetch $RemoteTarget/$SourceBranch."
+    Invoke-GitSafe -Command "git fetch origin $SourceBranch" -ErrorMessage "Failed to fetch origin/$SourceBranch."
 
-    if (Test-GitRef -Ref "refs/remotes/$RemoteTarget/$SourceBranch") {
-        return "$RemoteTarget/$SourceBranch"
+    if (Test-GitRef -Ref "refs/remotes/origin/$SourceBranch") {
+        return "origin/$SourceBranch"
     }
 
-    throw "Merge source '$SourceBranch' was not found locally or on remote."
+    throw "Merge source '$SourceBranch' was not found locally or on origin."
 }
 
 try {
@@ -140,8 +134,8 @@ try {
 
     # Always attempt to push, even if this run had nothing new to commit,
     # so that previously-created local commits still get synced.
-    Write-Host "[*] Pushing changes to $RemoteTarget/$Branch..." -ForegroundColor Cyan
-    git push $RemoteTarget $Branch
+    Write-Host "[*] Pushing changes to origin/$Branch..." -ForegroundColor Cyan
+    git push origin $Branch
     if ($LASTEXITCODE -eq 0) {
         Write-Host "[+] Push successful." -ForegroundColor Green
         return
@@ -153,9 +147,9 @@ try {
     # either apply the chosen conflict policy or abort safely.
     try {
         if ($MergeFrom) {
-            Invoke-GitSafe -Command "git pull --no-rebase $RemoteTarget $Branch" -ErrorMessage "git pull $RemoteTarget failed."
+            Invoke-GitSafe -Command "git pull --no-rebase origin $Branch" -ErrorMessage "git pull origin failed."
         } else {
-            Invoke-GitSafe -Command "git pull --rebase $RemoteTarget $Branch" -ErrorMessage "git pull --rebase failed."
+            Invoke-GitSafe -Command "git pull --rebase origin $Branch" -ErrorMessage "git pull --rebase failed."
         }
     }
     catch {
@@ -175,12 +169,12 @@ try {
         }
 
         if ($PreferRemote) {
-            Write-Warning "Applying -PreferRemote: resetting local branch to match $RemoteTarget/$Branch (local conflicting commits will be discarded)."
-            Invoke-GitSafe -Command "git fetch $RemoteTarget" -ErrorMessage "git fetch failed before reset."
-            Invoke-GitSafe -Command "git reset --hard $RemoteTarget/$Branch" -ErrorMessage "git reset --hard $RemoteTarget/$Branch failed. Resolve Git state manually."
+            Write-Warning "Applying -PreferRemote: resetting local branch to match origin/$Branch (local conflicting commits will be discarded)."
+            Invoke-GitSafe -Command "git fetch origin" -ErrorMessage "git fetch failed before reset."
+            Invoke-GitSafe -Command "git reset --hard origin/$Branch" -ErrorMessage "git reset --hard origin/$Branch failed. Resolve Git state manually."
 
             Write-Host "[*] Retrying push after remote-preferred reset..." -ForegroundColor Cyan
-            Invoke-GitSafe -Command "git push $RemoteTarget $Branch" -ErrorMessage "Push failed even after remote-preferred reset. Resolve Git issues manually."
+            Invoke-GitSafe -Command "git push origin $Branch" -ErrorMessage "Push failed even after remote-preferred reset. Resolve Git issues manually."
 
             Write-Host "[+] Push successful after applying -PreferRemote policy." -ForegroundColor Green
             return
@@ -188,8 +182,8 @@ try {
         elseif ($PreferLocal) {
             Write-Warning "Applying -PreferLocal: forcing local branch to remote (remote conflicting commits will be overwritten)."
 
-            Write-Host "[*] Forcing push of local branch to $RemoteTarget/$Branch..." -ForegroundColor Cyan
-            Invoke-GitSafe -Command "git push --force-with-lease $RemoteTarget $Branch" -ErrorMessage "Force-push with -PreferLocal failed. Resolve Git issues manually."
+            Write-Host "[*] Forcing push of local branch to origin/$Branch..." -ForegroundColor Cyan
+            Invoke-GitSafe -Command "git push --force-with-lease origin $Branch" -ErrorMessage "Force-push with -PreferLocal failed. Resolve Git issues manually."
 
             Write-Host "[+] Push successful after applying -PreferLocal policy." -ForegroundColor Green
             return
@@ -201,7 +195,7 @@ try {
     }
 
     Write-Host "[*] Retrying push after rebase..." -ForegroundColor Cyan
-    Invoke-GitSafe -Command "git push $RemoteTarget $Branch" -ErrorMessage "Push failed even after rebase. Resolve Git issues manually."
+    Invoke-GitSafe -Command "git push origin $Branch" -ErrorMessage "Push failed even after rebase. Resolve Git issues manually."
 
     Write-Host "[+] Push successful after rebase." -ForegroundColor Green
 }
