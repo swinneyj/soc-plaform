@@ -1148,8 +1148,6 @@ NOTABLE_FIELD_ALIASES = [
     ("Destination Port", "destination_port"),
     ("Disposition", "disposition"),
     ("Username", "username"),
-    ("SSH File Path", "ssh_file_path"),
-    ("File Path", "file_path"),
     ("File Name", "file_name"),
     ("Process", "process"),
     ("Parent Process", "parent_process"),
@@ -1174,10 +1172,6 @@ NOTABLE_FIELD_ALIASES = [
     ("User Identity", "user_identity"),
     ("User Category", "user_category"),
     ("User", "user"),
-    ("Event ID", "event_id"),
-    ("event_id", "event_id"),
-    ("Event Hash", "event_hash"),
-    ("event_hash", "event_hash"),
     ("Value", "value"),
 ]
 
@@ -1216,8 +1210,6 @@ NOTABLE_FIELD_LABELS = {
     "added_account": "Added Account",
     "actor": "Actor",
     "value": "Value",
-    "ssh_file_path": "SSH File Path",
-    "file_path": "File Path",
     "file_name": "File Name",
     "process": "Process",
     "parent_process": "Parent Process",
@@ -1226,8 +1218,6 @@ NOTABLE_FIELD_LABELS = {
     "ssl_errors": "SSL Errors",
     "severity": "Severity",
     "signature": "Signature",
-    "event_id": "Event ID",
-    "event_hash": "Event Hash",
 }
 
 EMBEDDED_FIELD_EXTRACTORS = [
@@ -2069,129 +2059,6 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
     }
 
 
-# Priority order for compact key-fields shown on collapsed triage cards.
-# Only fields that are present and non-empty are included.
-TRIAGE_KEY_FIELD_PRIORITY = [
-    ("host", "Host"),
-    ("destination", "Destination"),
-    ("user", "User"),
-    ("username", "User"),
-    ("ssh_file_path", "SSH File Path"),
-    ("file_path", "File Path"),
-    ("file_name", "File Name"),
-    ("process", "Process"),
-    ("parent_process", "Parent Process"),
-    ("urgency", "Urgency"),
-    ("source_ip", "Source IP"),
-    ("destination_ip", "Destination IP"),
-    ("destination_port", "Dest Port"),
-    ("source_port", "Source Port"),
-    ("owner", "Owner"),
-    ("severity", "Severity"),
-    ("risk_score", "Risk Score"),
-]
-
-
-def _field_lookup(fields: Dict[str, Any], *keys: str) -> str:
-    """Return the first non-empty string value for any of the given keys (case-insensitive)."""
-    if not fields:
-        return ""
-    # Direct hits first
-    for key in keys:
-        val = fields.get(key)
-        if val is not None and str(val).strip():
-            return str(val).strip()
-    # Case-insensitive fallback
-    lower_map = {str(k).lower(): v for k, v in fields.items()}
-    for key in keys:
-        val = lower_map.get(key.lower())
-        if val is not None and str(val).strip():
-            return str(val).strip()
-    return ""
-
-
-def extract_triage_key_fields(fields: Dict[str, Any], raw_fields: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-    """Build a compact ordered dict of high-value fields for triage card previews.
-
-    Pulls from canonical parsed fields first, then raw_fields as a fallback so
-    rule-specific values (SSH File Path, process, etc.) surface even when the
-    original paste used slightly different labels.
-    """
-    merged: Dict[str, Any] = {}
-    if raw_fields and isinstance(raw_fields, dict):
-        merged.update(raw_fields)
-    if fields and isinstance(fields, dict):
-        merged.update(fields)
-
-    result: Dict[str, str] = {}
-    seen_labels: set = set()
-    host_val = _field_lookup(merged, "host", "Host")
-    dest_val = _field_lookup(merged, "destination", "Destination", "dest")
-
-    for key, label in TRIAGE_KEY_FIELD_PRIORITY:
-        if label in seen_labels:
-            continue
-        value = _field_lookup(merged, key)
-        if not value:
-            continue
-        # Skip Destination when it is identical to Host (common on endpoint notables)
-        if label == "Destination" and host_val and value.lower() == host_val.lower():
-            continue
-        # Skip Username duplicate when User already present
-        if label == "User" and "User" in seen_labels:
-            continue
-        result[label] = value
-        seen_labels.add(label)
-    return result
-
-
-def build_triage_analysis_summary(
-    title: str,
-    fields: Dict[str, Any],
-    notable_time: Optional[str] = None,
-) -> str:
-    """Build a richer analysis_summary string for newly promoted triage cases."""
-    summary_parts = [title] if title else []
-    disposition = _field_lookup(fields, "disposition")
-    if disposition:
-        summary_parts.append(f"Disposition: {disposition}")
-    status = _field_lookup(fields, "status")
-    if status:
-        summary_parts.append(f"Status: {status}")
-    if notable_time:
-        summary_parts.append(f"Time: {notable_time}")
-    host = _field_lookup(fields, "host")
-    dest = _field_lookup(fields, "destination", "dest")
-    if host:
-        summary_parts.append(f"Host: {host}")
-    if dest and (not host or dest.lower() != host.lower()):
-        summary_parts.append(f"Destination: {dest}")
-    user = _field_lookup(fields, "user", "username")
-    if user:
-        summary_parts.append(f"User: {user}")
-    urgency = _field_lookup(fields, "urgency")
-    if urgency:
-        summary_parts.append(f"Urgency: {urgency}")
-    path = _field_lookup(fields, "ssh_file_path", "file_path", "file_name")
-    if path:
-        label = "SSH File Path" if fields.get("ssh_file_path") else ("File Path" if fields.get("file_path") else "File Name")
-        # Prefer explicit label when available
-        if _field_lookup(fields, "ssh_file_path"):
-            label = "SSH File Path"
-        elif _field_lookup(fields, "file_path"):
-            label = "File Path"
-        else:
-            label = "File Name"
-        summary_parts.append(f"{label}: {path}")
-    process = _field_lookup(fields, "process")
-    if process:
-        summary_parts.append(f"Process: {process}")
-    parent = _field_lookup(fields, "parent_process")
-    if parent:
-        summary_parts.append(f"Parent Process: {parent}")
-    return " | ".join(summary_parts)
-
-
 def derive_triage_verdict(disposition: str) -> str:
     normalized = (disposition or "").strip().lower()
     if "false positive" in normalized or "benign" in normalized:
@@ -2522,34 +2389,6 @@ def get_triage(
 
         results = query.order_by(TriageResult.triaged_at.desc()).limit(limit).all()
 
-        # Batch-load source pasted notables so collapsed cards can show key fields
-        # (Host, User, Path, etc.) without requiring an expand/click.
-        case_ids = [r.case_id for r in results]
-        notable_by_case: Dict[str, Dict[str, Any]] = {}
-        if case_ids:
-            try:
-                from db.models import SplunkEvent
-                pasted = db.query(SplunkEvent).filter(
-                    SplunkEvent.sourcetype == "splunk:notable:pasted"
-                ).order_by(SplunkEvent.ingested_at.desc()).all()
-                for event in pasted:
-                    try:
-                        payload = json.loads(event.raw) if event.raw else {}
-                    except Exception:
-                        continue
-                    promoted = payload.get("promoted_case_id")
-                    if promoted and promoted in case_ids and promoted not in notable_by_case:
-                        fields = payload.get("fields") or {}
-                        raw_fields = payload.get("raw_fields") or fields
-                        notable_by_case[promoted] = {
-                            "fields": fields,
-                            "raw_fields": raw_fields,
-                            "key_fields": extract_triage_key_fields(fields, raw_fields),
-                        }
-            except Exception:
-                # Non-fatal: cards still render without key_fields
-                pass
-
         return [
             {
                 "case_id": r.case_id,
@@ -2559,9 +2398,7 @@ def get_triage(
                 "confidence_score": r.confidence_score,
                 "analysis_summary": r.analysis_summary,
                 "remediation_steps": r.remediation_steps,
-                "triaged_at": r.triaged_at.isoformat() if r.triaged_at else None,
-                "from_pasted_notable": r.case_id in notable_by_case,
-                "key_fields": (notable_by_case.get(r.case_id) or {}).get("key_fields") or {},
+                "triaged_at": r.triaged_at.isoformat()
             }
             for r in results
         ]
@@ -3368,7 +3205,19 @@ def promote_notable_to_triage(event_id: int):
         resolved_rule = _resolve_correlation_rule(db, ESCorrelationRule, correlation_search)
         resolved_rule_id = resolved_rule.rule_id if resolved_rule else None
 
-        analysis_summary = build_triage_analysis_summary(title, fields, notable_time)
+        summary_parts = [title]
+        if disposition:
+            summary_parts.append(f"Disposition: {disposition}")
+        if fields.get("status"):
+            summary_parts.append(f"Status: {fields['status']}")
+        if notable_time:
+            summary_parts.append(f"Time: {notable_time}")
+        if fields.get("host"):
+            summary_parts.append(f"Host: {fields['host']}")
+        if fields.get("destination"):
+            summary_parts.append(f"Destination: {fields['destination']}")
+        if fields.get("user") or fields.get("username"):
+            summary_parts.append(f"User: {fields.get('user') or fields.get('username')}")
 
         remediation_steps = "Review the sanitized notable evidence, validate disposition, and gather any supporting host/user activity before closure."
 
@@ -3378,7 +3227,7 @@ def promote_notable_to_triage(event_id: int):
             rule_id=resolved_rule_id,
             verdict=verdict,
             confidence_score=confidence,
-            analysis_summary=analysis_summary,
+            analysis_summary=" | ".join(summary_parts),
             remediation_steps=remediation_steps,
             triaged_at=event.timestamp or datetime.datetime.utcnow(),
         )
@@ -3438,7 +3287,6 @@ def get_triage_source_notable(case_id: str):
                     "historical": payload.get("historical", False),
                     "raw_fields": raw_fields,
                     "fields": fields,
-                    "key_fields": extract_triage_key_fields(fields, raw_fields),
                     "sanitized_text": payload.get("sanitized_text", ""),
                     "history": payload.get("history"),
                     "parse_assessment": parse_assessment,

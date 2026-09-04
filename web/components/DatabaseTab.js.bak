@@ -455,10 +455,10 @@ window.DatabaseTab = {
                                 'bg-yellow-900 text-yellow-200': case_.verdict === 'suspicious',
                                 'bg-green-900 text-green-200': case_.verdict === 'benign'
                             }" class="px-3 py-1 rounded text-xs font-semibold">
-                                {{ (case_.verdict || 'undetermined').toUpperCase() }}
+                                {{ case_.verdict.toUpperCase() }}
                             </span>
                             <span
-                                v-if="case_.from_pasted_notable || (triageNotableDetails && triageNotableDetails[case_.case_id]?.data)"
+                                v-if="triageNotableDetails && triageNotableDetails[case_.case_id]?.data"
                                 class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-blue-200 border border-blue-500"
                             >
                                 From pasted notable
@@ -466,23 +466,9 @@ window.DatabaseTab = {
                         </div>
                     </div>
                     <p class="text-sm text-gray-300 mb-2">{{ case_.analysis_summary }}</p>
-                    <div
-                        v-if="case_.key_fields && Object.keys(case_.key_fields).length"
-                        class="flex flex-wrap gap-1.5 mb-2"
-                    >
-                        <span
-                            v-for="(value, label) in case_.key_fields"
-                            :key="label"
-                            class="inline-flex items-center max-w-full px-2 py-0.5 rounded bg-gray-800 border border-gray-600 text-[11px] text-gray-200"
-                            :title="label + ': ' + value"
-                        >
-                            <span class="text-gray-400 mr-1 shrink-0">{{ label }}:</span>
-                            <span class="truncate">{{ value }}</span>
-                        </span>
-                    </div>
                     <div class="text-xs text-gray-400 flex space-x-4">
-                        <span>Confidence: {{ ((case_.confidence_score || 0) * 100).toFixed(1) }}%</span>
-                        <span v-if="case_.triaged_at">Triaged: {{ new Date(case_.triaged_at).toLocaleString() }}</span>
+                        <span>Confidence: {{ (case_.confidence_score * 100).toFixed(1) }}%</span>
+                        <span>Triaged: {{ new Date(case_.triaged_at).toLocaleString() }}</span>
                     </div>
                     <div class="mt-2 flex space-x-2">
                         <button
