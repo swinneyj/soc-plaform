@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Branch,
-    [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
+    [string]$RepoRoot = $null,
     [string]$SharedDumpDir = "Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff",
     [int]$BaseApiPort = 9000,
     [int]$BaseDbPort = 9300,
@@ -24,6 +24,16 @@ function Wait-ForPostgres {
         Start-Sleep -Seconds $DelaySeconds
     }
     return $false
+}
+
+if (-not $RepoRoot) {
+    if ($PSScriptRoot) {
+        $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+    } elseif ($PSCommandPath) {
+        $RepoRoot = (Resolve-Path (Join-Path (Split-Path $PSCommandPath -Parent) "..")).Path
+    } else {
+        $RepoRoot = (Get-Location).Path
+    }
 }
 
 Set-Location $RepoRoot
