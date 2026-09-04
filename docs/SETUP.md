@@ -136,3 +136,23 @@ When a user pulls rule or supportive-query changes from Git, refresh their local
 ```powershell
 .\scripts\sync_shared_logic_to_db.ps1
 ```
+
+## Branch Preview Environments (Feature Branches)
+
+To test changes on a feature branch without touching the main/staging runtime, the repo uses branch-specific preview environments:
+
+- The Git pre-push hook at [.git/hooks/pre-push](.git/hooks/pre-push) creates a Docker Compose project named `soc-<branch>` for any branch that is not `main` or `staging`.
+- Ports for the preview are assigned dynamically based on the branch name (stable per branch):
+	- app port: 9000 + (hash(branch) % 300)
+	- PostgreSQL host port: 9300 + (hash(branch) % 300)
+	- Redis port: 9600 + (hash(branch) % 300)
+- The preview uses its own PostgreSQL volume (isolated from the main/staging volume) so test data does not contaminate the primary runtime.
+
+To keep preview DBs aligned with the current shared snapshot, the hook calls [scripts/start_branch_preview_from_shared_dump.ps1](scripts/start_branch_preview_from_shared_dump.ps1):
+
+- Stops any existing preview project for that branch (`docker compose -p soc-<branch> down --remove-orphans`).
+- Starts PostgreSQL and Redis for the branch (`docker compose -p soc-<branch> up -d postgres redis`) and waits for PostgreSQL health.
+- If `Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql` exists, it resets the `public` schema in the branch DB and restores that shared dump.
+- Starts the branch API service via Docker Compose (`docker compose -p soc-<branch> up -d --build --force-recreate api-service`).
+
+Result: each push from a feature branch both rebuilds and reseeds its sandbox from the shared handoff dump, while keeping its data isolated from the main/staging runtime.
