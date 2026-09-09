@@ -81,6 +81,36 @@
       ]
     },
     {
+      "rule_id": "linux_ssh_key_creation",
+      "supportive_queries": [
+        {
+          "title": "SSH directory file activity",
+          "description": "Confirm which .ssh files were created or modified on the affected host around the alert time (authorized_keys, id_*, known_hosts, etc.).",
+          "spl_query": "index=linux OR index=nix OR index=endpoint host=\"$host$\"\n| search (file_path=\"*.ssh*\" OR path=\"*.ssh*\" OR file_name=\"*authorized_keys*\" OR file_name=\"*id_rsa*\" OR file_name=\"*id_ed25519*\" OR file_name=\"*id_ecdsa*\" OR file_name=\"*known_hosts*\")\n| table _time host user file_path path file_name action process process_name parent_process\n| sort 0 -_time"
+        },
+        {
+          "title": "Process context for key write",
+          "description": "Identify the process and parent that wrote or touched SSH key material for the affected user (ssh-keygen, scp, ansible, cp, etc.).",
+          "spl_query": "index=linux OR index=nix sourcetype=linux:ps OR sourcetype=linux:audit OR sourcetype=linux:secure host=\"$host$\"\n| search (user=\"$user$\" OR cmdline=\"*$user$*\") (cmdline=\"*ssh-keygen*\" OR cmdline=\"*authorized_keys*\" OR cmdline=\"*id_rsa*\" OR cmdline=\"*id_ed25519*\" OR cmdline=\"*.ssh*\" OR process=\"ssh-keygen\" OR process=\"scp\" OR process=\"ssh\")\n| table _time host user process cmdline parent_process parent_cmdline\n| sort 0 -_time"
+        },
+        {
+          "title": "Prior SSH key activity history",
+          "description": "Check whether this user or host has prior .ssh key creation or modification activity (helps distinguish routine key management from new persistence).",
+          "spl_query": "index=linux OR index=nix OR index=endpoint (host=\"$host$\" OR user=\"$user$\")\n| search (file_path=\"*.ssh*\" OR path=\"*.ssh*\" OR file_name=\"*authorized_keys*\" OR file_name=\"*id_rsa*\" OR file_name=\"*id_ed25519*\")\n| stats count as events earliest(_time) as first_seen latest(_time) as last_seen values(file_name) as files values(action) as actions by host user\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -events"
+        },
+        {
+          "title": "SSH authentication around the event",
+          "description": "Review successful and failed SSH logons for the affected user/host near the key activity to assess whether access was expected.",
+          "spl_query": "index=linux OR index=nix sourcetype=linux:secure OR sourcetype=linux:audit host=\"$host$\"\n| search (user=\"$user$\" OR src_user=\"$user$\") (sshd OR Accepted OR Failed OR \"publickey\" OR \"session opened\")\n| table _time host user src_ip src action app\n| sort 0 -_time"
+        },
+        {
+          "title": "Authorized key management tooling",
+          "description": "Look for config-management or admin tooling (ansible, puppet, chef, cloud-init, useradd) that commonly creates SSH keys as part of authorized provisioning.",
+          "spl_query": "index=linux OR index=nix host=\"$host$\"\n| search (cmdline=\"*ansible*\" OR cmdline=\"*puppet*\" OR cmdline=\"*chef*\" OR cmdline=\"*cloud-init*\" OR cmdline=\"*useradd*\" OR cmdline=\"*ssh-copy-id*\" OR process=\"ansible\" OR process=\"puppet\")\n| table _time host user process cmdline parent_process\n| sort 0 -_time"
+        }
+      ]
+    },
+    {
       "rule_id": "lotl_outbound_connection",
       "supportive_queries": [
         {
