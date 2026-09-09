@@ -3181,7 +3181,11 @@ def list_recent_notables(
 
         db = SessionLocal()
 
-        # Optional delete/hide step using the same session
+        # Optional delete/hide step using the same session.
+        # To keep triage cases and "Show source notable" working even
+        # after removal from the Recent list, we never delete the
+        # underlying SplunkEvent row. Instead, we mark it hidden so it
+        # disappears from Recent but remains available as a source.
         if delete_event_id is not None:
             event = db.query(SplunkEvent).filter(
                 SplunkEvent.id == delete_event_id,
@@ -3193,11 +3197,8 @@ def list_recent_notables(
                 except Exception:
                     payload = {}
 
-                if payload.get("historical"):
-                    payload["hidden_from_recent"] = True
-                    event.raw = json.dumps(payload)
-                else:
-                    db.delete(event)
+                payload["hidden_from_recent"] = True
+                event.raw = json.dumps(payload)
                 db.commit()
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
@@ -3289,19 +3290,17 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        # For historical (closed) pasted notables, retain the underlying
-        # record in the database and simply hide it from the recent list so
-        # stats and closed-notables summaries remain accurate.
+        # Retain the underlying record in the database and simply hide it
+        # from the Recent list so stats, historical baselines, and triage
+        # source lookups remain accurate. This applies to both open and
+        # historical pasted notables.
         try:
             payload = json.loads(event.raw) if event.raw else {}
         except Exception:
             payload = {}
 
-        if payload.get("historical"):
-            payload["hidden_from_recent"] = True
-            event.raw = json.dumps(payload)
-        else:
-            db.delete(event)
+        payload["hidden_from_recent"] = True
+        event.raw = json.dumps(payload)
 
         db.commit()
 
@@ -3372,12 +3371,10 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                if payload_raw.get("historical"):
-                    payload_raw["hidden_from_recent"] = True
-                    event.raw = json.dumps(payload_raw)
-                else:
-                    db.delete(event)
-
+                # Hide from Recent list but keep the row for
+                # downstream triage/source lookups.
+                payload_raw["hidden_from_recent"] = True
+                event.raw = json.dumps(payload_raw)
                 deleted.append(eid)
 
             db.commit()
