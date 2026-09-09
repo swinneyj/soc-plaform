@@ -12,232 +12,46 @@
         .fade-enter, .fade-leave-to { opacity: 0; }
     </style>
 </head>
-<body class="bg-gray-900 text-gray-100" id="app" v-cloak>
+<body class="bg-gray-900 text-gray-100" id="app">
     <div class="min-h-screen flex flex-col">
-        <header-nav
-            :current-tab="currentTab"
-            :ollama-health="ollamaHealth"
-            :api-healthy="apiHealthy"
-            @change-tab="currentTab = $event"
-        ></header-nav>
+        <!-- Header -->
+        <header class="bg-gray-800 border-b border-gray-700 sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-blue-600 rounded flex items-center justify-center font-bold">S</div>
+                        <div>
+                            <h1 class="text-2xl font-bold">SOC Platform</h1>
+                            <p class="text-xs text-gray-400">Orchestration & Analysis with Local AI</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-sm text-gray-400">API: <span class="text-green-400 font-semibold" id="status">●</span></span>
+                        <span v-if="ollamaHealth.available" class="text-sm text-gray-400">Ollama: <span class="text-green-400 font-semibold">●</span></span>
+                        <span v-else class="text-sm text-gray-400">Ollama: <span class="text-red-400 font-semibold">●</span></span>
+                    </div>
+                </div>
+                <div class="flex space-x-4 overflow-x-auto">
+                    <button @click="currentTab = 'tools'" :class="currentTab === 'tools' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Tools</button>
+                    <button @click="currentTab = 'database'" :class="currentTab === 'database' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Database</button>
+                    <button @click="currentTab = 'analysis'" :class="currentTab === 'analysis' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">AI Analysis</button>
+                    <button @click="currentTab = 'closure'" :class="currentTab === 'closure' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Closure Notes</button>
+                    <button @click="currentTab = 'jobs'" :class="currentTab === 'jobs' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Jobs</button>
+                    <button @click="currentTab = 'reports'" :class="currentTab === 'reports' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Reports</button>
+                    <button @click="currentTab = 'code-review'" :class="currentTab === 'code-review' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Code Review</button>
+                </div>
+            </div>
+        </header>
 
+        <!-- Main Content -->
         <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
-            <!-- Tools -->
-            <tools-tab
-                v-if="currentTab === 'tools'"
-                :tools="tools"
-                :tool-search="toolSearch"
-                :selected-category="selectedCategory"
-                :tool-args="toolArgs"
-                :selected-tool-for-execution="selectedToolForExecution"
-                @update:tool-search="toolSearch = $event"
-                @update:selected-category="selectedCategory = $event"
-                @select-tool="selectToolForExecution"
-                @close-tool-modal="closeToolModal"
-                @execute-tool="executeTool"
-                @change-tab="currentTab = $event"
-            ></tools-tab>
+            <!-- Tools Tab -->
+            <div v-if="currentTab === 'tools'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Tools Catalog</h2>
+                    <p class="text-gray-400">{{ tools.length }} tools available • Filter and execute SOC tasks</p>
+                </div>
 
-            <!-- Database -->
-            <database-tab
-                v-if="currentTab === 'database'"
-                :db-stats="dbStats"
-                :notable-paste-text="notablePasteText"
-                :notable-paste-segment-estimate="notablePasteSegmentEstimate"
-                :notable-redaction-enabled="notableRedactionEnabled"
-                :notable-historical="notableHistorical"
-                :notable-paste-saving="notablePasteSaving"
-                :notable-paste-result="notablePasteResult"
-                :show-open-notables-only="showOpenNotablesOnly"
-                :filtered-recent-notables="filteredRecentNotables"
-                :historical-notables-visible="historicalNotablesVisible"
-                :historical-notables="historicalNotables"
-                :filtered-triage-data="filteredTriageData"
-                :db-search="dbSearch"
-                :db-verdict-filter="dbVerdictFilter"
-                :triage-from-pasted-only="triageFromPastedOnly"
-                :delete-analysis-with-case="deleteAnalysisWithCase"
-                :selected-notable-ids="selectedNotableIds"
-                :selected-triage-case-ids="selectedTriageCaseIds"
-                :triage-notable-details="triageNotableDetails"
-                @change-tab="currentTab = $event"
-                @update:notable-paste-text="notablePasteText = $event"
-                @update:notable-redaction-enabled="notableRedactionEnabled = $event"
-                @update:notable-historical="notableHistorical = $event"
-                @save-pasted-notable="savePastedNotable"
-                @load-historical-notables="loadHistoricalNotables"
-                @update:historical-notables-visible="historicalNotablesVisible = $event"
-                @load-recent-notables="loadRecentNotables"
-                @delete-pasted-notable="deletePastedNotable"
-                @delete-selected-pasted-notables="deleteSelectedPastedNotables"
-                @promote-notable-to-triage="promoteNotableToTriage"
-                @promote-all-open-pasted-notables="promoteAllOpenPastedNotables"
-                @update:selected-notable-ids="selectedNotableIds = $event"
-                @update:show-open-notables-only="showOpenNotablesOnly = $event"
-                @update:db-search="dbSearch = $event"
-                @update:db-verdict-filter="dbVerdictFilter = $event"
-                @update:triage-from-pasted-only="triageFromPastedOnly = $event"
-                @update:selected-triage-case-ids="selectedTriageCaseIds = $event"
-                @update:delete-analysis-with-case="deleteAnalysisWithCase = $event"
-                @load-triage-data="loadTriageData"
-                @delete-triage-case="deleteTriageCase"
-                @delete-selected-triage-cases="deleteSelectedTriageCases"
-                @load-triage-notable-details="loadTriageNotableDetails"
-                @copy-triage-notable-fields="copyTriageNotableFields"
-                @analyze-case="analyzeCase"
-            ></database-tab>
-
-            <!-- Analysis -->
-            <analysis-tab
-                v-if="currentTab === 'analysis'"
-                :ollama-health="ollamaHealth"
-                :analysis-case-search="analysisCaseSearch"
-                :analysis-case-id="analysisCaseId"
-                :analysis-cases="analysisCases"
-                :filtered-analysis-cases="filteredAnalysisCases"
-                :analysis-model="analysisModel"
-                :analysis-context="analysisContext"
-                :analysis-running="analysisRunning"
-                :analysis-result="analysisResult"
-                :analysis-source-notable="analysisSourceNotable"
-                :analysis-rule="analysisRule"
-                :show-phase1-analysis="showPhase1Analysis"
-                :phase2-model="phase2Model"
-                :phase2-result="phase2Result"
-                :investigation-state="investigationState"
-                :evidence-finding-options="evidenceFindingOptions"
-                :supportive-manual-results="supportiveManualResults"
-                :supportive-finding-types="supportiveFindingTypes"
-                :enrichment-manual-results="enrichmentManualResults"
-                :enrichment-finding-types="enrichmentFindingTypes"
-                :phase2-manual-results="phase2ManualResults"
-                :phase2-finding-types="phase2FindingTypes"
-                :phase2-edited-queries="phase2EditedQueries"
-                :render-supportive-query-fn="renderSupportiveQuery"
-                :render-phase2-query-fn="renderPhase2Query"
-                :has-unresolved-placeholders-fn="hasUnresolvedPlaceholders"
-                :get-supportive-key-fn="getSupportiveKey"
-                :get-enrichment-key-fn="getEnrichmentKey"
-                :get-phase2-key-fn="getPhase2Key"
-                :get-phase2-template-fn="getPhase2Template"
-                :format-loop-status-fn="formatLoopStatus"
-                :format-disposition-label-fn="formatDispositionLabel"
-                :format-finding-label-fn="formatFindingLabel"
-                @update:analysis-case-search="analysisCaseSearch = $event"
-                @update:analysis-case-id="analysisCaseId = $event"
-                @update:analysis-model="analysisModel = $event"
-                @update:analysis-context="analysisContext = $event"
-                @update:phase2-model="phase2Model = $event"
-                @update:show-phase1-analysis="showPhase1Analysis = $event"
-                @on-analysis-case-changed="onAnalysisCaseChanged"
-                @run-analysis="runAnalysis"
-                @run-phase2-analysis="runPhase2Analysis"
-                @cancel-analysis="cancelAnalysis"
-                @save-analysis-state="saveAnalysisState"
-                @copy-analysis-result="copyAnalysisResult"
-                @go-to-closure-from-analysis="goToClosureFromAnalysis"
-                @open-placeholder-alias-editor="openPlaceholderAliasEditor"
-                @open-supportive-editor="openSupportiveEditor"
-                @copy-supportive-spl="copySupportiveSPL"
-                @copy-enrichment-spl="copyEnrichmentSPL"
-                @copy-phase2-spl="copyPhase2SPL"
-                @promote-phase2-query="promotePhase2Query"
-                @on-phase2-template-input="onPhase2TemplateInput"
-                @update-supportive-manual="({key, value}) => supportiveManualResults = { ...supportiveManualResults, [key]: value }"
-                @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
-                @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
-                @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
-                @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
-                @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
-            ></analysis-tab>
-
-            <!-- Closure -->
-            <closure-tab
-                v-if="currentTab === 'closure'"
-                :triage-data="triageData"
-                :available-rules="availableRules"
-                :selected-rule="selectedRule"
-                :closure-form="closureForm"
-                :closure-result="closureResult"
-                :closure-generating="closureGenerating"
-                :closure-suggested-rule-name="closureSuggestedRuleName"
-                :closure-suggested-disposition="closureSuggestedDisposition"
-                @update:closure-form="closureForm = $event"
-                @select-case="onCaseSelected"
-                @select-rule="onRuleSelected"
-                @generate-closure-note="generateClosureNote"
-                @copy-closure-note="copyToClipboard"
-                @download-closure-note="downloadClosureNote"
-            ></closure-tab>
-
-            <!-- Jobs -->
-            <jobs-tab
-                v-if="currentTab === 'jobs'"
-                :jobs="jobs"
-            ></jobs-tab>
-
-            <!-- Reports -->
-            <reports-tab
-                v-if="currentTab === 'reports'"
-                :reports="reports"
-            ></reports-tab>
-
-            <!-- Code Review -->
-            <code-review-tab
-                v-if="currentTab === 'code-review'"
-                :code-review-form="codeReviewForm"
-                :code-review-models="codeReviewModels"
-                :code-review-running="codeReviewRunning"
-                :code-review-result="codeReviewResult"
-                :code-reviews-list="codeReviewsList"
-                :code-review-drag-active="codeReviewDragActive"
-                :code-review-sections="codeReviewSections"
-                :code-review-sections-busy="codeReviewSectionsBusy"
-                :code-review-sections-filter="codeReviewSectionsFilter"
-                :code-review-sections-code-only="codeReviewSectionsCodeOnly"
-                :code-review-sections-features-only="codeReviewSectionsFeaturesOnly"
-                :code-review-sections-min-lines="codeReviewSectionsMinLines"
-                :code-review-sections-use-local="codeReviewSectionsUseLocal"
-                :code-review-sections-show-advanced="codeReviewSectionsShowAdvanced"
-                :code-review-search-term="codeReviewSearchTerm"
-                :code-review-find-term="codeReviewFindTerm"
-                :code-review-find-case-sensitive="codeReviewFindCaseSensitive"
-                :code-review-find-matches="codeReviewFindMatches"
-                :code-review-find-index="codeReviewFindIndex"
-                :filtered-code-review-sections="filteredCodeReviewSections"
-                :grouped-code-review-sections="groupedCodeReviewSections"
-                :ollama-health="ollamaHealth"
-                @update:code-review-form="codeReviewForm = $event"
-                @update:code-review-search-term="codeReviewSearchTerm = $event"
-                @update:code-review-sections-filter="codeReviewSectionsFilter = $event"
-                @update:code-review-sections-code-only="codeReviewSectionsCodeOnly = $event"
-                @update:code-review-sections-features-only="codeReviewSectionsFeaturesOnly = $event"
-                @update:code-review-sections-min-lines="codeReviewSectionsMinLines = $event"
-                @update:code-review-sections-use-local="codeReviewSectionsUseLocal = $event"
-                @update:code-review-sections-show-advanced="codeReviewSectionsShowAdvanced = $event"
-                @update:code-review-find-term="codeReviewFindTerm = $event"
-                @update:code-review-find-case-sensitive="codeReviewFindCaseSensitive = $event"
-                @submit-code-review="submitCodeReview"
-                @detect-code-review-sections="detectCodeReviewSections"
-                @focus-code-review-on-section="focusCodeReviewOnSection"
-                @focus-code-review-section="focusCodeReviewSection"
-                @handle-file-upload="handleFileUpload"
-                @handle-folder-upload="handleFolderUpload"
-                @on-code-review-drag-over="onCodeReviewDragOver"
-                @on-code-review-drag-leave="onCodeReviewDragLeave"
-                @on-code-review-drop="onCodeReviewDrop"
-                @run-code-review-find="runCodeReviewFind"
-                @clear-code-review-find="clearCodeReviewFind"
-                @code-review-find-next="codeReviewFindNext"
-                @code-review-find-prev="codeReviewFindPrev"
-                @copy-code-review-to-clipboard="copyCodeReviewToClipboard"
-                @load-full-code-review="loadFullCodeReview"
-                @on-code-review-find-keydown="onCodeReviewFindKeydown"
-                @on-code-review-textarea-keydown="onCodeReviewTextareaKeydown"
-            ></code-review-tab>
-        </main>
-
-<<<<<<< HEAD
                 <div class="bg-blue-950 border border-blue-800 rounded-lg p-4 flex items-start justify-between gap-4">
                     <div>
                         <h3 class="text-sm font-semibold text-blue-300">Looking for host owners or contact details?</h3>
@@ -902,7 +716,7 @@
                                         ></textarea>
                                     </div>
                                     <div>
-                                        <label class="text-[11px] text-gray-400">Evidence status</label>
+                                        <label class="text-[11px] text-gray-400">Finding</label>
                                         <select
                                             v-model="enrichmentFindingTypes[getEnrichmentKey(q)]"
                                             class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -957,7 +771,7 @@
                                     ></textarea>
                                 </div>
                                 <div class="mt-1">
-                                    <label class="text-[11px] text-gray-400">Evidence status</label>
+                                    <label class="text-[11px] text-gray-400">Finding</label>
                                     <select
                                         v-model="supportiveFindingTypes[getSupportiveKey(q)]"
                                         class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -979,7 +793,7 @@
                         @click="runAnalysis"
                         :disabled="analysisRunning"
                         class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
-                        {{ analysisRunning ? (analysisProgressText + ' (' + analysisProgressElapsedSeconds + 's)') : 'Run Analysis' }}
+                        {{ analysisRunning ? 'Running Analysis...' : 'Run Analysis' }}
                     </button>
 
                     <div class="mt-2 flex items-center justify-end gap-2">
@@ -1029,38 +843,8 @@
                             <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
                             saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
                         </p>
-                        <div v-if="analysisResult.timing || analysisResult.ui_timing" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
-                            <p class="text-sm font-semibold text-slate-200">Run Timing</p>
-                            <div class="flex flex-wrap gap-2 text-[11px] text-gray-200">
-                                <span v-if="analysisResult.ui_timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">UI total: {{ formatTimingSeconds(analysisResult.ui_timing.total_seconds) }}</span>
-                                <span v-if="analysisResult.timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">API total: {{ formatTimingSeconds(analysisResult.timing.total_seconds) }}</span>
-                                <span v-if="analysisResult.timing && analysisResult.timing.prompt_chars" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Prompt chars: {{ analysisResult.timing.prompt_chars }}</span>
-                                <span v-if="analysisResult.timing && analysisResult.timing.eval_count" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Generated tokens: {{ analysisResult.timing.eval_count }}</span>
-                            </div>
-                            <div v-if="analysisResult.timing && analysisResult.timing.stage_seconds" class="flex flex-wrap gap-2 text-[11px] text-blue-100">
-                                <span v-for="metric in getTimingStageEntries(analysisResult)" :key="'phase1-timing-' + metric.key" class="bg-blue-950 border border-blue-800 px-2 py-1 rounded">{{ metric.label }}: {{ formatTimingSeconds(metric.seconds) }}</span>
-                            </div>
-                        </div>
                         <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                             <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
-                        </div>
-                        <div v-if="analysisResult.decision_gate" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
-                            <div class="flex items-center justify-between gap-3">
-                                <p class="text-sm font-semibold text-slate-200">Decision Gate</p>
-                                <span class="px-2 py-1 rounded text-[11px] font-semibold"
-                                    :class="analysisResult.decision_gate.enough_to_decide ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-amber-900 text-amber-200 border border-amber-700'">
-                                    {{ analysisResult.decision_gate.enough_to_decide ? 'Enough to decide' : 'Still missing information' }}
-                                </span>
-                            </div>
-                            <p class="text-xs text-gray-300"><span class="font-semibold">Current disposition:</span> {{ analysisResult.decision_gate.current_disposition || 'Undetermined' }}</p>
-                            <p class="text-xs text-gray-300" v-if="analysisResult.decision_gate.confidence_summary"><span class="font-semibold">Why:</span> {{ analysisResult.decision_gate.confidence_summary }}</p>
-                            <div v-if="analysisResult.decision_gate.still_missing && analysisResult.decision_gate.still_missing.length">
-                                <p class="text-[11px] font-semibold text-gray-300 mb-1">Still missing</p>
-                                <div class="flex flex-wrap gap-2">
-                                    <span v-for="item in analysisResult.decision_gate.still_missing" :key="'phase1-missing-' + item" class="bg-gray-800 border border-gray-600 text-gray-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                                </div>
-                            </div>
-                            <p class="text-xs text-blue-200" v-if="analysisResult.decision_gate.next_best_action"><span class="font-semibold">Next best action:</span> {{ analysisResult.decision_gate.next_best_action }}</p>
                         </div>
                     </div>
                     <div v-else class="text-xs text-gray-400 mb-2 flex items-center justify-between">
@@ -1120,7 +904,7 @@
                     </div>
 
                     <div
-                        v-for="q in getActivePhase2Queries()"
+                        v-for="q in analysisResult.phase2_queries"
                         :key="getPhase2Key(q)"
                         class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2 mb-2"
                     >
@@ -1175,7 +959,7 @@
                             ></textarea>
                         </div>
                         <div class="mt-1">
-                            <label class="text-[11px] text-gray-400">Evidence status</label>
+                            <label class="text-[11px] text-gray-400">Finding</label>
                             <select
                                 v-model="phase2FindingTypes[getPhase2Key(q)]"
                                 class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
@@ -1183,25 +967,16 @@
                                 <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
                             </select>
                         </div>
-                    </div>                    <div class="mt-2 flex items-center gap-2">
-                        <button
-                            type="button"
-                            class="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white disabled:bg-gray-700 disabled:text-gray-400"
-                            :disabled="analysisRunning"
-                            @click="runPhase2Analysis"
-                        >
-                            Save evidence and re-analyze
-                        </button>
-
-                        <button
-                            v-if="analysisRunning"
-                            type="button"
-                            class="px-3 py-2 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold text-white"
-                            @click="cancelAnalysis"
-                        >
-                            Cancel re-analysis
-                        </button>
                     </div>
+
+                    <button
+                        type="button"
+                        class="mt-2 px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white"
+                        :disabled="analysisRunning"
+                        @click="runPhase2Analysis"
+                    >
+                        {{ analysisRunning ? 'Saving Evidence and Re-analyzing...' : 'Save evidence and re-analyze' }}
+                    </button>
                 </div>
 
                 <div v-if="phase2Result" class="bg-gray-800 border border-purple-700 rounded-lg p-6 mt-6">
@@ -1215,38 +990,8 @@
                         <span class="font-semibold">{{ phase2Result.supportive_results_count || 0 }}</span>
                         supportive query result{{ (phase2Result.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
                     </p>
-                    <div v-if="phase2Result.timing || phase2Result.ui_timing" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
-                        <p class="text-sm font-semibold text-slate-200">Run Timing</p>
-                        <div class="flex flex-wrap gap-2 text-[11px] text-gray-200">
-                            <span v-if="phase2Result.ui_timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">UI total: {{ formatTimingSeconds(phase2Result.ui_timing.total_seconds) }}</span>
-                            <span v-if="phase2Result.timing" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">API total: {{ formatTimingSeconds(phase2Result.timing.total_seconds) }}</span>
-                            <span v-if="phase2Result.timing && phase2Result.timing.prompt_chars" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Prompt chars: {{ phase2Result.timing.prompt_chars }}</span>
-                            <span v-if="phase2Result.timing && phase2Result.timing.eval_count" class="bg-gray-800 border border-gray-600 px-2 py-1 rounded">Generated tokens: {{ phase2Result.timing.eval_count }}</span>
-                        </div>
-                        <div v-if="phase2Result.timing && phase2Result.timing.stage_seconds" class="flex flex-wrap gap-2 text-[11px] text-purple-100">
-                            <span v-for="metric in getTimingStageEntries(phase2Result)" :key="'phase2-timing-' + metric.key" class="bg-purple-950 border border-purple-800 px-2 py-1 rounded">{{ metric.label }}: {{ formatTimingSeconds(metric.seconds) }}</span>
-                        </div>
-                    </div>
                     <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
                         <p class="text-gray-300 whitespace-pre-wrap">{{ phase2Result.analysis }}</p>
-                    </div>
-                    <div v-if="phase2Result.decision_gate" class="bg-slate-900 border border-slate-700 rounded p-4 mb-4 space-y-2">
-                        <div class="flex items-center justify-between gap-3">
-                            <p class="text-sm font-semibold text-slate-200">Decision Gate</p>
-                            <span class="px-2 py-1 rounded text-[11px] font-semibold"
-                                :class="phase2Result.decision_gate.enough_to_decide ? 'bg-green-900 text-green-200 border border-green-700' : 'bg-amber-900 text-amber-200 border border-amber-700'">
-                                {{ phase2Result.decision_gate.enough_to_decide ? 'Enough to decide' : 'Still missing information' }}
-                            </span>
-                        </div>
-                        <p class="text-xs text-gray-300"><span class="font-semibold">Current disposition:</span> {{ phase2Result.decision_gate.current_disposition || 'Undetermined' }}</p>
-                        <p class="text-xs text-gray-300" v-if="phase2Result.decision_gate.confidence_summary"><span class="font-semibold">Why:</span> {{ phase2Result.decision_gate.confidence_summary }}</p>
-                        <div v-if="phase2Result.decision_gate.still_missing && phase2Result.decision_gate.still_missing.length">
-                            <p class="text-[11px] font-semibold text-gray-300 mb-1">Still missing</p>
-                            <div class="flex flex-wrap gap-2">
-                                <span v-for="item in phase2Result.decision_gate.still_missing" :key="'phase2-missing-' + item" class="bg-gray-800 border border-gray-600 text-gray-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                            </div>
-                        </div>
-                        <p class="text-xs text-blue-200" v-if="phase2Result.decision_gate.next_best_action"><span class="font-semibold">Next best action:</span> {{ phase2Result.decision_gate.next_best_action }}</p>
                     </div>
                     <div class="text-xs text-gray-400 space-y-1">
                         <p>Model: {{ phase2Result.model }}</p>
@@ -1908,8 +1653,6 @@
         </div>
 
         <!-- Footer -->
-=======
->>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
         <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
             <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
                 <p>SOC Platform v1.1.0 • Local AI • <a href="/docs" class="text-blue-400 hover:text-blue-300">API Docs</a></p>
@@ -1917,10 +1660,10 @@
         </footer>
     </div>
 
-    <!-- Vue -->
     <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script>
+        const { createApp } = Vue;
 
-<<<<<<< HEAD
         createApp({
             data() {
                 return {
@@ -1940,7 +1683,6 @@
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
-                    triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
                     triageNotableDetails: {},
                     selectedTriageCaseIds: [],
@@ -1958,17 +1700,13 @@
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
-                    evidenceFindingOptions: ['supports', 'refutes', 'neutral', 'no_results', 'error'],
+                    evidenceFindingOptions: ['supports', 'refutes', 'neutral'],
                     analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
                     analysisContext: '',
                     analysisRunning: false,
-                    analysisProgressText: '',
-                    analysisProgressElapsedSeconds: 0,
-                    analysisProgressTimer: null,
                     analysisRequestId: 0,
-                    analysisAbortController: null,
                     analysisResult: null,
                     showPhase1Analysis: true,
                     phase2Model: '',
@@ -2940,46 +2678,6 @@
                     this.currentTab = 'analysis';
                     this.onAnalysisCaseChanged();
                 },
-                startAnalysisProgress(stageText) {
-                    if (this.analysisProgressTimer) {
-                        clearInterval(this.analysisProgressTimer);
-                    }
-
-                    this.analysisProgressText = stageText || 'Preparing analysis';
-                    this.analysisProgressElapsedSeconds = 0;
-
-                    this.analysisProgressTimer = setInterval(() => {
-                        this.analysisProgressElapsedSeconds += 1;
-                    }, 1000);
-                },
-                setAnalysisProgress(stageText) {
-                    this.analysisProgressText = stageText || this.analysisProgressText;
-                },
-                stopAnalysisProgress() {
-                    if (this.analysisProgressTimer) {
-                        clearInterval(this.analysisProgressTimer);
-                        this.analysisProgressTimer = null;
-                    }
-                },
-                async withAnalysisStageTimeout(stageText, action, timeoutMs) {
-                    this.setAnalysisProgress(stageText);
-
-                    let timeoutHandle = null;
-                    try {
-                        return await Promise.race([
-                            Promise.resolve().then(action),
-                            new Promise((_, reject) => {
-                                timeoutHandle = setTimeout(() => {
-                                    reject(new Error(stageText + ' exceeded its ' + Math.round(timeoutMs / 1000) + '-second limit.'));
-                                }, timeoutMs);
-                            }),
-                        ]);
-                    } finally {
-                        if (timeoutHandle) {
-                            clearTimeout(timeoutHandle);
-                        }
-                    }
-                },
                 async runAnalysis() {
                     if (!this.analysisCaseId || !this.analysisModel) {
                         alert('Please select a case ID and model');
@@ -2987,102 +2685,45 @@
                     }
 
                     const requestId = ++this.analysisRequestId;
-
-                    if (this.analysisAbortController) {
-                        this.analysisAbortController.abort();
-                    }
-
-                    const controller = new AbortController();
-                    this.analysisAbortController = controller;
-                    this.startAnalysisProgress('Preparing case');
-
-                    const uiStartedAt = (window.performance && typeof window.performance.now === 'function')
-                        ? window.performance.now()
-                        : Date.now();
-
                     this.analysisRunning = true;
-
                     try {
-                        await this.withAnalysisStageTimeout(
-                            'Saving supportive evidence',
-                            () => this.saveSupportiveEvidence({ silent: true }),
-                            15000
-                        );
+                        await this.saveSupportiveEvidence({ silent: true });
+                        await this.saveEnrichmentEvidence({ silent: true });
 
-                        await this.withAnalysisStageTimeout(
-                            'Saving generic enrichment evidence',
-                            () => this.saveEnrichmentEvidence({ silent: true }),
-                            15000
-                        );
+                        let combinedContext = this.analysisContext || '';
+                        const priorAnalysisText = (
+                            (this.phase2Result && this.phase2Result.analysis) ||
+                            (this.analysisResult && this.analysisResult.analysis) ||
+                            ''
+                        ).toString().trim();
 
-                        const combinedContext = this.analysisContext || '';
-
-                        const res = await this.withAnalysisStageTimeout(
-                            'Running local model',
-                            () => axios.post(this.apiUrl + '/db/analyze', {
-                                case_id: this.analysisCaseId,
-                                model: this.analysisModel,
-                                context: combinedContext,
-                                prior_analysis: '',
-                                analysis_stage: 'initial'
-                            }, {
-                                timeout: 45000,
-                                signal: controller.signal
-                            }),
-                            45000
-                        );
-
-                        this.setAnalysisProgress('Validating returned analysis');
-
+                        const res = await axios.post(this.apiUrl + '/db/analyze', {
+                            case_id: this.analysisCaseId,
+                            model: this.analysisModel,
+                            context: combinedContext,
+                            prior_analysis: priorAnalysisText,
+                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                        });
+                        // Ignore stale responses if a newer analysis has been started or cancelled.
                         if (requestId === this.analysisRequestId) {
                             const newResult = res.data;
-                            const uiFinishedAt = (window.performance && typeof window.performance.now === 'function')
-                                ? window.performance.now()
-                                : Date.now();
-
-                            newResult.ui_timing = {
-                                total_seconds: Number((((uiFinishedAt - uiStartedAt) || 0) / 1000).toFixed(3)),
-                            };
-
-                            const existingPhase2Queries = this.getActivePhase2Queries();
+                            // If the new response lacks phase2_queries but we previously had
+                            // them, preserve the existing list so phase 2 cards do not vanish.
                             if (
                                 (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
-                                existingPhase2Queries.length
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
                             ) {
-                                newResult.phase2_queries = existingPhase2Queries;
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
-
                             this.analysisResult = newResult;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
-                            const wasCancelled =
-                                controller.signal.aborted ||
-                                err?.code === 'ERR_CANCELED';
-
-                            if (!wasCancelled) {
-                                const detail =
-                                    err?.response?.data?.detail ||
-                                    err?.message ||
-                                    'Unknown browser request error';
-
-                                alert(
-                                    'Analysis stopped during "' +
-                                    this.analysisProgressText +
-                                    '" after ' +
-                                    this.analysisProgressElapsedSeconds +
-                                    ' seconds: ' +
-                                    detail
-                                );
-                            }
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
                         }
                     } finally {
-                        if (this.analysisAbortController === controller) {
-                            this.analysisAbortController = null;
-                        }
-
-                        this.stopAnalysisProgress();
-
                         if (requestId === this.analysisRequestId) {
                             this.analysisRunning = false;
                         }
@@ -3094,15 +2735,6 @@
                         return 'phase2:title:unknown';
                     }
                     return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
-                },
-                getActivePhase2Queries() {
-                    if (this.phase2Result && this.phase2Result.phase2_queries && this.phase2Result.phase2_queries.length) {
-                        return this.phase2Result.phase2_queries;
-                    }
-                    if (this.analysisResult && this.analysisResult.phase2_queries && this.analysisResult.phase2_queries.length) {
-                        return this.analysisResult.phase2_queries;
-                    }
-                    return [];
                 },
                 getPhase2KeyFromTitle(title) {
                     const normalized = (title || '').toString().toLowerCase().trim();
@@ -3166,24 +2798,11 @@
                     }
 
                     const requestId = ++this.analysisRequestId;
-
-                    if (this.analysisAbortController) {
-                        this.analysisAbortController.abort();
-                    }
-
-                    const controller = new AbortController();
-                    this.analysisAbortController = controller;
-
-                    const uiStartedAt = (window.performance && typeof window.performance.now === 'function')
-                        ? window.performance.now()
-                        : Date.now();
-
                     this.analysisRunning = true;
-
                     try {
                         await this.savePhase2Evidence({ silent: true });
 
-                        const combinedContext = this.analysisContext || '';
+                        let combinedContext = this.analysisContext || '';
                         const priorAnalysisText = (
                             (this.phase2Result && this.phase2Result.analysis) ||
                             (this.analysisResult && this.analysisResult.analysis) ||
@@ -3196,50 +2815,24 @@
                             context: combinedContext,
                             prior_analysis: priorAnalysisText,
                             analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
-                        }, {
-                            timeout: 45000,
-                            signal: controller.signal
                         });
-
                         if (requestId === this.analysisRequestId) {
                             const newResult = res.data;
-                            const uiFinishedAt = (window.performance && typeof window.performance.now === 'function')
-                                ? window.performance.now()
-                                : Date.now();
-
-                            newResult.ui_timing = {
-                                total_seconds: Number((((uiFinishedAt - uiStartedAt) || 0) / 1000).toFixed(3)),
-                            };
-
-                            const existingPhase2Queries = this.getActivePhase2Queries();
                             if (
                                 (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
-                                existingPhase2Queries.length
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
                             ) {
-                                newResult.phase2_queries = existingPhase2Queries;
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
                             }
-
                             this.phase2Result = newResult;
                         }
                     } catch (err) {
                         if (requestId === this.analysisRequestId) {
-                            const wasCancelled =
-                                controller.signal.aborted ||
-                                err?.code === 'ERR_CANCELED';
-
-                            if (!wasCancelled) {
-                                alert('Phase 2 analysis failed: ' + (
-                                    err?.response?.data?.detail ||
-                                    err?.message ||
-                                    'Unknown request error'
-                                ));
-                            }
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
                         }
                     } finally {
-                        if (this.analysisAbortController === controller) {
-                            this.analysisAbortController = null;
-                        }
-
                         if (requestId === this.analysisRequestId) {
                             this.analysisRunning = false;
                         }
@@ -3250,15 +2843,13 @@
                         return;
                     }
 
-                    const phase2Queries = this.getActivePhase2Queries();
+                    const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
                     const entries = [];
                     for (const q of phase2Queries) {
                         const key = this.getPhase2Key(q);
                         const resultText = (this.phase2ManualResults[key] || '').trim();
                         const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
-                        // A query definition alone is not investigation evidence.
-                        // Save only cards with an analyst-pasted result or summary.
-                        if (!resultText) {
+                        if (!resultText && !queryText) {
                             continue;
                         }
 
@@ -3267,7 +2858,6 @@
                             query_text: queryText,
                             result_text: resultText,
                             analyst_summary: '',
-                            evidence_status: this.phase2FindingTypes[key] || 'neutral',
                             finding_type: this.phase2FindingTypes[key] || 'neutral',
                         });
                     }
@@ -3296,7 +2886,7 @@
                             const key = this.getPhase2KeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.phase2FindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
+                            this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
                             if (raw.query_text) {
                                 this.phase2EditedQueries[key] = raw.query_text.toString();
                             }
@@ -3324,7 +2914,6 @@
                             query_text: this.renderSupportiveQuery(q),
                             result_text: resultText,
                             analyst_summary: '',
-                            evidence_status: this.supportiveFindingTypes[key] || 'neutral',
                             finding_type: this.supportiveFindingTypes[key] || 'neutral',
                         });
                     }
@@ -3357,7 +2946,6 @@
                             query_text: (q && q.spl ? q.spl : '').toString().trim(),
                             result_text: resultText,
                             analyst_summary: '',
-                            evidence_status: this.enrichmentFindingTypes[key] || 'neutral',
                             finding_type: this.enrichmentFindingTypes[key] || 'neutral',
                         });
                     }
@@ -3386,7 +2974,7 @@
                             const key = this.getSupportiveKeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.supportiveFindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
+                            this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
                         }
                         this.supportiveManualResults = saved;
                     } catch (err) {
@@ -3407,7 +2995,7 @@
                             const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
                             const raw = item.raw_result || {};
                             saved[key] = (raw.result_text || '').toString();
-                            this.enrichmentFindingTypes[key] = (raw.evidence_status || raw.finding_type || 'neutral').toString();
+                            this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
                         }
                         this.enrichmentManualResults = saved;
                     } catch (err) {
@@ -3432,30 +3020,6 @@
                             console.error('Failed to copy analysis:', err);
                             alert('Failed to copy analysis to clipboard');
                         });
-                },
-                formatTimingSeconds(value) {
-                    const numeric = Number(value);
-                    if (!Number.isFinite(numeric)) {
-                        return 'n/a';
-                    }
-                    return (numeric < 10 ? numeric.toFixed(2) : numeric.toFixed(1)) + 's';
-                },
-                getTimingStageEntries(result) {
-                    const stageSeconds = (result && result.timing && result.timing.stage_seconds) || {};
-                    const labels = {
-                        load_case_context_seconds: 'Load context',
-                        prompt_assembly_seconds: 'Build prompt',
-                        primary_inference_seconds: 'Primary inference',
-                        fallback_inference_seconds: 'Fallback inference',
-                        response_postprocess_seconds: 'Post-process',
-                    };
-                    return Object.entries(stageSeconds)
-                        .filter(([, seconds]) => Number.isFinite(Number(seconds)) && Number(seconds) > 0)
-                        .map(([key, seconds]) => ({
-                            key,
-                            label: labels[key] || key,
-                            seconds: Number(seconds),
-                        }));
                 },
                 saveAnalysisState() {
                     if (!this.analysisCaseId) {
@@ -3540,12 +3104,7 @@
                     }
                 },
                 cancelAnalysis() {
-                    if (this.analysisAbortController) {
-                        this.analysisAbortController.abort();
-                        this.analysisAbortController = null;
-                    }
-
-                    this.stopAnalysisProgress();
+                    // Invalidate any in-flight analysis responses and clear the running flag.
                     this.analysisRequestId += 1;
                     this.analysisRunning = false;
                 },
@@ -3665,10 +3224,7 @@
                         return text;
                     }
 
-                    const fields = {
-                        ...(this.analysisSourceNotable.raw_fields || {}),
-                        ...(this.analysisSourceNotable.fields || {}),
-                    };
+                    const fields = this.analysisSourceNotable.raw_fields || this.analysisSourceNotable.fields || {};
 
                     // Dynamic alias map loaded from backend (placeholder_aliases table + JSON seed).
                     // Falls back to built-in defaults if not yet loaded.
@@ -4200,34 +3756,10 @@
             }
         }).mount('#app');
     </script>
-=======
-    <!-- utils (pure helpers) -->
-    <script src="utils/keys.js"></script>
-    <script src="utils/queryRender.js"></script>
-    <script src="utils/selection.js"></script>
-    <script src="utils/pocSummary.js"></script>
-    <script src="utils/codeSections.js"></script>
-
-    <!-- modules (API + domain) -->
-    <script src="modules/api.js"></script>
-    <script src="modules/database.js"></script>
-    <script src="modules/analysis.js"></script>
-    <script src="modules/codeReview.js"></script>
-    <script src="modules/tools.js"></script>
-    <script src="modules/closure.js"></script>
-
-    <!-- components (UI) -->
-    <script src="components/HeaderNav.js"></script>
-    <script src="components/ToolsTab.js"></script>
-    <script src="components/DatabaseTab.js"></script>
-    <script src="components/AnalysisTab.js"></script>
-    <script src="components/ClosureTab.js"></script>
-    <script src="components/JobsTab.js"></script>
-    <script src="components/ReportsTab.js"></script>
-    <script src="components/CodeReviewTab.js"></script>
-
-    <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js"></script>
->>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 </body>
 </html>
+
+
+
+
+

@@ -12,23 +12,6 @@ $HiddenBranchPatterns = @(
 	# 'agent-lewis/tester-*'
 )
 
-$MenuHeaderColor = 'Cyan'
-$MenuSubheaderColor = 'DarkCyan'
-$MenuTextColor = 'Gray'
-$MenuMutedColor = 'DarkGray'
-
-function Initialize-MenuTheme {
-	try {
-		if ($host.UI.RawUI) {
-			$host.UI.RawUI.BackgroundColor = 'Black'
-			$host.UI.RawUI.ForegroundColor = $MenuTextColor
-			Clear-Host
-		}
-	} catch {
-		# Some hosts do not allow RawUI palette changes; explicit Write-Host colors still apply.
-	}
-}
-
 function Invoke-GitCommand {
 	param(
 		[Parameter(Mandatory = $true)][string[]]$Args
@@ -77,14 +60,81 @@ function Get-ModeLabel {
 	)
 
 	if ($BranchName -eq 'main') {
-		return 'MAIN / START ONLY'
+		return 'START MODE'
 	}
 
 	if ($BranchName -eq $DemoBranch) {
-		return 'STAGING / COMBINE ONLY'
+		return 'DEMO COMBINE MODE'
 	}
 
-	return 'WORK BRANCH / OK TO CODE'
+	return 'CODING MODE'
+}
+
+function Get-BranchRoleLabel {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'MAIN BASELINE'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'STAGING / DEMO BRANCH'
+	}
+
+	return 'FEATURE / WORK BRANCH'
+}
+
+function Get-BranchPurpose {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'Stable baseline only. Do not do normal coding here.'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'Combine work here and prep the meeting demo.'
+	}
+
+	return 'Normal coding branch. Make changes here, then save/share them.'
+}
+
+function Get-BranchAccentColor {
+	param(
+		[Parameter(Mandatory = $true)][string]$BranchName
+	)
+
+	if ($BranchName -eq 'main') {
+		return 'Red'
+	}
+
+	if ($BranchName -eq $DemoBranch) {
+		return 'Cyan'
+	}
+
+	return 'Green'
+}
+
+function Show-FlowGraphic {
+	$currentBranch = Get-CurrentBranch
+	$roleLabel = Get-BranchRoleLabel -BranchName $currentBranch
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
+
+	Write-Host 'Flow:' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [MAIN] ' -ForegroundColor Red -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [WORK] ' -ForegroundColor Green -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [STAGING] ' -ForegroundColor Cyan -NoNewline
+	Write-Host '->' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' [MAIN]' -ForegroundColor Red
+
+	Write-Host 'Now :' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" [{0}] " -f $currentBranch.ToUpper()) -ForegroundColor $roleColor -NoNewline
+	Write-Host (" {0}" -f $roleLabel) -ForegroundColor DarkGray
 }
 
 function Get-WorkGuidance {
@@ -203,6 +253,36 @@ function Get-MergedLocalWorkBranches {
 	)
 }
 
+function Get-RemoteCleanupCandidates {
+	$currentBranch = Get-CurrentBranch
+	$mergedLocalWorkBranches = @(Get-MergedLocalWorkBranches)
+	$remoteWorkBranches = @(Get-RemoteWorkBranches)
+
+	$options = @()
+	foreach ($branch in $remoteWorkBranches) {
+		if ($branch -eq $currentBranch) {
+			continue
+		}
+
+		if ((Test-LocalBranchExists -BranchName $branch) -and ($mergedLocalWorkBranches -notcontains $branch)) {
+			continue
+		}
+
+		$description = if (Test-LocalBranchExists -BranchName $branch) {
+			'merged locally too'
+		} else {
+			'remote only'
+		}
+
+		$options += [pscustomobject]@{
+			Name = $branch
+			Description = $description
+		}
+	}
+
+	return @($options | Sort-Object Name)
+}
+
 function Get-RecommendedWorkBranch {
 	$currentBranch = Get-CurrentBranch
 	$localWorkBranches = @(Get-LocalWorkBranches)
@@ -238,20 +318,20 @@ function Select-BranchFromList {
 		[string]$CancelLabel = 'Cancel'
 	)
 
-	Write-Host "`n--- $Title ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- $Title ---" -ForegroundColor Cyan
 
 	if ($Options.Count -eq 0) {
-		Write-Host 'No branch options are available.' -ForegroundColor $MenuMutedColor
+		Write-Host 'No branch options are available.' -ForegroundColor DarkGray
 		return $null
 	}
 
 	for ($index = 0; $index -lt $Options.Count; $index++) {
 		$option = $Options[$index]
 		$details = if ([string]::IsNullOrWhiteSpace($option.Description)) { '' } else { " ($($option.Description))" }
-		Write-Host (("{0}. {1}{2}" -f ($index + 1), $option.Name, $details)) -ForegroundColor $MenuTextColor
+		Write-Host (("{0}. {1}{2}" -f ($index + 1), $option.Name, $details)) -ForegroundColor White
 	}
 
-	Write-Host (("{0}. {1}" -f ($Options.Count + 1), $CancelLabel)) -ForegroundColor $MenuTextColor
+	Write-Host (("{0}. {1}" -f ($Options.Count + 1), $CancelLabel)) -ForegroundColor DarkGray
 
 	$selection = Read-Host (("Select an option (1-{0})" -f ($Options.Count + 1)))
 	[int]$selectedNumber = 0
@@ -321,6 +401,116 @@ function Test-WorkingTreeDirty {
 	return (@(git status --porcelain).Count -gt 0)
 }
 
+function Get-UnmergedFiles {
+	return @(
+		@(git diff --name-only --diff-filter=U) |
+		Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+	)
+}
+
+function Test-HasUnmergedFiles {
+	return (@(Get-UnmergedFiles).Count -gt 0)
+}
+
+function Test-MergeInProgress {
+	$mergeHeadPath = (git rev-parse --git-path MERGE_HEAD 2>$null).Trim()
+	if ([string]::IsNullOrWhiteSpace($mergeHeadPath)) {
+		return $false
+	}
+
+	return (Test-Path $mergeHeadPath)
+}
+
+function Invoke-AbortCurrentMerge {
+	if (-not (Test-MergeInProgress)) {
+		Write-Warning 'No merge is currently in progress, so there is nothing to abort.'
+		Wait-ForUser
+		return
+	}
+
+	$confirmAbort = Read-Host 'Abort the current merge now and return this branch to its pre-merge state? (y/N)'
+	if ($confirmAbort -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Merge abort cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	Invoke-GitCommand -Args @('merge', '--abort') | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host "`n[+] Merge aborted successfully." -ForegroundColor Green
+	} else {
+		Write-Warning 'Could not abort the current merge. Review the git output above.'
+	}
+
+	Wait-ForUser
+}
+
+function Show-ConflictHelper {
+	$currentBranch = Get-CurrentBranch
+	$unmergedFiles = @(Get-UnmergedFiles)
+	$mergeInProgress = Test-MergeInProgress
+
+	Write-Host "`n--- CONFLICT HELPER ---" -ForegroundColor Red
+	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor White
+	Write-Host (("Merge in progress: {0}" -f ($(if ($mergeInProgress) { 'YES' } else { 'NO' })))) -ForegroundColor White
+	Write-Host ''
+	Write-Host 'Conflicted files:' -ForegroundColor Yellow
+	if ($unmergedFiles.Count -eq 0) {
+		Write-Host '  (none currently listed)' -ForegroundColor DarkGray
+	} else {
+		foreach ($file in $unmergedFiles) {
+			Write-Host (("  - {0}" -f $file)) -ForegroundColor DarkGray
+		}
+	}
+
+	Write-Host ''
+	Write-Host 'What to do next on this branch:' -ForegroundColor Yellow
+	if ((Get-BranchCategory -BranchName $currentBranch) -eq 'work') {
+		Write-Host '  Resolve conflicts here on the work branch, test here, then use save/share when ready.' -ForegroundColor DarkGray
+	} elseif ($currentBranch -eq $DemoBranch) {
+		Write-Host '  You are on staging. In most cases, abort this merge and merge staging into your work branch instead.' -ForegroundColor DarkGray
+	} else {
+		Write-Host '  You are not on a normal work branch. Be careful about resolving here unless this branch is intentionally shared.' -ForegroundColor DarkGray
+	}
+
+	Write-Host ''
+	Write-Host '1. Show raw git status' -ForegroundColor White
+	Write-Host '2. Explain what to do on this branch' -ForegroundColor White
+	Write-Host '3. Abort current merge' -ForegroundColor White
+	Write-Host '4. Back' -ForegroundColor DarkGray
+
+	$helperChoice = Read-Host 'Select an option (1-4)'
+	switch ($helperChoice) {
+		'1' {
+			Write-Host "`n--- Raw Git Status ---" -ForegroundColor Yellow
+			git status -sb
+			Write-Host ''
+			Wait-ForUser
+		}
+		'2' {
+			Write-Host "`n--- Conflict Guidance ---" -ForegroundColor Yellow
+			if ((Get-BranchCategory -BranchName $currentBranch) -eq 'work') {
+				Write-Host '1. Open each conflicted file and decide whether to keep the work-branch version, the staging version, or a combined result.' -ForegroundColor DarkGray
+				Write-Host '2. After editing a conflicted file, stage it with git add <file>.' -ForegroundColor DarkGray
+				Write-Host '3. When all conflicted files are staged, commit the merge on this work branch.' -ForegroundColor DarkGray
+				Write-Host '4. Then test here, save/share here, and only later push back to staging.' -ForegroundColor DarkGray
+			} elseif ($currentBranch -eq $DemoBranch) {
+				Write-Host '1. If this merge was accidental or too risky on staging, use option 3 here to abort it.' -ForegroundColor DarkGray
+				Write-Host '2. Switch back to your work branch and use the staging-to-work-branch merge path instead.' -ForegroundColor DarkGray
+				Write-Host '3. Resolve conflicts on the work branch, not on shared staging, unless you intentionally want to do that.' -ForegroundColor DarkGray
+			} else {
+				Write-Host '1. Decide whether this branch is the correct place to resolve the merge.' -ForegroundColor DarkGray
+				Write-Host '2. If not, abort here and re-run the merge on the intended work branch.' -ForegroundColor DarkGray
+				Write-Host '3. If yes, resolve files, stage them, and commit the merge before continuing.' -ForegroundColor DarkGray
+			}
+			Write-Host ''
+			Wait-ForUser
+		}
+		'3' { Invoke-AbortCurrentMerge }
+		default { }
+	}
+}
+
 function Switch-ToBranch {
 	param(
 		[Parameter(Mandatory = $true)][string]$BranchName
@@ -367,17 +557,23 @@ function Show-Status {
 	$currentBranch = Get-CurrentBranch
 	$changeCount = @(git status --porcelain).Count
 	$nextStep = Get-NextStepHint -BranchName $currentBranch
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
+	$workGuidance = Get-WorkGuidance -BranchName $currentBranch
 
-	Write-Host (("Branch: {0} | Mode: {1}" -f $currentBranch, (Get-ModeLabel -BranchName $currentBranch))) -ForegroundColor $MenuTextColor
-	Write-Host (("Work here: {0}" -f (Get-WorkGuidance -BranchName $currentBranch))) -ForegroundColor $MenuTextColor
-	Write-Host (("Changes: {0} | Next: {1}" -f $changeCount, $nextStep)) -ForegroundColor $MenuTextColor
-	Write-Host 'Need help choosing a branch? Pick 6, then 2.' -ForegroundColor $MenuMutedColor
+	Show-FlowGraphic
+	Write-Host 'Code:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f $workGuidance) -ForegroundColor $roleColor
+	Write-Host 'Next:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f $nextStep) -ForegroundColor White
+	Write-Host 'Help:' -ForegroundColor DarkGray -NoNewline
+	Write-Host ' 4 -> 2' -ForegroundColor Cyan -NoNewline
+	Write-Host ((" | Changes: {0}" -f $changeCount)) -ForegroundColor DarkGray
 }
 
 function Show-DetailedStatus {
-	Write-Host "`n--- Git Status ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- Git Status ---" -ForegroundColor Yellow
 	git status -sb
-	Write-Host "`n--- Remotes ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- Remotes ---" -ForegroundColor Yellow
 	git remote -v
 	Write-Host ""
 	Wait-ForUser
@@ -385,13 +581,13 @@ function Show-DetailedStatus {
 
 function Show-BranchGuide {
 	$currentBranch = Get-CurrentBranch
-	Write-Host "`n--- Branch Guide ---" -ForegroundColor $MenuSubheaderColor
-	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor $MenuTextColor
-	Write-Host 'main           = safe starting point only' -ForegroundColor $MenuMutedColor
-	Write-Host 'work branch    = where you normally code' -ForegroundColor $MenuMutedColor
-	Write-Host (("staging branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor $MenuMutedColor
+	Write-Host "`n--- Branch Guide ---" -ForegroundColor Yellow
+	Write-Host (("Current branch: {0}" -f $currentBranch)) -ForegroundColor Yellow
+	Write-Host 'main                = stable baseline only' -ForegroundColor DarkGray
+	Write-Host 'feature/work branch = where you normally code' -ForegroundColor DarkGray
+	Write-Host (("staging/demo branch = the one combined meeting branch ({0})" -f $DemoBranch)) -ForegroundColor DarkGray
 	Write-Host ""
-	Write-Host 'Normal flow: main -> your work branch -> staging -> main' -ForegroundColor $MenuTextColor
+	Write-Host 'Normal flow: main -> feature/work branch -> staging/demo branch -> main' -ForegroundColor Yellow
 	Write-Host ""
 	Wait-ForUser
 }
@@ -404,100 +600,158 @@ function Show-BranchChooserHelp {
 	$recommendedBranch = Get-RecommendedWorkBranch
 	$activeLocalWorkBranches = @($localWorkBranches | Where-Object { $mergedLocalWorkBranches -notcontains $_ })
 	$remoteOnlyWorkBranches = @($remoteWorkBranches | Where-Object { -not (Test-LocalBranchExists -BranchName $_) })
+	$roleColor = Get-BranchAccentColor -BranchName $currentBranch
 
-	Write-Host "`n--- Which Branch Should I Use? ---" -ForegroundColor $MenuSubheaderColor
-	Write-Host (("Current: {0}" -f $currentBranch)) -ForegroundColor $MenuTextColor
-	Write-Host (("Can you code here? {0}" -f (Get-WorkGuidance -BranchName $currentBranch))) -ForegroundColor $MenuTextColor
+	Write-Host "`n--- BRANCH PICKER ---" -ForegroundColor Cyan
+	Show-FlowGraphic
+	Write-Host 'Code:' -ForegroundColor DarkGray -NoNewline
+	Write-Host (" {0}" -f (Get-WorkGuidance -BranchName $currentBranch)) -ForegroundColor $roleColor
 	Write-Host ""
-	Write-Host 'Best answer right now:' -ForegroundColor $MenuTextColor
+	Write-Host 'BEST' -ForegroundColor Cyan
 	if ($currentBranch -eq 'main') {
-		Write-Host '  You should move off main before coding.' -ForegroundColor $MenuMutedColor
-		Write-Host '  Use main menu option 1 to open or create your work branch.' -ForegroundColor $MenuMutedColor
+		Write-Host '  MAIN -> use 1 for a work branch' -ForegroundColor White
 	} elseif ($currentBranch -eq $DemoBranch) {
-		Write-Host '  You are in staging mode, not coding mode.' -ForegroundColor $MenuMutedColor
-		Write-Host '  Use main menu option 1 if you want to go back to a normal work branch.' -ForegroundColor $MenuMutedColor
+		Write-Host '  DEMO -> use 1 for a work branch' -ForegroundColor White
 	} else {
-		Write-Host (("  Stay on '{0}' if this is the branch you are actively coding in." -f $currentBranch)) -ForegroundColor $MenuMutedColor
-		Write-Host '  Use main menu option 2 when you want to save and share your changes.' -ForegroundColor $MenuMutedColor
+		Write-Host (("  STAY -> {0}" -f $currentBranch)) -ForegroundColor White
 	}
 
 	Write-Host ""
-	Write-Host 'Active local work branches:' -ForegroundColor $MenuTextColor
+	Write-Host 'WORK BRANCHES' -ForegroundColor Green
 	if ($activeLocalWorkBranches.Count -eq 0) {
-		Write-Host '  (none yet - use main menu option 1 to create one)' -ForegroundColor $MenuMutedColor
+		Write-Host '  (none yet - use 1)' -ForegroundColor DarkGray
 	} else {
 		if ($currentBranch -eq 'main' -or $currentBranch -eq $DemoBranch) {
-			Write-Host (("  Recommended now: {0}" -f $recommendedBranch)) -ForegroundColor $MenuHeaderColor
-			Write-Host '  Use main menu option 1, then choose that branch name.' -ForegroundColor $MenuMutedColor
+			Write-Host (("  > {0}" -f $recommendedBranch)) -ForegroundColor Green
 			Write-Host ""
 		}
 		foreach ($branch in $activeLocalWorkBranches) {
 			$marker = if ($branch -eq $currentBranch) { '*' } else { '-' }
-			$suffix = if ($branch -eq $currentBranch) { ' <- current branch' } elseif ($branch -eq $recommendedBranch) { ' <- recommended' } else { '' }
-			Write-Host (("  {0} {1}{2}" -f $marker, $branch, $suffix)) -ForegroundColor $MenuMutedColor
+			$suffix = if ($branch -eq $currentBranch) { ' <- current' } elseif ($branch -eq $recommendedBranch) { ' <- rec' } else { '' }
+			$branchColor = if ($branch -eq $recommendedBranch) { 'Green' } else { 'White' }
+			Write-Host (("  {0} {1}{2}" -f $marker, $branch, $suffix)) -ForegroundColor $branchColor
 		}
 	}
 
 	Write-Host ""
-	Write-Host (("Staging branch: {0}" -f $DemoBranch)) -ForegroundColor $MenuTextColor
-	Write-Host '  Ignore this for normal coding. Use it only when combining work for the meeting.' -ForegroundColor $MenuMutedColor
+	Write-Host (("DEMO   {0}" -f $DemoBranch)) -ForegroundColor Cyan
 
 	Write-Host ""
-	Write-Host 'Already merged into main (usually safe to ignore or clean up later):' -ForegroundColor $MenuTextColor
+	Write-Host 'MERGED ALREADY' -ForegroundColor Cyan
 	if ($mergedLocalWorkBranches.Count -eq 0) {
-		Write-Host '  (none)' -ForegroundColor $MenuMutedColor
+		Write-Host '  (none)' -ForegroundColor DarkGray
 	} else {
 		foreach ($branch in $mergedLocalWorkBranches) {
-			Write-Host (("  - {0}" -f $branch)) -ForegroundColor $MenuMutedColor
-		}
-	}
-
-	Write-Host ""
-	Write-Host 'Remote-only / probably old shared branches (ignore unless you were told to use one):' -ForegroundColor $MenuTextColor
-	if ($remoteOnlyWorkBranches.Count -eq 0) {
-		Write-Host '  (none visible)' -ForegroundColor $MenuMutedColor
-	} else {
-		foreach ($branch in $remoteOnlyWorkBranches) {
-			Write-Host (("  - {0}" -f $branch)) -ForegroundColor $MenuMutedColor
-		}
-	}
-
-	Write-Host ""
-	Write-Host 'What to do next:' -ForegroundColor $MenuTextColor
-	Write-Host '  If you want to start or continue coding, use one branch from the active local work list.' -ForegroundColor $MenuMutedColor
-	Write-Host '  If you are ready to push a work branch into staging, use main menu option 4.' -ForegroundColor $MenuMutedColor
-	Write-Host ""
-	Wait-ForUser
-}
-
-function Show-CleanupCandidates {
-	$currentBranch = Get-CurrentBranch
-	$mergedIntoMain = @(
-		git for-each-ref --format='%(refname:short)' --merged refs/heads/main refs/heads |
-		Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
-	)
-
-	$localCleanupCandidates = @(
-		$mergedIntoMain |
-		Where-Object {
-			$_ -ne 'main' -and
-			$_ -ne $DemoBranch -and
-			$_ -ne $currentBranch
-		} |
-		Sort-Object
-	)
-
-	Write-Host "`n--- Cleanup Ideas ---" -ForegroundColor Yellow
-	Write-Host 'These local branches are already merged into main.' -ForegroundColor Yellow
-	if ($localCleanupCandidates.Count -eq 0) {
-		Write-Host '  No local cleanup candidates found.' -ForegroundColor DarkGray
-	} else {
-		foreach ($branch in $localCleanupCandidates) {
 			Write-Host (("  - {0}" -f $branch)) -ForegroundColor DarkGray
 		}
 	}
 
 	Write-Host ""
+	Write-Host 'REMOTE-ONLY' -ForegroundColor Cyan
+	if ($remoteOnlyWorkBranches.Count -eq 0) {
+		Write-Host '  (none visible)' -ForegroundColor DarkGray
+	} else {
+		foreach ($branch in $remoteOnlyWorkBranches) {
+			Write-Host (("  - {0}" -f $branch)) -ForegroundColor DarkGray
+		}
+	}
+
+	Write-Host ""
+	Write-Host 'NAV' -ForegroundColor Cyan
+	Write-Host '  1 = coding branch | 3 = demo actions' -ForegroundColor DarkGray
+	Write-Host ""
+	Wait-ForUser
+}
+
+function Show-CleanupCandidates {
+	$localCleanupCandidates = @(Get-MergedLocalWorkBranches)
+	$remoteCleanupCandidates = @(Get-RemoteCleanupCandidates)
+
+	Write-Host "`n--- CLEANUP IDEAS ---" -ForegroundColor Cyan
+	Write-Host 'LOCAL MERGED' -ForegroundColor Green
+	if ($localCleanupCandidates.Count -eq 0) {
+		Write-Host '  No local cleanup candidates found.' -ForegroundColor DarkGray
+	} else {
+		foreach ($branch in $localCleanupCandidates) {
+			Write-Host (("  - {0}" -f $branch)) -ForegroundColor White
+		}
+	}
+
+	Write-Host ""
+	Write-Host 'REMOTE CANDIDATES' -ForegroundColor Cyan
+	if ($remoteCleanupCandidates.Count -eq 0) {
+		Write-Host '  No remote cleanup candidates found.' -ForegroundColor DarkGray
+	} else {
+		foreach ($branch in $remoteCleanupCandidates) {
+			Write-Host (("  - {0} ({1})" -f $branch.Name, $branch.Description)) -ForegroundColor White
+		}
+	}
+
+	Write-Host ""
+	Write-Host 'Use this menu to delete one after review.' -ForegroundColor DarkGray
+	Write-Host ""
+	Wait-ForUser
+}
+
+function Invoke-DeleteLocalBranchWorkflow {
+	$localCleanupCandidates = @(Get-MergedLocalWorkBranches)
+	$options = @(
+		$localCleanupCandidates |
+		ForEach-Object {
+			[pscustomobject]@{
+				Name = $_
+				Description = 'merged into main'
+			}
+		}
+	)
+
+	$branchToDelete = Select-BranchFromList -Title 'Delete a local merged branch' -Options $options
+	if ([string]::IsNullOrWhiteSpace($branchToDelete)) {
+		Write-Host 'Local branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	$confirmDelete = Read-Host (("Delete local branch '{0}' now? This does not delete origin/{0}. (y/N)" -f $branchToDelete))
+	if ($confirmDelete -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Local branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	Invoke-GitCommand -Args @('branch', '-D', $branchToDelete) | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host (("`n[+] Deleted local branch '{0}'." -f $branchToDelete)) -ForegroundColor Green
+	} else {
+		Write-Warning 'Local branch deletion failed. Review the git output above.'
+	}
+
+	Wait-ForUser
+}
+
+function Invoke-DeleteRemoteBranchWorkflow {
+	$remoteCleanupCandidates = @(Get-RemoteCleanupCandidates)
+	$branchToDelete = Select-BranchFromList -Title 'Delete a remote branch' -Options $remoteCleanupCandidates
+	if ([string]::IsNullOrWhiteSpace($branchToDelete)) {
+		Write-Host 'Remote branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	$confirmDelete = Read-Host (("Delete remote branch 'origin/{0}' now? This affects the shared repo. (y/N)" -f $branchToDelete))
+	if ($confirmDelete -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Remote branch deletion cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	Invoke-GitCommand -Args @('push', 'origin', '--delete', $branchToDelete) | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host (("`n[+] Deleted remote branch 'origin/{0}'." -f $branchToDelete)) -ForegroundColor Green
+	} else {
+		Write-Warning 'Remote branch deletion failed. Review the git output above.'
+	}
+
 	Wait-ForUser
 }
 
@@ -514,26 +768,57 @@ function Invoke-PruneRemoteRefs {
 	Wait-ForUser
 }
 
+function Show-DemoMenu {
+	while ($true) {
+		$currentBranch = Get-CurrentBranch
+		$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh demo branch' } else { 'Open demo branch' }
+
+		Write-Host "`n--- DEMO ACTIONS ---" -ForegroundColor Cyan
+		Write-Host (("1. {0}" -f $openDemoLabel)) -ForegroundColor White
+		Write-Host '2. Push saved work to staging (direct merge)' -ForegroundColor White
+		Write-Host '3. Merge staging into current work branch (review conflicts here)' -ForegroundColor White
+		Write-Host '4. Merge staging into a selected work branch (review conflicts here)' -ForegroundColor White
+		Write-Host '5. Ship approved demo to main' -ForegroundColor Red
+		Write-Host '6. Back' -ForegroundColor DarkGray
+
+		$demoChoice = Read-Host 'Select an option (1-6)'
+
+		switch ($demoChoice) {
+			'1' { Invoke-OpenDemoWorkflow }
+			'2' { Invoke-AddWorkToDemoWorkflow }
+			'3' { Invoke-MergeStagingIntoWorkBranch }
+			'4' { Invoke-MergeStagingIntoSelectedWorkBranch }
+			'5' { Invoke-FinalMergeWorkflow }
+			'6' { return }
+			default { Write-Warning 'Invalid selection. Please choose 1-6.' }
+		}
+	}
+}
+
 function Show-ToolsMenu {
 	while ($true) {
-		Write-Host "`n--- BRANCH TOOLS ---" -ForegroundColor $MenuHeaderColor
-		Write-Host '1. What do these branches mean?' -ForegroundColor $MenuTextColor
-		Write-Host '2. Which branch should I use right now?' -ForegroundColor $MenuTextColor
-		Write-Host '3. Show raw git status' -ForegroundColor $MenuTextColor
-		Write-Host '4. Which branches can I clean up?' -ForegroundColor $MenuTextColor
-		Write-Host '5. Remove stale remote branch refs' -ForegroundColor $MenuTextColor
-		Write-Host '6. Back' -ForegroundColor $MenuTextColor
+		Write-Host "`n--- BRANCH HELP / CLEANUP ---" -ForegroundColor Cyan
+		Write-Host '1. What do these branches mean?' -ForegroundColor White
+		Write-Host '2. Which branch should I use right now?' -ForegroundColor White
+		Write-Host '3. Which branches can I clean up?' -ForegroundColor White
+		Write-Host '4. Delete a local merged branch' -ForegroundColor White
+		Write-Host '5. Delete a remote branch' -ForegroundColor Red
+		Write-Host '6. Remove stale remote branch refs' -ForegroundColor White
+		Write-Host '7. Show raw git status' -ForegroundColor White
+		Write-Host '8. Back' -ForegroundColor DarkGray
 
-		$toolChoice = Read-Host 'Select an option (1-6)'
+		$toolChoice = Read-Host 'Select an option (1-8)'
 
 		switch ($toolChoice) {
 			'1' { Show-BranchGuide }
 			'2' { Show-BranchChooserHelp }
-			'3' { Show-DetailedStatus }
-			'4' { Show-CleanupCandidates }
-			'5' { Invoke-PruneRemoteRefs }
-			'6' { return }
-			default { Write-Warning 'Invalid selection. Please choose 1-6.' }
+			'3' { Show-CleanupCandidates }
+			'4' { Invoke-DeleteLocalBranchWorkflow }
+			'5' { Invoke-DeleteRemoteBranchWorkflow }
+			'6' { Invoke-PruneRemoteRefs }
+			'7' { Show-DetailedStatus }
+			'8' { return }
+			default { Write-Warning 'Invalid selection. Please choose 1-8.' }
 		}
 	}
 }
@@ -588,86 +873,44 @@ function Invoke-StartCodingWorkflow {
 	}
 
 	if ($currentBranch -eq 'main' -and $workingTreeDirty) {
-		Write-Host "`n--- Main Has Unsaved Changes ---" -ForegroundColor $MenuSubheaderColor
-		Write-Host 'You already have uncommitted changes on main.' -ForegroundColor $MenuTextColor
-		Write-Host 'Those changes should go onto a work branch before you continue.' -ForegroundColor $MenuTextColor
-		Write-Host '1. Create a new work branch and keep these current changes' -ForegroundColor $MenuTextColor
-		Write-Host '2. Move these current changes onto an existing work branch' -ForegroundColor $MenuTextColor
-		Write-Host '3. Cancel' -ForegroundColor $MenuTextColor
+		Write-Host "`n--- Main Has Unsaved Changes ---" -ForegroundColor Yellow
+		Write-Host 'You already have uncommitted changes on main.' -ForegroundColor Yellow
+		Write-Host 'Those changes should go onto a work branch before you continue.' -ForegroundColor Yellow
+		Write-Host '1. Create a new work branch from these current changes' -ForegroundColor Yellow
+		Write-Host '2. Cancel' -ForegroundColor Yellow
 
-		$dirtyMainChoice = Read-Host 'Select an option (1-3)'
-		switch ($dirtyMainChoice) {
-			'1' {
-				$newBranchName = Read-Host 'Enter the name of the new work branch for these current changes'
-				if ([string]::IsNullOrWhiteSpace($newBranchName)) {
-					Write-Warning 'No branch name entered. Start-coding workflow cancelled.'
-					Wait-ForUser
-					return
-				}
-
-				$newBranchName = $newBranchName.Trim()
-				if (Test-LocalBranchExists -BranchName $newBranchName) {
-					Write-Warning "Branch '$newBranchName' already exists locally. Start-coding workflow cancelled."
-					Wait-ForUser
-					return
-				}
-
-				Write-Host (("`n[+] Creating new work branch '{0}' from your current changes..." -f $newBranchName)) -ForegroundColor Cyan
-				Invoke-GitCommand -Args @('checkout', '-b', $newBranchName) | Out-Null
-
-				if ($LASTEXITCODE -eq 0) {
-					Write-Host (("`n[+] You are now on work branch '{0}' with your current changes." -f $newBranchName)) -ForegroundColor Green
-				} else {
-					Write-Warning 'Could not create the new work branch from your current changes. Review the git output above.'
-				}
-
-				Wait-ForUser
-				return
-			}
-			'2' {
-				$recommendedBranch = Get-RecommendedWorkBranch
-				$targetBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to receive these current changes'
-				if ([string]::IsNullOrWhiteSpace($targetBranch)) {
-					Write-Warning 'No work branch selected. Start-coding workflow cancelled.'
-					Wait-ForUser
-					return
-				}
-
-				$stashMessage = "move-off-main-{0}" -f (Get-Date -Format 'yyyyMMdd-HHmmss')
-				Write-Host (("`n[+] Stashing current main changes so they can be moved onto '{0}'..." -f $targetBranch)) -ForegroundColor Cyan
-				& git stash push -u -m $stashMessage | Out-Host
-				if ($LASTEXITCODE -ne 0) {
-					Write-Warning 'Could not stash the current main changes. Review the git output above.'
-					Wait-ForUser
-					return
-				}
-
-				if (-not (Switch-ToBranch -BranchName $targetBranch)) {
-					Write-Warning 'Could not switch to the selected work branch. Attempting to restore your stashed changes on main.'
-					if ((Get-CurrentBranch) -eq 'main') {
-						& git stash pop | Out-Host
-					}
-					Wait-ForUser
-					return
-				}
-
-				Write-Host (("`n[+] Applying those stashed changes onto work branch '{0}'..." -f $targetBranch)) -ForegroundColor Cyan
-				& git stash pop | Out-Host
-				if ($LASTEXITCODE -eq 0) {
-					Write-Host (("`n[+] You are now on work branch '{0}' with your former main changes applied here." -f $targetBranch)) -ForegroundColor Green
-				} else {
-					Write-Warning 'The stash did not apply cleanly. Your changes may still be in the stash list; review the git output above.'
-				}
-
-				Wait-ForUser
-				return
-			}
-			default {
-				Write-Warning 'Start-coding workflow cancelled.'
-				Wait-ForUser
-				return
-			}
+		$dirtyMainChoice = Read-Host 'Select an option (1-2)'
+		if ($dirtyMainChoice -ne '1') {
+			Write-Warning 'Start-coding workflow cancelled.'
+			Wait-ForUser
+			return
 		}
+
+		$newBranchName = Read-Host 'Enter the name of the new work branch for these current changes'
+		if ([string]::IsNullOrWhiteSpace($newBranchName)) {
+			Write-Warning 'No branch name entered. Start-coding workflow cancelled.'
+			Wait-ForUser
+			return
+		}
+
+		$newBranchName = $newBranchName.Trim()
+		if (Test-LocalBranchExists -BranchName $newBranchName) {
+			Write-Warning "Branch '$newBranchName' already exists locally. Start-coding workflow cancelled."
+			Wait-ForUser
+			return
+		}
+
+		Write-Host (("`n[+] Creating new work branch '{0}' from your current changes..." -f $newBranchName)) -ForegroundColor Cyan
+		Invoke-GitCommand -Args @('checkout', '-b', $newBranchName) | Out-Null
+
+		if ($LASTEXITCODE -eq 0) {
+			Write-Host (("`n[+] You are now on work branch '{0}' with your current changes." -f $newBranchName)) -ForegroundColor Green
+		} else {
+			Write-Warning 'Could not create the new work branch from your current changes. Review the git output above.'
+		}
+
+		Wait-ForUser
+		return
 	}
 
 	if (-not (Switch-ToBranch -BranchName 'main')) {
@@ -684,16 +927,16 @@ function Invoke-StartCodingWorkflow {
 	}
 
 	$recommendedBranch = Get-RecommendedWorkBranch
-	Write-Host "`n--- Start Or Continue Coding ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- Start Or Continue Coding ---" -ForegroundColor Yellow
 	if ($recommendedBranch) {
-		Write-Host (("1. Use recommended branch: {0}" -f $recommendedBranch)) -ForegroundColor $MenuTextColor
-		Write-Host '2. Pick a different existing branch' -ForegroundColor $MenuTextColor
-		Write-Host '3. Create a new branch' -ForegroundColor $MenuTextColor
-		Write-Host '4. Cancel' -ForegroundColor $MenuTextColor
+		Write-Host (("1. Use recommended branch: {0}" -f $recommendedBranch)) -ForegroundColor Yellow
+		Write-Host '2. Pick a different existing branch' -ForegroundColor Yellow
+		Write-Host '3. Create a new branch' -ForegroundColor Yellow
+		Write-Host '4. Cancel' -ForegroundColor Yellow
 	} else {
-		Write-Host '1. Pick an existing branch' -ForegroundColor $MenuTextColor
-		Write-Host '2. Create a new branch' -ForegroundColor $MenuTextColor
-		Write-Host '3. Cancel' -ForegroundColor $MenuTextColor
+		Write-Host '1. Pick an existing branch' -ForegroundColor Yellow
+		Write-Host '2. Create a new branch' -ForegroundColor Yellow
+		Write-Host '3. Cancel' -ForegroundColor Yellow
 	}
 
 	$workflowChoice = Read-Host 'Select an option'
@@ -790,30 +1033,116 @@ function Invoke-OpenDemoWorkflow {
 	Invoke-SafeSyncWorkflow -BranchName $DemoBranch
 }
 
-function Invoke-AddWorkToDemoWorkflow {
+function Invoke-MergeStagingIntoWorkBranch {
 	$currentBranch = Get-CurrentBranch
-	if ($currentBranch -eq 'main' -and (Test-WorkingTreeDirty)) {
-		Write-Warning "You have unsaved changes on 'main'. Use option 1 to move them onto a work branch before pushing work to staging."
+	if ((Get-BranchCategory -BranchName $currentBranch) -ne 'work') {
+		Write-Warning 'You are not currently on a normal work branch. Use the selected-branch option instead.'
 		Wait-ForUser
 		return
 	}
 
+	Invoke-MergeStagingIntoTargetWorkBranch -TargetBranch $currentBranch
+}
+
+function Invoke-MergeStagingIntoSelectedWorkBranch {
+	$currentBranch = Get-CurrentBranch
+	$recommendedBranch = if ((Get-BranchCategory -BranchName $currentBranch) -eq 'work') { $currentBranch } else { Get-RecommendedWorkBranch }
+	$targetBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch that should receive staging changes'
+	if ([string]::IsNullOrWhiteSpace($targetBranch)) {
+		Write-Warning 'No work branch selected. Merge-from-staging cancelled.'
+		Wait-ForUser
+		return
+	}
+
+	Invoke-MergeStagingIntoTargetWorkBranch -TargetBranch $targetBranch
+}
+
+function Invoke-MergeStagingIntoTargetWorkBranch {
+	param(
+		[Parameter(Mandatory = $true)][string]$TargetBranch
+	)
+
+	if ([string]::IsNullOrWhiteSpace($TargetBranch)) {
+		Write-Warning 'No target work branch was provided.'
+		Wait-ForUser
+		return
+	}
+
+	if ($TargetBranch -eq 'main' -or $TargetBranch -eq $DemoBranch) {
+		Write-Warning 'Choose a normal work branch as the merge target.'
+		Wait-ForUser
+		return
+	}
+
+	$currentBranch = Get-CurrentBranch
+	if (Test-WorkingTreeDirty) {
+		Write-Warning 'Your current branch has unsaved changes. Save them with option 2, or stash them manually, before merging staging into a work branch.'
+		Wait-ForUser
+		return
+	}
+
+	Write-Host ""
+	Write-Host (("This will sync '{0}', switch to work branch '{1}', and merge staging into that work branch for conflict review." -f $DemoBranch, $TargetBranch)) -ForegroundColor Yellow
+	Write-Host 'This does not push anything automatically. Resolve any conflicts on the work branch, test there, then save/share and push to staging later.' -ForegroundColor DarkGray
+	$confirmWorkMerge = Read-Host ("Continue merging '{0}' into '{1}'? (y/N)" -f $DemoBranch, $TargetBranch)
+	if ($confirmWorkMerge -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Merge-from-staging cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
+	if (-not (Switch-ToBranch -BranchName $DemoBranch)) {
+		Wait-ForUser
+		return
+	}
+
+	Write-Host (("`n[+] Syncing staging branch '{0}' before merging it into '{1}'..." -f $DemoBranch, $TargetBranch)) -ForegroundColor Cyan
+	powershell.exe -ExecutionPolicy Bypass -File $SyncScript -UpstreamBranch $DemoBranch -AutoCheckpoint
+	if ($LASTEXITCODE -ne 0) {
+		Write-Warning 'Could not sync staging. Merge stopped.'
+		Wait-ForUser
+		return
+	}
+
+	if (-not (Switch-ToBranch -BranchName $TargetBranch)) {
+		Wait-ForUser
+		return
+	}
+
+	$mergeMessage = Read-Host ("Merge commit message (press Enter for 'Merge {0} into {1}')" -f $DemoBranch, $TargetBranch)
+	if ([string]::IsNullOrWhiteSpace($mergeMessage)) {
+		$mergeMessage = "Merge $DemoBranch into $TargetBranch"
+	}
+
+	Write-Host (("`n[+] Merging staging branch '{0}' into work branch '{1}'..." -f $DemoBranch, $TargetBranch)) -ForegroundColor Cyan
+	Invoke-GitCommand -Args @('merge', '--no-ff', $DemoBranch, '-m', $mergeMessage) | Out-Null
+	if ($LASTEXITCODE -eq 0) {
+		Write-Host (("`n[+] Staging branch '{0}' was merged into work branch '{1}'. Review/test here, then use option 2 to save/share when ready." -f $DemoBranch, $TargetBranch)) -ForegroundColor Green
+	} else {
+		Write-Warning 'Merge from staging did not complete cleanly. Resolve conflicts on the work branch, then save/share when ready.'
+	}
+
+	Wait-ForUser
+}
+
+function Invoke-AddWorkToDemoWorkflow {
+	$currentBranch = Get-CurrentBranch
 	if ($currentBranch -ne $DemoBranch -and (Test-WorkingTreeDirty)) {
-		Write-Warning 'You have unsaved changes on your current work branch. Save them with option 2, or stash them manually, before switching to staging.'
+		Write-Warning 'You have unsaved changes on your current work branch. Save them with option 2, or stash them manually, before switching to the demo branch.'
 		Wait-ForUser
 		return
 	}
 
 	$recommendedBranch = if ((Get-BranchCategory -BranchName $currentBranch) -eq 'work') { $currentBranch } else { Get-RecommendedWorkBranch }
 
-	Write-Host "`n--- Push Work To Staging ---" -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n--- Push Saved Work To Staging ---" -ForegroundColor Yellow
 	if ($recommendedBranch) {
-		Write-Host (("1. Use recommended branch: {0}" -f $recommendedBranch)) -ForegroundColor $MenuTextColor
-		Write-Host '2. Pick a different existing work branch' -ForegroundColor $MenuTextColor
-		Write-Host '3. Cancel' -ForegroundColor $MenuTextColor
+		Write-Host (("1. Use recommended branch: {0}" -f $recommendedBranch)) -ForegroundColor Yellow
+		Write-Host '2. Pick a different existing work branch' -ForegroundColor Yellow
+		Write-Host '3. Cancel' -ForegroundColor Yellow
 	} else {
-		Write-Host '1. Pick an existing work branch' -ForegroundColor $MenuTextColor
-		Write-Host '2. Cancel' -ForegroundColor $MenuTextColor
+		Write-Host '1. Pick an existing work branch' -ForegroundColor Yellow
+		Write-Host '2. Cancel' -ForegroundColor Yellow
 	}
 
 	$workflowChoice = Read-Host 'Select an option'
@@ -822,18 +1151,18 @@ function Invoke-AddWorkToDemoWorkflow {
 	if ($recommendedBranch) {
 		switch ($workflowChoice) {
 			'1' { $sourceBranch = $recommendedBranch }
-			'2' { $sourceBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to push to staging' }
+			'2' { $sourceBranch = Select-ExistingWorkBranch -RecommendedBranch $recommendedBranch -Title 'Choose the work branch to bring into demo' }
 			default { }
 		}
 	} else {
 		switch ($workflowChoice) {
-			'1' { $sourceBranch = Select-ExistingWorkBranch -Title 'Choose the work branch to push to staging' }
+			'1' { $sourceBranch = Select-ExistingWorkBranch -Title 'Choose the work branch to bring into demo' }
 			default { }
 		}
 	}
 
 	if ([string]::IsNullOrWhiteSpace($sourceBranch)) {
-		Write-Warning 'Push-to-staging workflow cancelled.'
+		Write-Warning 'Bring-work-into-demo workflow cancelled.'
 		Wait-ForUser
 		return
 	}
@@ -844,15 +1173,25 @@ function Invoke-AddWorkToDemoWorkflow {
 		return
 	}
 
+	Write-Host ""
+	Write-Host 'This path directly merges a saved work branch into staging.' -ForegroundColor Yellow
+	Write-Host 'If you expect overlap with recent staging changes, cancel here and merge staging into your work branch first.' -ForegroundColor DarkGray
+	$confirmDirectMerge = Read-Host 'Continue with direct merge into staging? (y/N)'
+	if ($confirmDirectMerge -notin @('y', 'Y', 'yes', 'YES')) {
+		Write-Host 'Push-to-staging cancelled.' -ForegroundColor Yellow
+		Wait-ForUser
+		return
+	}
+
 	if (-not (Switch-ToBranch -BranchName $DemoBranch)) {
 		Wait-ForUser
 		return
 	}
 
-	Write-Host (("`n[+] Syncing staging branch '{0}' before merge..." -f $DemoBranch)) -ForegroundColor Cyan
+	Write-Host (("`n[+] Syncing demo branch '{0}' before merge..." -f $DemoBranch)) -ForegroundColor Cyan
 	powershell.exe -ExecutionPolicy Bypass -File $SyncScript -UpstreamBranch $DemoBranch -AutoCheckpoint
 	if ($LASTEXITCODE -ne 0) {
-		Write-Warning 'Could not sync staging. Merge stopped.'
+		Write-Warning 'Could not sync the demo branch. Merge stopped.'
 		Wait-ForUser
 		return
 	}
@@ -871,9 +1210,9 @@ function Invoke-AddWorkToDemoWorkflow {
 
 	& powershell.exe -ExecutionPolicy Bypass -File $PushScript -Branch $DemoBranch -MergeFrom $sourceBranch -Message $mergeMessage
 	if ($LASTEXITCODE -eq 0) {
-		Write-Host (("`n[+] '{0}' was pushed into staging branch '{1}'." -f $sourceBranch, $DemoBranch)) -ForegroundColor Green
+		Write-Host (("`n[+] '{0}' was merged into demo branch '{1}'." -f $sourceBranch, $DemoBranch)) -ForegroundColor Green
 	} else {
-		Write-Warning 'Could not push work into staging. Review the git output above.'
+		Write-Warning 'Could not add work to the demo branch. Review the git output above.'
 	}
 
 	Wait-ForUser
@@ -922,18 +1261,16 @@ function Invoke-FinalMergeWorkflow {
 	Wait-ForUser
 }
 
-Initialize-MenuTheme
-
 while ($true) {
 	$currentBranch = Get-CurrentBranch
 	$startCodingLabel = if ($currentBranch -eq $DemoBranch) { 'Leave demo / start coding' } else { 'Start or continue coding' }
-	$openDemoLabel = if ($currentBranch -eq $DemoBranch) { 'Refresh staging branch' } else { 'Open staging branch' }
+	$hasUnmergedFiles = Test-HasUnmergedFiles
 
-	Write-Host "`n=================================" -ForegroundColor $MenuHeaderColor
-	Write-Host '    SOC GIT WORKFLOW MENU        ' -ForegroundColor $MenuHeaderColor
-	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
-	Write-Host 'Flow: main -> work branches -> staging -> main' -ForegroundColor $MenuSubheaderColor
+	Write-Host "`n+---------------------------------------+" -ForegroundColor Cyan
+	Write-Host '  SOC GIT WORKFLOW MENU' -ForegroundColor Cyan
+	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
 	Show-Status
+<<<<<<< HEAD
 	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor $MenuTextColor
 	Write-Host '2. Save and share this work branch' -ForegroundColor $MenuTextColor
 	Write-Host (("3. {0}" -f $openDemoLabel)) -ForegroundColor $MenuTextColor
@@ -942,17 +1279,62 @@ while ($true) {
 	Write-Host '6. Branch help / cleanup' -ForegroundColor $MenuTextColor
 	Write-Host '7. Exit / return to intro' -ForegroundColor $MenuTextColor
 	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
+=======
+	if ($hasUnmergedFiles) {
+		Write-Host ''
+		Write-Host 'Conflict detected: unresolved merge files are present.' -ForegroundColor Red
+		Write-Host 'Use Conflict helper before continuing with more branch actions.' -ForegroundColor DarkGray
+	}
+	Write-Host ''
+	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor White
+	Write-Host '2. Save and share this work branch' -ForegroundColor White
+	Write-Host '3. Staging branch actions' -ForegroundColor White
+	Write-Host '4. Branch help / cleanup' -ForegroundColor White
+	if ($hasUnmergedFiles) {
+		Write-Host '5. Conflict helper' -ForegroundColor White
+		Write-Host '6. Exit' -ForegroundColor DarkGray
+	} else {
+		Write-Host '5. Exit' -ForegroundColor DarkGray
+	}
+	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 
-	$choice = Read-Host 'Select an option (1-7)'
+	$choice = if ($hasUnmergedFiles) { Read-Host 'Select an option (1-6)' } else { Read-Host 'Select an option (1-5)' }
 
 	switch ($choice) {
 		'1' { Invoke-StartCodingWorkflow }
 		'2' { Invoke-SaveShareWorkflow }
+<<<<<<< HEAD
 		'3' { Invoke-OpenDemoWorkflow }
 		'4' { Invoke-AddWorkToDemoWorkflow }
 		'5' { Invoke-FinalMergeWorkflow }
 		'6' { Show-ToolsMenu }
 			'7' { return }
 		default { Write-Warning 'Invalid selection. Please choose 1-7.' }
+=======
+		'3' { Show-DemoMenu }
+		'4' { Show-ToolsMenu }
+		'5' {
+			if ($hasUnmergedFiles) {
+				Show-ConflictHelper
+			} else {
+				exit
+			}
+		}
+		'6' {
+			if ($hasUnmergedFiles) {
+				exit
+			} else {
+				Write-Warning 'Invalid selection. Please choose 1-5.'
+			}
+		}
+		default {
+			if ($hasUnmergedFiles) {
+				Write-Warning 'Invalid selection. Please choose 1-6.'
+			} else {
+				Write-Warning 'Invalid selection. Please choose 1-5.'
+			}
+		}
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 	}
 }

@@ -136,6 +136,31 @@ class SupportiveQueryResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 
+class InvestigationState(Base):
+    """Persistent investigation loop state for a triage case.
+
+    This tracks the current working hypothesis, evidence balance, open
+    questions, closure blockers, and next best actions across repeated
+    analysis/evidence-save cycles.
+    """
+
+    __tablename__ = "investigation_states"
+
+    case_id = Column(String, primary_key=True, index=True)
+    rule_id = Column(String, index=True)
+    current_hypothesis = Column(Text)
+    provisional_disposition = Column(String, index=True)
+    disposition_confidence = Column(Float)
+    loop_status = Column(String, index=True)
+    iteration_count = Column(Integer, default=0)
+    unresolved_questions = Column(Text)  # JSON array
+    closure_blockers = Column(Text)  # JSON array
+    recommended_next_actions = Column(Text)  # JSON array
+    evidence_summary = Column(Text)  # JSON object
+    last_analysis_stage = Column(String, default="initial")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+
 class PlaceholderAlias(Base):
     """Dynamic placeholder aliases for supportive SPL templates.
 
