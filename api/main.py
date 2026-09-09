@@ -2918,6 +2918,13 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             next_id += 1
             saved_count += 1
 
+        # Session uses autoflush=False, so newly added rows are invisible to
+        # subsequent queries until we flush. Without this, the investigation
+        # state rebuild runs against stale data (missing the just-saved
+        # evidence) and the Evidence Timeline does not update until a later
+        # analysis request re-reads after commit.
+        db.flush()
+
         # Rebuild investigation loop state from the latest evidence so the
         # Investigation Loop view reflects saved entries even when the
         # analyst has not rerun AI analysis yet.
@@ -2937,6 +2944,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                 "query_title": r.query_title,
                 "source_system": r.source_system,
                 "raw_result": raw,
+                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
             })
 
         previous_state_record = db.query(InvestigationState).filter(

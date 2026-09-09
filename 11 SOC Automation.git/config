@@ -1,0 +1,14 @@
+[core]
+	repositoryformatversion = 0
+	filemode = false
+	bare = true
+	symlinks = false
+	ignorecase = true
+[remote "origin"]
+	url = Z:\\PAX DNA SOC\\01 Tools\\11 SOC Automation
+	tagOpt = --no-tags
+	fetch = +refs/*:refs/*
+	mirror = true
+[remote "gitlab"]
+	url = https://0752-congress.nres.navy.mil/soc-automation/soc-platform
+	fetch = +refs/heads/*:refs/remotes/gitlab/*
