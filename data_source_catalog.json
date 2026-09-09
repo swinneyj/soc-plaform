@@ -1,54 +1,128 @@
 {
-  "description": "Known Splunk indexes, sourcetypes, and field conventions used for enrichment. Ground Phase 2 / supportive SPL against this catalog so the model does not invent indexes or field names.",
+  "description": "Known Splunk indexes/sourcetypes grounded from real correlation searches and environment usage.",
   "updated": "2026-09-09",
   "sources": [
     {
-      "index": "linux",
-      "sourcetypes": ["linux:ps", "linux:secure", "linux:audit", "linux:syslog"],
-      "common_fields": ["host", "user", "process", "cmdline", "parent_process", "file_path", "path", "file_name", "action", "src_ip"],
-      "use_for": ["Linux process activity", "SSH auth (sshd)", "file/audit events", "key and config changes"]
-    },
-    {
       "index": "nix",
-      "sourcetypes": ["linux:ps", "linux:secure", "linux:audit"],
-      "common_fields": ["host", "user", "process", "cmdline", "parent_process", "file_path", "file_name", "action"],
-      "use_for": ["Alternate Linux endpoint index used in some environments"]
-    },
-    {
-      "index": "endpoint",
-      "sourcetypes": ["*"],
-      "common_fields": ["host", "user", "process", "file_path", "file_name", "action"],
-      "use_for": ["Cross-platform endpoint detections including file activity under .ssh"]
+      "sourcetypes": [
+        "(raw auditd lines: type=SYSCALL|PATH|EXECVE|PROCTITLE)",
+        "linux:secure-style sshd messages if present"
+      ],
+      "common_fields": [
+        "host",
+        "file_path",
+        "command",
+        "exe",
+        "success",
+        "syscall_name",
+        "auid",
+        "uid",
+        "euid",
+        "session_id",
+        "tty",
+        "nametype",
+        "audit_id",
+        "audit_key"
+      ],
+      "use_for": [
+        "Linux auditd file and process activity",
+        "SSH authorized_keys create/modify/delete (linux_ssh_key_creation rule family)"
+      ],
+      "notes": "Confirmed primary index from Endpoint - Linux Possible ssh Key File Creation drilldown (index=nix only)."
     },
     {
       "index": "network",
-      "sourcetypes": ["*"],
-      "common_fields": ["host", "user", "process", "dest_ip", "dest_hostname", "dest_port", "src_ip"],
-      "use_for": ["Egress and connection context after persistence activity"]
+      "sourcetypes": [
+        "*"
+      ],
+      "common_fields": [
+        "host",
+        "user",
+        "process",
+        "dest_ip",
+        "dest_hostname",
+        "dest_port",
+        "src_ip"
+      ],
+      "use_for": [
+        "Egress context for other rule families"
+      ]
     },
     {
       "index": "Windows",
-      "sourcetypes": ["XmlWinEventLog", "WinNetMon", "WinEventLog:Security"],
-      "common_fields": ["host", "User", "Image", "CommandLine", "ParentImage", "RemoteAddress", "RemotePort"],
-      "use_for": ["Windows process lineage and network for LotL / PowerShell rules"]
+      "sourcetypes": [
+        "WinNetMon",
+        "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
+        "WinEventLog:Microsoft-Windows-Sysmon/Operational",
+        "XmlWinEventLog",
+        "WinEventLog:Security"
+      ],
+      "common_fields": [
+        "host",
+        "UserName",
+        "User",
+        "ProcessName",
+        "Image",
+        "CommandLine",
+        "ParentImage",
+        "RemoteAddress",
+        "RemotePort",
+        "LocalAddress",
+        "LocalPort",
+        "RemoteHostName",
+        "Direction"
+      ],
+      "use_for": [
+        "LotL outbound (WinNetMon + Sysmon join)",
+        "Windows process lineage and network connects"
+      ],
+      "notes": "Confirmed from lotl_outbound_connection correlation search: index=Windows sourcetype=WinNetMon Direction=outbound joined to Sysmon Operational."
     },
     {
       "index": "wineventlog",
-      "sourcetypes": ["WinEventLog:Security"],
-      "common_fields": ["host", "user", "EventCode", "Logon_Type", "src_ip"],
-      "use_for": ["Windows authentication and logon analysis"]
+      "sourcetypes": [
+        "WinEventLog:Security"
+      ],
+      "common_fields": [
+        "host",
+        "user",
+        "EventCode",
+        "Logon_Type",
+        "src_ip"
+      ],
+      "use_for": [
+        "Windows authentication"
+      ]
     },
     {
       "index": "f5_bigip",
-      "sourcetypes": ["f5:bigip:ltm:ssl:error"],
-      "common_fields": ["src_ip", "dest_ip", "src_port", "dest_port"],
-      "use_for": ["F5 TLS handshake failures"]
+      "sourcetypes": [
+        "f5:bigip:ltm:ssl:error"
+      ],
+      "common_fields": [
+        "src_ip",
+        "dest_ip",
+        "src_port",
+        "dest_port"
+      ],
+      "use_for": [
+        "F5 TLS handshake failures"
+      ]
     }
   ],
   "placeholder_conventions": {
-    "host": "Primary affected host (maps from host / destination / destination_ip)",
-    "user": "Account associated with the activity (maps from user / username)",
-    "process": "Process or binary name",
-    "destination": "Destination host or IP when distinct from host"
+    "host": "Primary affected host. Notable often uses destination; alias map resolves host/destination/destination_ip.",
+    "user": "UserName from WinNetMon / User from Sysmon; notable renames to user.",
+    "destination": "Same as host for this Linux SSH key rule (rule renames host as dest).",
+    "process": "LOLBin path/name from notable (ProcessName/Image). Rule renames ProcessName as process.",
+    "dest_ip": "RemoteAddress from WinNetMon; notable may expose dest_ip after rename."
+  },
+  "rule_index_map": {
+    "linux_ssh_key_creation": [
+      "nix"
+    ],
+    "lotl_outbound_connection": [
+      "Windows"
+    ]
   }
 }

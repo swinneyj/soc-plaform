@@ -84,14 +84,24 @@
       "rule_id": "linux_ssh_key_creation",
       "supportive_queries": [
         {
-          "title": "SSH directory file activity",
-          "description": "Confirm which .ssh files were created or modified on the affected host around the alert time (authorized_keys, id_*, known_hosts, etc.).",
-          "spl_query": "index=linux OR index=nix OR index=endpoint host=\"$host$\"\n| search (file_path=\"*.ssh*\" OR path=\"*.ssh*\" OR file_name=\"*authorized_keys*\" OR file_name=\"*id_rsa*\" OR file_name=\"*id_ed25519*\" OR file_name=\"*id_ecdsa*\" OR file_name=\"*known_hosts*\")\n| table _time host user file_path path file_name action process process_name parent_process\n| sort 0 -_time"
+          "title": "Actor process context for key change",
+          "description": "Identify which process/command (and audit session) modified authorized_keys \u2014 excludes routine sshd/cloud-init noise the correlation search already filters.",
+          "spl_query": "index=nix host=\"$host$\"\n(\n    \"type=SYSCALL\"\n    OR \"type=PATH\"\n    OR \"type=EXECVE\"\n    OR \"type=PROCTITLE\"\n)\n| rex field=_raw \"msg=audit\\\\((?<audit_id>[^\\\\)]+)\\\\)\"\n| rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\"\n| rex field=_raw \"exe=\\\"(?<exe>[^\\\"]+)\\\"\"\n| rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\"\n| rex field=_raw \"auid=(?<auid>\\\\d+)\"\n| rex field=_raw \"uid=(?<uid>\\\\d+)\"\n| rex field=_raw \"euid=(?<euid>\\\\d+)\"\n| rex field=_raw \"ses=(?<session_id>\\\\d+)\"\n| rex field=_raw \"tty=(?<tty>\\\\S+)\"\n| search file_path=\"*/.ssh/authorized_keys*\"\n| search NOT (command=\"sshd\" OR command=\"sshd-session\" OR command=\"cloud-init\" OR command=\"ipaclient-install\")\n| stats earliest(_time) as first_seen latest(_time) as last_seen\n        values(command) as commands values(exe) as executables\n        values(auid) as auids values(uid) as uids values(euid) as euids\n        values(session_id) as sessions values(tty) as terminals\n        values(file_path) as file_paths\n        by host audit_id\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M:%S\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M:%S\")\n| sort 0 -last_seen"
         },
         {
-          "title": "Process context for key write",
-          "description": "Identify the process and parent that wrote or touched SSH key material for the affected user (ssh-keygen, scp, ansible, cp, etc.).",
-          "spl_query": "index=linux OR index=nix sourcetype=linux:ps OR sourcetype=linux:audit OR sourcetype=linux:secure host=\"$host$\"\n| search (user=\"$user$\" OR cmdline=\"*$user$*\") (cmdline=\"*ssh-keygen*\" OR cmdline=\"*authorized_keys*\" OR cmdline=\"*id_rsa*\" OR cmdline=\"*id_ed25519*\" OR cmdline=\"*.ssh*\" OR process=\"ssh-keygen\" OR process=\"scp\" OR process=\"ssh\")\n| table _time host user process cmdline parent_process parent_cmdline\n| sort 0 -_time"
+          "title": "Authorized key management tooling",
+          "description": "Look for config-management or admin tooling (ansible, puppet, chef, cloud-init, useradd) that commonly creates SSH keys as part of authorized provisioning.",
+          "spl_query": "index=linux OR index=nix host=\"$host$\"\n| search (cmdline=\"*ansible*\" OR cmdline=\"*puppet*\" OR cmdline=\"*chef*\" OR cmdline=\"*cloud-init*\" OR cmdline=\"*useradd*\" OR cmdline=\"*ssh-copy-id*\" OR process=\"ansible\" OR process=\"puppet\")\n| table _time host user process cmdline parent_process\n| sort 0 -_time"
+        },
+        {
+          "title": "Authorized_keys audit activity (same host)",
+          "description": "Re-run the core auditd authorized_keys activity on the affected host to see file paths, commands, executables, and outcomes around the alert.",
+          "spl_query": "index=nix host=\"$host$\"\n(\n    \"type=SYSCALL\"\n    OR \"type=PATH\"\n    OR \"type=EXECVE\"\n    OR \"type=PROCTITLE\"\n)\n| rex field=_raw \"type=(?<audit_record_type>\\\\w+)\"\n| rex field=_raw \"msg=audit\\\\((?<audit_id>[^\\\\)]+)\\\\)\"\n| rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\"\n| rex field=_raw \"exe=\\\"(?<exe>[^\\\"]+)\\\"\"\n| rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\"\n| rex field=_raw \"success=(?<success>\\\\w+)\"\n| rex field=_raw \"SYSCALL=(?<syscall_name>[A-Za-z0-9_]+)\"\n| rex field=_raw \"nametype=(?<nametype>\\\\w+)\"\n| search file_path=\"*/.ssh/authorized_keys*\" OR file_path=\"*/.ssh/*\"\n| table _time host audit_id audit_record_type file_path nametype command exe syscall_name success\n| sort 0 -_time"
+        },
+        {
+          "title": "Non-excluded writers of authorized_keys",
+          "description": "Focus on commands that wrote authorized_keys and are NOT in the correlation exclusion list (sshd, cloud-init, ipaclient-install) \u2014 primary persistence suspects.",
+          "spl_query": "index=nix host=\"$host$\"\n(\n    \"type=SYSCALL\"\n    OR \"type=PATH\"\n    OR \"type=EXECVE\"\n    OR \"type=PROCTITLE\"\n)\n| rex field=_raw \"msg=audit\\\\((?<audit_id>[^\\\\)]+)\\\\)\"\n| rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\"\n| rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\"\n| rex field=_raw \"exe=\\\"(?<exe>[^\\\"]+)\\\"\"\n| rex field=_raw \"success=(?<success>\\\\w+)\"\n| search file_path=\"*/.ssh/authorized_keys*\" success=yes\n| search NOT (command=\"sshd\" OR command=\"sshd-session\" OR command=\"cloud-init\" OR command=\"ipaclient-install\")\n| stats count as events earliest(_time) as first_seen latest(_time) as last_seen\n        values(exe) as executables values(file_path) as file_paths\n        by host command\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -events"
         },
         {
           "title": "Prior SSH key activity history",
@@ -99,20 +109,55 @@
           "spl_query": "index=linux OR index=nix OR index=endpoint (host=\"$host$\" OR user=\"$user$\")\n| search (file_path=\"*.ssh*\" OR path=\"*.ssh*\" OR file_name=\"*authorized_keys*\" OR file_name=\"*id_rsa*\" OR file_name=\"*id_ed25519*\")\n| stats count as events earliest(_time) as first_seen latest(_time) as last_seen values(file_name) as files values(action) as actions by host user\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -events"
         },
         {
+          "title": "Prior authorized_keys history on host",
+          "description": "Longer-window history of authorized_keys create/modify/delete on this host to distinguish routine key management from a new persistence event.",
+          "spl_query": "index=nix host=\"$host$\"\n(\n    \"type=PATH\"\n    OR \"type=SYSCALL\"\n)\n| rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\"\n| rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\"\n| rex field=_raw \"nametype=(?<nametype>\\\\w+)\"\n| search file_path=\"*/.ssh/authorized_keys*\"\n| stats count as events earliest(_time) as first_seen latest(_time) as last_seen\n        values(nametype) as path_ops values(command) as commands\n        by host file_path\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -events"
+        },
+        {
+          "title": "Process context for key write",
+          "description": "Identify the process and parent that wrote or touched SSH key material for the affected user (ssh-keygen, scp, ansible, cp, etc.).",
+          "spl_query": "index=linux OR index=nix sourcetype=linux:ps OR sourcetype=linux:audit OR sourcetype=linux:secure host=\"$host$\"\n| search (user=\"$user$\" OR cmdline=\"*$user$*\") (cmdline=\"*ssh-keygen*\" OR cmdline=\"*authorized_keys*\" OR cmdline=\"*id_rsa*\" OR cmdline=\"*id_ed25519*\" OR cmdline=\"*.ssh*\" OR process=\"ssh-keygen\" OR process=\"scp\" OR process=\"ssh\")\n| table _time host user process cmdline parent_process parent_cmdline\n| sort 0 -_time"
+        },
+        {
+          "title": "SSH auth (sshd) around the event",
+          "description": "Successful/failed SSH logons on the same host near the key activity (still index=nix audit/secure-style raw if present).",
+          "spl_query": "index=nix host=\"$host$\"\n(sshd OR \"Accepted publickey\" OR \"Failed publickey\" OR \"Accepted password\" OR \"Failed password\" OR \"session opened\" OR \"session closed\")\n| rex field=_raw \"user[= ](?<ssh_user>\\\\S+)\"\n| rex field=_raw \"from (?<src_ip>\\\\d+\\\\.\\\\d+\\\\.\\\\d+\\\\.\\\\d+)\"\n| table _time host ssh_user src_ip _raw\n| sort 0 -_time"
+        },
+        {
           "title": "SSH authentication around the event",
           "description": "Review successful and failed SSH logons for the affected user/host near the key activity to assess whether access was expected.",
           "spl_query": "index=linux OR index=nix sourcetype=linux:secure OR sourcetype=linux:audit host=\"$host$\"\n| search (user=\"$user$\" OR src_user=\"$user$\") (sshd OR Accepted OR Failed OR \"publickey\" OR \"session opened\")\n| table _time host user src_ip src action app\n| sort 0 -_time"
         },
         {
-          "title": "Authorized key management tooling",
-          "description": "Look for config-management or admin tooling (ansible, puppet, chef, cloud-init, useradd) that commonly creates SSH keys as part of authorized provisioning.",
-          "spl_query": "index=linux OR index=nix host=\"$host$\"\n| search (cmdline=\"*ansible*\" OR cmdline=\"*puppet*\" OR cmdline=\"*chef*\" OR cmdline=\"*cloud-init*\" OR cmdline=\"*useradd*\" OR cmdline=\"*ssh-copy-id*\" OR process=\"ansible\" OR process=\"puppet\")\n| table _time host user process cmdline parent_process\n| sort 0 -_time"
+          "title": "SSH directory file activity",
+          "description": "Confirm which .ssh files were created or modified on the affected host around the alert time (authorized_keys, id_*, known_hosts, etc.).",
+          "spl_query": "index=linux OR index=nix OR index=endpoint host=\"$host$\"\n| search (file_path=\"*.ssh*\" OR path=\"*.ssh*\" OR file_name=\"*authorized_keys*\" OR file_name=\"*id_rsa*\" OR file_name=\"*id_ed25519*\" OR file_name=\"*id_ecdsa*\" OR file_name=\"*known_hosts*\")\n| table _time host user file_path path file_name action process process_name parent_process\n| sort 0 -_time"
         }
       ]
     },
     {
       "rule_id": "lotl_outbound_connection",
       "supportive_queries": [
+        {
+          "title": "Outbound to the alerted destination",
+          "description": "Other processes/users on the same host talking to the same remote IP/port as the notable \u2014 lateral or multi-tool context.",
+          "spl_query": "index=Windows sourcetype=WinNetMon Direction=\"outbound\"\nhost=\"$host$\"\nRemoteAddress=\"$dest_ip$\"\n| stats count as connections\n        earliest(_time) as first_seen latest(_time) as last_seen\n        values(ProcessName) as processes values(UserName) as users values(RemotePort) as ports\n        by host RemoteAddress\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -connections"
+        },
+        {
+          "title": "Prior LotL outbound history on host",
+          "description": "Historical outbound from classic LOLBins on this host (powershell/cmd/rundll32/regsvr32/certutil/wscript/cscript/mshta) to assess baseline vs anomaly.",
+          "spl_query": "index=Windows sourcetype=WinNetMon Direction=\"outbound\"\nhost=\"$host$\"\nProcessName IN (\"*powershell.exe*\", \"*cmd.exe*\", \"*rundll32.exe*\", \"*regsvr32.exe*\", \"*certutil.exe*\", \"*wscript.exe*\", \"*cscript.exe*\", \"*mshta.exe*\")\nNOT RemoteAddress IN (\"10.0.0.0/8\", \"172.16.0.0/12\", \"192.168.0.0/16\", \"127.0.0.0/8\")\n| stats count as connections earliest(_time) as first_seen latest(_time) as last_seen\n        dc(RemoteAddress) as unique_dests values(RemotePort) as ports\n        by host ProcessName UserName\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -connections"
+        },
+        {
+          "title": "Sysmon network + process for user",
+          "description": "Sysmon network connects (EventCode 3) and process creates for the affected user on the host \u2014 full LotL session context.",
+          "spl_query": "index=Windows (sourcetype=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" OR sourcetype=\"WinEventLog:Microsoft-Windows-Sysmon/Operational\")\nhost=\"$host$\"\n(User=\"*$user$*\" OR UserName=\"*$user$*\")\n(EventCode=1 OR EventCode=3)\n| eval event_type=case(EventCode=1,\"process_create\", EventCode=3,\"network_connect\")\n| table _time host event_type User Image CommandLine ParentImage DestinationIp DestinationPort Protocol\n| sort 0 -_time"
+        },
+        {
+          "title": "Sysmon process lineage for LotL binary",
+          "description": "Command line, parent image, and user context for the flagged LOLBin on the affected host (Sysmon EventCode 1).",
+          "spl_query": "index=Windows (sourcetype=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" OR sourcetype=\"WinEventLog:Microsoft-Windows-Sysmon/Operational\")\nEventCode=1\nhost=\"$host$\"\n(Image=\"*$process$\" OR Image=\"$process$\")\n| table _time host User Image CommandLine ParentImage ParentCommandLine ProcessGuid Hashes\n| sort 0 -_time"
+        },
         {
           "title": "Test 1",
           "description": "",
@@ -122,6 +167,11 @@
           "title": "Test 2",
           "description": "",
           "spl_query": "index=Windows sourcetype=WinNetMon \nProcessName=\"$process$\"\n| search host=\"$destination$\"\n| stats count earliest(_time) as first_seen latest(_time) as last_seen \n        values(RemoteAddress) as Destination_IPs values(RemotePort) as Ports\n  by ProcessName\n| eval first_seen=strftime(first_seen, \"%Y-%m-%d %H:%M\"), \n       last_seen=strftime(last_seen, \"%Y-%m-%d %H:%M\")\n| sort -count"
+        },
+        {
+          "title": "WinNetMon outbound for this process",
+          "description": "All outbound connections from the same LOLBin on the host \u2014 destinations, ports, and volume (same data plane as the correlation search).",
+          "spl_query": "index=Windows sourcetype=WinNetMon Direction=\"outbound\"\nhost=\"$host$\"\nProcessName=\"*$process$*\"\n| stats count as connections\n        earliest(_time) as first_seen latest(_time) as last_seen\n        values(RemoteAddress) as dest_ips values(RemotePort) as dest_ports\n        values(RemoteHostName) as remote_hosts values(UserName) as users\n        by host ProcessName\n| eval first_seen=strftime(first_seen,\"%Y-%m-%d %H:%M\"), last_seen=strftime(last_seen,\"%Y-%m-%d %H:%M\")\n| sort -connections"
         }
       ]
     },
