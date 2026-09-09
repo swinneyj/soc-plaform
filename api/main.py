@@ -1178,6 +1178,10 @@ NOTABLE_FIELD_ALIASES = [
     ("event_id", "event_id"),
     ("Event Hash", "event_hash"),
     ("event_hash", "event_hash"),
+    ("Rule ID", "rule_id"),
+    ("rule_id", "rule_id"),
+    ("Rule Name", "rule_name"),
+    ("rule_name", "rule_name"),
     ("Value", "value"),
 ]
 
@@ -1228,6 +1232,8 @@ NOTABLE_FIELD_LABELS = {
     "signature": "Signature",
     "event_id": "Event ID",
     "event_hash": "Event Hash",
+    "rule_id": "Rule ID",
+    "rule_name": "Rule Name",
 }
 
 EMBEDDED_FIELD_EXTRACTORS = [
@@ -1312,7 +1318,7 @@ def is_usable_primary_entity(key: str, value: str) -> bool:
 def parse_pasted_notable(raw_text: str) -> Dict[str, str]:
     """Extract common Splunk notable key/value pairs from pasted text."""
     matches = []
-    normalized = raw_text.replace("\r\n", "\n")
+    normalized = normalize_pasted_text(raw_text or "")
 
     for alias, canonical in sorted(NOTABLE_FIELD_ALIASES, key=lambda item: len(item[0]), reverse=True):
         # For certain aliases like User/Process, only treat them as field
@@ -1797,6 +1803,26 @@ def build_parse_assessment(fields: Dict[str, str], sanitized_text: str, history_
     }
 
 
+def normalize_pasted_text(raw_text: str) -> str:
+    """Normalize paste text so parsers always see real newlines.
+
+    Splunk table-cell copies and some exports often deliver the two-character
+    sequences ``\\n`` / ``\\r\\n`` instead of actual line breaks. Without this
+    step, line-oriented field parsing collapses and values keep trailing ``\\n``.
+    """
+    if not raw_text:
+        return ""
+    text = raw_text.replace("\r\n", "\n").replace("\r", "\n")
+    real_newlines = text.count("\n")
+    literal_markers = text.count("\\n")
+    # Expand escape sequences when the paste is clearly flattened
+    if literal_markers > 0 and (real_newlines <= 2 or literal_markers >= real_newlines):
+        text = text.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\t", "\t")
+    while "\\\\n" in text:
+        text = text.replace("\\\\n", "\n")
+    return text
+
+
 def split_pasted_notables(raw_text: str) -> List[str]:
     """Split a bulk paste that may contain multiple notables into segments.
 
@@ -1808,7 +1834,7 @@ def split_pasted_notables(raw_text: str) -> List[str]:
     if not raw_text or not raw_text.strip():
         return []
 
-    normalized = raw_text.replace("\r\n", "\n")
+    normalized = normalize_pasted_text(raw_text)
     lines = normalized.split("\n")
 
     # Primary heuristic: each card contains a standalone "Notable" line near the top.
@@ -1919,13 +1945,16 @@ def parse_structured_notable(raw_text: str) -> Dict[str, str]:
     pattern = re.compile(rf"^\s*({'|'.join(re.escape(label) for label in labels)})\s*:\s*(.*)$", re.IGNORECASE)
 
     parsed: Dict[str, str] = {}
-    for line in raw_text.replace("\r\n", "\n").split("\n"):
+    normalized = normalize_pasted_text(raw_text or "")
+    for line in normalized.split("\n"):
         match = pattern.match(line)
         if not match:
             continue
 
         alias = match.group(1).lower()
-        value = re.sub(r"\s+", " ", match.group(2)).strip()
+        # Strip residual escape junk and collapse internal whitespace
+        value = match.group(2).replace("\\n", " ").replace("\\t", " ")
+        value = re.sub(r"\s+", " ", value).strip()
         canonical = alias_map.get(alias)
         if canonical and value and canonical not in parsed:
             parsed[canonical] = value
@@ -1968,25 +1997,48 @@ def parse_notable_timestamp(value: str):
     return datetime.datetime.utcnow()
 
 
-def build_historical_dedup_key(fields: Dict[str, str], sanitized_text: str) -> Optional[str]:
-    """Build a stable key for deduplicating closed/historical pasted notables.
+def build_notable_dedup_key(fields: Dict[str, str], sanitized_text: str = "") -> Optional[str]:
+    """Build a stable key for deduplicating pasted notables (open or historical).
 
-    We rely on a combination of correlation search/title, notable time, and
-    host. This is intentionally conservative and only used for historical
-    (closed) notables, so a match strongly suggests the same incident has
-    already been stored. Sanitized text is *not* included so that repeated
-    pastes of the same IR export (with different tokenization) still dedup.
+    Preference order:
+      1. Splunk/ES rule_id (unique per notable instance, e.g. ...@@notable@@hash)
+      2. event_id / event_hash when present
+      3. Composite: correlation/title + time + host/dest + user
+
+    Sanitized text is intentionally excluded so re-pastes with different
+    tokenization still match.
     """
-    title = (fields.get("title") or "").strip()
-    corr = (fields.get("correlation_search") or "").strip()
+    if not fields:
+        return None
+
+    rule_id = (fields.get("rule_id") or "").strip()
+    if rule_id:
+        return f"rule_id:{rule_id}"
+
+    event_id = (fields.get("event_id") or "").strip()
+    if event_id:
+        return f"event_id:{event_id}"
+
+    event_hash = (fields.get("event_hash") or "").strip()
+    if event_hash:
+        return f"event_hash:{event_hash}"
+
+    title = (fields.get("title") or fields.get("rule_name") or "").strip()
+    corr = (fields.get("correlation_search") or fields.get("rule_name") or "").strip()
     time_val = (fields.get("time") or "").strip()
     host_val = (fields.get("host") or fields.get("destination") or "").strip()
+    user_val = (fields.get("user") or fields.get("username") or "").strip()
 
     anchor = corr or title
     if not anchor:
         return None
 
-    return "|".join([anchor, time_val, host_val]) or None
+    return "|".join([anchor, time_val, host_val, user_val]) or None
+
+
+# Backwards-compatible alias used by any older call sites
+def build_historical_dedup_key(fields: Dict[str, str], sanitized_text: str) -> Optional[str]:
+    return build_notable_dedup_key(fields, sanitized_text)
 
 
 def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dict[str, str], parsed_fields: Dict[str, str]) -> Dict[str, str]:
@@ -2869,7 +2921,7 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
-    raw_text = request.raw_text.strip()
+    raw_text = normalize_pasted_text(request.raw_text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=400, detail="No notable text was provided")
 
@@ -2885,36 +2937,33 @@ def paste_notable(request: PastedNotableRequest):
 
         events_info = []
         total_mapping_entries = 0
+        added_count = 0
+        skipped_count = 0
+        skipped_segments: List[str] = []
+        pending_events: List[Any] = []
 
-        # For closed/historical notables, avoid creating duplicate rows when the
-        # same Incident Review export is pasted multiple times. We build a map
-        # of existing historical events keyed by a composite of
-        # correlation_search/title, time, host, and sanitized text.
-        existing_historical: Dict[str, Any] = {}
-        if request.historical:
-            existing_events = db.query(SplunkEvent).filter(
-                SplunkEvent.sourcetype == "splunk:notable:pasted"
-            ).order_by(SplunkEvent.ingested_at.desc()).all()
+        # Always load existing pasted notables for dedup (open + historical).
+        # Prefer rule_id / event_id / event_hash; fall back to composite key.
+        existing_by_key: Dict[str, Any] = {}
+        existing_events = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).order_by(SplunkEvent.ingested_at.desc()).all()
 
-            for event in existing_events:
-                try:
-                    payload = json.loads(event.raw) if event.raw else {}
-                except Exception:
-                    continue
+        for event in existing_events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
 
-                if not payload.get("historical"):
-                    continue
-
-                fields = payload.get("raw_fields") or payload.get("fields", {}) or {}
-                sanitized_text_existing = payload.get("sanitized_text", "")
-                key = build_historical_dedup_key(fields, sanitized_text_existing)
-                if key and key not in existing_historical:
-                    existing_historical[key] = {
-                        "event": event,
-                        "payload": payload,
-                        "fields": fields,
-                        "artifact_paths": payload.get("artifact_paths") or {},
-                    }
+            fields = payload.get("raw_fields") or payload.get("fields", {}) or {}
+            key = build_notable_dedup_key(fields, payload.get("sanitized_text", ""))
+            if key and key not in existing_by_key:
+                existing_by_key[key] = {
+                    "event": event,
+                    "payload": payload,
+                    "fields": fields,
+                    "artifact_paths": payload.get("artifact_paths") or {},
+                }
 
         for index, segment_text in enumerate(segments):
             parsed_fields = parse_structured_notable(segment_text)
@@ -2956,9 +3005,11 @@ def paste_notable(request: PastedNotableRequest):
                 for key, value in parsed_sanitized_fallback.items():
                     if value and key not in sanitized_fields:
                         sanitized_fields[key] = value
-                # preserve original time if we parsed it before masking
+                # preserve original time / rule_id if we parsed them before masking
                 if parsed_fields.get("time"):
                     sanitized_fields["time"] = parsed_fields["time"]
+                if parsed_fields.get("rule_id") and not sanitized_fields.get("rule_id"):
+                    sanitized_fields["rule_id"] = parsed_fields["rule_id"]
                 sanitized_fields = normalize_notable_fields(sanitized_fields)
             else:
                 # no masking: keep parsed fields and structured text as-is
@@ -2969,59 +3020,31 @@ def paste_notable(request: PastedNotableRequest):
             sanitized_history = extract_notable_history(sanitized_text)
             parse_assessment = build_parse_assessment(raw_query_fields, sanitized_text, sanitized_history)
 
-            # Deduplicate closed/historical notables to avoid duplicate rows
-            # when the same incident is pasted multiple times.
+            # Dedup for both open and historical pastes.
             artifact_paths = None
             event = None
+            dedup_key = build_notable_dedup_key(sanitized_fields, sanitized_text)
+            # Also try raw (pre-redaction) fields so rule_id is never lost to tokens
+            if not dedup_key:
+                dedup_key = build_notable_dedup_key(raw_query_fields, sanitized_text)
+            existing = existing_by_key.get(dedup_key) if dedup_key else None
+            was_deduplicated = False
+            skip_reason = None
 
-            if request.historical:
-                key = build_historical_dedup_key(sanitized_fields, sanitized_text)
-                existing = existing_historical.get(key) if key else None
-                if existing:
-                    event = existing["event"]
-                    artifact_paths = existing.get("artifact_paths") or {}
-                else:
-                    artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
-                    payload = {
-                        "record_type": "splunk_notable_paste",
-                        "raw_fields": raw_query_fields,
-                        "fields": sanitized_fields,
-                        "sanitized_text": sanitized_text,
-                        "history": sanitized_history,
-                        "parse_assessment": parse_assessment,
-                        "saved_at": datetime.datetime.utcnow().isoformat(),
-                        "artifact_paths": artifact_paths,
-                        "historical": request.historical,
-                        "segment_index": index,
-                        "segment_count": len(segments),
-                    }
-
-                    source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
-                    host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
-                    timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
-
-                    event = SplunkEvent(
-                        sourcetype="splunk:notable:pasted",
-                        source=source,
-                        host=host,
-                        raw=json.dumps(payload),
-                        timestamp=timestamp,
-                    )
-                    db.add(event)
-                    db.commit()
-                    db.refresh(event)
-
-                    # Cache this new historical event for any additional
-                    # segments that may match within the same paste.
-                    if key:
-                        existing_historical[key] = {
-                            "event": event,
-                            "payload": payload,
-                            "fields": sanitized_fields,
-                            "artifact_paths": artifact_paths,
-                        }
+            if existing:
+                event = existing["event"]
+                artifact_paths = existing.get("artifact_paths") or {}
+                was_deduplicated = True
+                skipped_count += 1
+                seg_num = index + 1
+                existing_id = event.id if event else None
+                key_preview = (dedup_key or "")[:48]
+                skip_reason = f"already exists as event {existing_id} ({key_preview})"
+                skipped_segments.append(f"#{seg_num}")
             else:
-                artifact_paths = save_notable_artifacts(get_platform_root(), sanitized_text, mapping, sanitized_fields)
+                artifact_paths = save_notable_artifacts(
+                    get_platform_root(), sanitized_text, mapping, sanitized_fields
+                )
                 payload = {
                     "record_type": "splunk_notable_paste",
                     "raw_fields": raw_query_fields,
@@ -3034,10 +3057,20 @@ def paste_notable(request: PastedNotableRequest):
                     "historical": request.historical,
                     "segment_index": index,
                     "segment_count": len(segments),
+                    "dedup_key": dedup_key,
                 }
 
-                source = sanitized_fields.get("correlation_search") or sanitized_fields.get("title") or "Pasted Splunk notable"
-                host = sanitized_fields.get("host") or sanitized_fields.get("destination") or "unknown"
+                source = (
+                    sanitized_fields.get("correlation_search")
+                    or sanitized_fields.get("title")
+                    or sanitized_fields.get("rule_name")
+                    or "Pasted Splunk notable"
+                )
+                host = (
+                    sanitized_fields.get("host")
+                    or sanitized_fields.get("destination")
+                    or "unknown"
+                )
                 timestamp = parse_notable_timestamp(parsed_fields.get("time", ""))
 
                 event = SplunkEvent(
@@ -3048,32 +3081,81 @@ def paste_notable(request: PastedNotableRequest):
                     timestamp=timestamp,
                 )
                 db.add(event)
-                db.commit()
-                db.refresh(event)
+                pending_events.append(event)
+                added_count += 1
+
+                # Cache so later segments in the same paste also dedup.
+                # event.id is assigned on flush/commit; use a placeholder
+                # until the single batch commit below.
+                if dedup_key:
+                    existing_by_key[dedup_key] = {
+                        "event": event,
+                        "payload": payload,
+                        "fields": sanitized_fields,
+                        "artifact_paths": artifact_paths,
+                    }
 
             events_info.append({
-                "event_id": event.id if event else None,
+                "event_id": None,  # filled after batch commit
+                "event_ref": event,
                 "raw_fields": raw_query_fields,
                 "parsed_fields": sanitized_fields,
                 "parse_assessment": parse_assessment,
                 "artifact_paths": artifact_paths or {},
                 "mapping_entries": len(mapping),
-                "deduplicated": bool(request.historical and key and existing),
+                "deduplicated": was_deduplicated,
+                "skip_reason": skip_reason,
+                "segment_index": index + 1,
             })
             total_mapping_entries += len(mapping)
 
-        first_event = events_info[0]
+        # Single commit for the whole bulk paste (major speed win vs per-row commits)
+        if pending_events:
+            db.commit()
+            for event in pending_events:
+                try:
+                    db.refresh(event)
+                except Exception:
+                    pass
+
+        for info in events_info:
+            ref = info.pop("event_ref", None)
+            if ref is not None:
+                info["event_id"] = getattr(ref, "id", None)
+
+        first_event = events_info[0] if events_info else {}
+
+        # Human-readable summary, e.g.
+        # "Added 4 notables. Skipped #2 and #5 (already in database)."
+        if skipped_count and added_count:
+            message = (
+                f"Added {added_count} notable{'s' if added_count != 1 else ''}. "
+                f"Skipped {', '.join(skipped_segments)} "
+                f"(already in database)."
+            )
+        elif skipped_count and not added_count:
+            message = (
+                f"No new notables added. Skipped {', '.join(skipped_segments)} "
+                f"(already in database)."
+            )
+        elif added_count:
+            message = f"Added {added_count} notable{'s' if added_count != 1 else ''}."
+        else:
+            message = "No notables processed."
 
         return {
             "success": True,
             "segment_count": len(segments),
+            "added": added_count,
+            "skipped": skipped_count,
+            "message": message,
             "events": events_info,
             # Backwards-compatible single-event fields (use first segment)
-            "event_id": first_event["event_id"],
-            "raw_fields": first_event["raw_fields"],
-            "parsed_fields": first_event["parsed_fields"],
-            "parse_assessment": first_event["parse_assessment"],
-            "artifact_paths": first_event["artifact_paths"],
+            "event_id": first_event.get("event_id"),
+            "raw_fields": first_event.get("raw_fields"),
+            "parsed_fields": first_event.get("parsed_fields"),
+            "parse_assessment": first_event.get("parse_assessment"),
+            "artifact_paths": first_event.get("artifact_paths") or {},
             "mapping_entries": total_mapping_entries,
         }
     except HTTPException:
