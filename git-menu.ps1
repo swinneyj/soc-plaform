@@ -1270,6 +1270,16 @@ while ($true) {
 	Write-Host '  SOC GIT WORKFLOW MENU' -ForegroundColor Cyan
 	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
 	Show-Status
+<<<<<<< HEAD
+	Write-Host (("1. {0}" -f $startCodingLabel)) -ForegroundColor $MenuTextColor
+	Write-Host '2. Save and share this work branch' -ForegroundColor $MenuTextColor
+	Write-Host (("3. {0}" -f $openDemoLabel)) -ForegroundColor $MenuTextColor
+	Write-Host '4. Push saved work to staging (direct merge)' -ForegroundColor $MenuTextColor
+	Write-Host '5. Merge approved staging into main' -ForegroundColor $MenuTextColor
+	Write-Host '6. Branch help / cleanup' -ForegroundColor $MenuTextColor
+	Write-Host '7. Exit / return to intro' -ForegroundColor $MenuTextColor
+	Write-Host '=================================' -ForegroundColor $MenuHeaderColor
+=======
 	if ($hasUnmergedFiles) {
 		Write-Host ''
 		Write-Host 'Conflict detected: unresolved merge files are present.' -ForegroundColor Red
@@ -1287,12 +1297,21 @@ while ($true) {
 		Write-Host '5. Exit' -ForegroundColor DarkGray
 	}
 	Write-Host '+---------------------------------------+' -ForegroundColor Cyan
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 
 	$choice = if ($hasUnmergedFiles) { Read-Host 'Select an option (1-6)' } else { Read-Host 'Select an option (1-5)' }
 
 	switch ($choice) {
 		'1' { Invoke-StartCodingWorkflow }
 		'2' { Invoke-SaveShareWorkflow }
+<<<<<<< HEAD
+		'3' { Invoke-OpenDemoWorkflow }
+		'4' { Invoke-AddWorkToDemoWorkflow }
+		'5' { Invoke-FinalMergeWorkflow }
+		'6' { Show-ToolsMenu }
+			'7' { return }
+		default { Write-Warning 'Invalid selection. Please choose 1-7.' }
+=======
 		'3' { Show-DemoMenu }
 		'4' { Show-ToolsMenu }
 		'5' {
@@ -1316,5 +1335,6 @@ while ($true) {
 				Write-Warning 'Invalid selection. Please choose 1-5.'
 			}
 		}
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 	}
 }
