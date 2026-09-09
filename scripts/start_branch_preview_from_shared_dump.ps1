@@ -99,6 +99,13 @@ if (Test-Path $dumpPath) {
     Write-Warning "Shared dump file not found: $dumpPath. Starting branch preview with empty DB."
 }
 
+Write-Host "[*] Syncing shared logic from repo into branch preview DB..."
+& (Join-Path $RepoRoot "scripts\sync_shared_logic_to_db.ps1") -DatabaseUrl $env:DATABASE_URL
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "sync_shared_logic_to_db.ps1 failed for project $projectName"
+    exit $LASTEXITCODE
+}
+
 Write-Host "[*] Starting api-service for branch preview via docker compose..."
 docker compose -p $projectName up -d --build --force-recreate api-service
 if ($LASTEXITCODE -ne 0) {
