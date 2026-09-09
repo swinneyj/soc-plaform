@@ -29,6 +29,7 @@ tools_dir = os.path.join(os.path.dirname(__file__), '..', 'Tools')
 sys.path.insert(0, tools_dir)
 
 from core_lib.utils import get_platform_root, get_reports_dir, get_archive_dir, get_logs_dir
+from services.artifact_guard import validate_artifact_value
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -232,6 +233,55 @@ def _looks_like_spl_query(query_text: str) -> bool:
     return False
 
 
+def _safe_analysis_display(response_text: str) -> str:
+    """Hide raw model-written SPL; executable SPL is displayed only in validated cards."""
+
+    response_text = response_text or ""
+
+    section_start = re.search(
+        r"(?im)^#{1,6}\s*Supportive Query Recommendations(?:\s*\(Phase 2 SPL\))?\s*$",
+        response_text,
+    )
+
+    if not section_start:
+        return response_text
+
+    section_end = re.search(
+        r"(?im)^#{1,6}\s*Triage Verdict\s*$",
+        response_text[section_start.end():],
+    )
+
+    safe_section = (
+        "### Supportive Query Recommendations (Phase 2 SPL)\n\n"
+        "Use only the validated Phase 2 query cards below. "
+        "Raw model-generated SPL is intentionally not displayed here.\n\n"
+    )
+
+    if not section_end:
+        return response_text[:section_start.start()] + safe_section
+
+    end_index = section_start.end() + section_end.start()
+
+    return (
+        response_text[:section_start.start()]
+        + safe_section
+        + response_text[end_index:]
+    )
+
+def _strip_machine_control_blocks(display_text: str) -> str:
+    """Remove incomplete or complete model-only JSON blocks from analyst display."""
+    display_text = display_text or ""
+
+    # These blocks are parsed from the original response before display text is built.
+    # Small local models may be cut off before emitting an END marker, so remove from
+    # the start marker through the end of displayed content.
+    for marker in ("PHASE2_QUERIES_JSON_START", "DECISION_GATE_JSON_START"):
+        marker_index = display_text.find(marker)
+        if marker_index != -1:
+            display_text = display_text[:marker_index].rstrip()
+
+    return display_text
+
 def _filter_valid_phase2_queries(queries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     valid_queries: List[Dict[str, Any]] = []
     seen_signatures = set()
@@ -252,6 +302,19 @@ def _filter_valid_phase2_queries(queries: List[Dict[str, Any]]) -> List[Dict[str
 
 
 def _query_contains_unusable_entity_values(query_text: str) -> bool:
+    # Reject model templates that look syntactically like SPL but require an
+    # analyst to replace invented values before the query can run.
+    placeholder_pattern = re.compile(
+        r"(?i)(?:"
+        r"\byour_[a-z0-9_]+\b|"
+        r"<\s*(?:index|sourcetype|host|user|username|process|eventtype)[^>]*>|"
+        r"\[\s*(?:index|sourcetype|host|user|username|process|eventtype)[^\]]*\]|"
+        r"\b(?:index|sourcetype|source|host|user|username|eventtype)\s*=\s*(?:your_[a-z0-9_]+|<[^>]+>|\[[^\]]+\])"
+        r")"
+    )
+    if placeholder_pattern.search(query_text or ""):
+        return True
+
     entity_field_map = {
         "host": "host",
         "destination": "destination",
@@ -272,6 +335,89 @@ def _query_contains_unusable_entity_values(query_text: str) -> bool:
     return False
 
 
+def _build_no_results_replacement_queries(
+    fields: Dict[str, str],
+    rule_name: str = "",
+    rule_description: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Build deterministic replacement pivots after a saved query returns no
+    results. These intentionally change investigation scope rather than asking
+    the model to restate a failed host, user, or rule-history query.
+    """
+    fields = fields or {}
+
+    user = (fields.get("user") or fields.get("username") or "").strip()
+    detection_text = " ".join([
+        rule_name or "",
+        rule_description or "",
+        fields.get("process") or "",
+        fields.get("parent_process") or "",
+        fields.get("description") or "",
+    ]).lower()
+
+    linux_ssh_key_case = any(
+        token in detection_text
+        for token in ("linux", "ssh key", "ssh-key", "ssh-keygen", "authorized_keys")
+    )
+
+    queries: List[Dict[str, Any]] = []
+
+    if linux_ssh_key_case:
+        queries.append({
+            "title": "Broad Linux SSH-key activity",
+            "spl": (
+                'search index=* earliest=-24h latest=now '
+                '("ssh-keygen" OR "authorized_keys" OR "ssh-rsa" OR "ssh-ed25519") '
+                '| table _time host user sourcetype source process Image ParentImage CommandLine '
+                '| sort 0 _time'
+            ),
+            "description": (
+                "The prior pivot returned no results. Broaden to Linux SSH-key "
+                "indicators across available telemetry before narrowing again."
+            ),
+        })
+
+    if user and is_usable_primary_entity("user", user):
+        queries.append({
+            "title": "Account prevalence across hosts",
+            "spl": (
+                f'search index=* earliest=-7d latest=now '
+                f'(user="{user}" OR username="{user}" OR Account_Name="{user}") '
+                '| stats count values(host) as hosts values(sourcetype) as sourcetypes by user '
+                '| sort - count'
+            ),
+            "description": (
+                "Compare the account across hosts and data sources. This is a "
+                "prevalence pivot, not a repeat of the failed narrow time-window search."
+            ),
+        })
+
+    queries.append({
+        "title": "Recent endpoint activity by security signal",
+        "spl": (
+            'search index=* earliest=-24h latest=now '
+            '("ssh-keygen" OR "authorized_keys" OR "ssh-rsa" OR "ssh-ed25519") '
+            '| stats count values(host) as hosts values(user) as users '
+            'values(sourcetype) as sourcetypes'
+        ),
+        "description": (
+            "Establish whether the SSH-key indicators appear anywhere in recent "
+            "telemetry when the initial rule-history or entity pivot was not productive."
+        ),
+    })
+
+    seen = set()
+    deduplicated: List[Dict[str, Any]] = []
+    for query in queries:
+        signature = re.sub(r"\s+", " ", (query.get("spl") or "")).strip().lower()
+        if not signature or signature in seen:
+            continue
+        seen.add(signature)
+        deduplicated.append(query)
+
+    return deduplicated[:3]
+
 def _build_generic_phase2_queries_from_fields(
     fields: Dict[str, str],
     rule_name: str = "",
@@ -284,8 +430,34 @@ def _build_generic_phase2_queries_from_fields(
 
     host = (fields.get("host") or fields.get("destination") or "").strip()
     user = (fields.get("user") or fields.get("username") or "").strip()
-    process = (fields.get("process") or "").strip()
-    parent_process = (fields.get("parent_process") or "").strip()
+    process_candidate = (fields.get("process") or "").strip()
+    parent_process_candidate = (fields.get("parent_process") or "").strip()
+
+    process_check = validate_artifact_value("process", process_candidate)
+    parent_process_check = validate_artifact_value("parent_process", parent_process_candidate)
+
+    process = process_check["value"] if process_check["valid"] else ""
+    parent_process = parent_process_check["value"] if parent_process_check["valid"] else ""
+
+    correlation_search = (fields.get("correlation_search") or rule_name or "").strip()
+
+    platform_text = " ".join([
+        correlation_search,
+        fields.get("title") or "",
+        fields.get("description") or "",
+        fields.get("security_domain") or "",
+        process,
+        parent_process,
+    ]).lower()
+
+    is_linux_case = any(token in platform_text for token in (
+        "linux",
+        "bash",
+        "ssh-keygen",
+        "authorized_keys",
+        "/home/",
+        "/etc/",
+    ))
     correlation_search = (fields.get("correlation_search") or rule_name or "").strip()
     notable_time = (fields.get("time") or "").strip()
 
@@ -330,7 +502,7 @@ def _build_generic_phase2_queries_from_fields(
             "description": "Narrow on the user to decide whether this behavior is common administration or something anomalous across systems.",
         })
 
-    if process or parent_process:
+    if (process or parent_process) and not is_linux_case:
         clauses = []
         if parent_process:
             parent_escaped = parent_process.replace('"', '\\"')
@@ -1535,10 +1707,44 @@ def build_generic_enrichment_queries(fields: Dict[str, str]) -> List[Dict[str, s
     """Build a small, safe set of generic SPL queries with concrete values only."""
     queries: List[Dict[str, str]] = []
     correlation_search = (fields.get("correlation_search") or "").strip()
-    host = (fields.get("host") or "").strip()
-    user = (fields.get("user") or fields.get("username") or "").strip()
-    process = (fields.get("process") or "").strip()
-    parent_process = (fields.get("parent_process") or "").strip()
+
+    host_candidate = (fields.get("host") or "").strip()
+    user_candidate = (fields.get("user") or fields.get("username") or "").strip()
+
+    host_check = validate_artifact_value("host", host_candidate)
+    user_check = validate_artifact_value("user", user_candidate)
+
+    host = host_check["value"] if host_check["valid"] else ""
+    user = user_check["value"] if user_check["valid"] else ""
+
+    process_candidate = (fields.get("process") or "").strip()
+    parent_process_candidate = (fields.get("parent_process") or "").strip()
+
+    process_check = validate_artifact_value("process", process_candidate)
+    parent_process_check = validate_artifact_value("parent_process", parent_process_candidate)
+
+    process = process_check["value"] if process_check["valid"] else ""
+    parent_process = parent_process_check["value"] if parent_process_check["valid"] else ""
+
+    correlation_search = (fields.get("correlation_search") or "").strip()
+
+    platform_text = " ".join([
+        correlation_search,
+        fields.get("title") or "",
+        fields.get("description") or "",
+        fields.get("security_domain") or "",
+        process,
+        parent_process,
+    ]).lower()
+
+    is_linux_case = any(token in platform_text for token in (
+        "linux",
+        "bash",
+        "ssh-keygen",
+        "authorized_keys",
+        "/home/",
+        "/etc/",
+    ))
 
     if correlation_search:
         corr_escaped = correlation_search.replace('"', '\\"')
@@ -1564,7 +1770,7 @@ def build_generic_enrichment_queries(fields: Dict[str, str]) -> List[Dict[str, s
             "description": "Check what else the same user was doing around the alert window.",
         })
 
-    if process or parent_process:
+    if (process or parent_process) and not is_linux_case:
         clauses = []
         if parent_process:
             clauses.append(f'ParentImage="*\\\\{parent_process}"')
@@ -2380,7 +2586,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             query_text = (entry.query_text or "").strip()
             evidence_status = _normalize_evidence_status(entry.evidence_status or entry.finding_type or "neutral")
 
-            if not title or not (result_text or analyst_summary or query_text):
+            if not title or not (result_text or analyst_summary):
                 continue
 
             if source_system == "phase2_manual" and query_text and not _looks_like_spl_query(query_text):
@@ -2511,6 +2717,116 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+def build_event_details_context(event_details_text: str) -> Dict[str, Any]:
+    """
+    Convert a full Incident Review Event Details / detection SPL block into a
+    compact, deterministic detection-context summary for local-model prompts.
+
+    The original full Event Details text remains available to the operator;
+    this helper extracts only high-value investigation characteristics.
+    """
+    text = (event_details_text or "").strip()
+    if not text:
+        return {
+            "present": False,
+            "indexes": [],
+            "sourcetypes": [],
+            "direction": "",
+            "trigger_processes": [],
+            "excluded_processes": [],
+            "network_fields": [],
+            "sysmon_enrichment": False,
+            "allowlist_logic_present": False,
+            "decision_question": "",
+        }
+
+    def unique(values: List[str], limit: int = 12) -> List[str]:
+        seen = set()
+        result: List[str] = []
+        for value in values:
+            cleaned = (value or "").strip().strip('"').strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(cleaned)
+            if len(result) >= limit:
+                break
+        return result
+
+    indexes = unique(re.findall(r'\bindex\s*=\s*"?([A-Za-z0-9_.*-]+)"?', text, re.IGNORECASE))
+    sourcetypes = unique(re.findall(r'\bsourcetype\s*=\s*"?([A-Za-z0-9_:.*-]+)"?', text, re.IGNORECASE))
+
+    direction_match = re.search(r'\bDirection\s*=\s*"([^"]+)"', text, re.IGNORECASE)
+    direction = direction_match.group(1).strip() if direction_match else ""
+
+    # Keep positive trigger executables separate from NOT ProcessName clauses.
+    process_blocks = re.findall(
+        r'^\s*(?!NOT\s+)ProcessName\s+IN\s*\((.*?)\)',
+        text,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    excluded_blocks = re.findall(
+        r'^\s*NOT\s+ProcessName\s+IN\s*\((.*?)\)',
+        text,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+
+    def extract_executables(blocks: List[str]) -> List[str]:
+        values: List[str] = []
+        for block in blocks:
+            values.extend(
+                re.findall(
+                    r"""["']\*?([A-Za-z0-9_.-]+\.exe)\*?["']""",
+                    block,
+                    re.IGNORECASE,
+                )
+            )
+        return unique(values)
+
+    trigger_processes = extract_executables(process_blocks)
+    excluded_processes = extract_executables(excluded_blocks)
+
+    network_fields = []
+    for field_name in (
+        "RemoteAddress",
+        "RemotePort",
+        "RemoteHostName",
+        "remoteURL",
+        "LocalAddress",
+        "LocalPort",
+    ):
+        if re.search(rf'\b{re.escape(field_name)}\b', text, re.IGNORECASE):
+            network_fields.append(field_name)
+
+    sysmon_enrichment = bool(
+        re.search(r'\bSysmon\b|Microsoft-Windows-Sysmon|sysmon_cmdline|ParentImage', text, re.IGNORECASE)
+    )
+
+    allowlist_logic_present = bool(
+        re.search(r'\bNOT\s+(?:RemoteAddress|RemotePort|ProcessName)\b|\bcidrmatch\b|\ballowlist\b', text, re.IGNORECASE)
+    )
+
+    decision_question = (
+        "Determine whether the observed process-to-destination network activity "
+        "is authorized, expected, and consistent with normal endpoint behavior."
+    )
+
+    return {
+        "present": True,
+        "indexes": indexes,
+        "sourcetypes": sourcetypes,
+        "direction": direction,
+        "trigger_processes": trigger_processes,
+        "excluded_processes": excluded_processes,
+        "network_fields": network_fields,
+        "sysmon_enrichment": sysmon_enrichment,
+        "allowlist_logic_present": allowlist_logic_present,
+        "decision_question": decision_question,
+    }
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -3521,6 +3837,20 @@ def analyze_case(request: AnalyzeRequest):
         phase2_queries = _extract_phase2_queries(response_text)
         phase2_queries = _filter_valid_phase2_queries(phase2_queries)
 
+        # A saved no-result is a deterministic signal to change query purpose.
+        # On follow-up analysis, do not let the model repeat a narrow failed
+        # pivot or spend time on a fallback model call.
+        no_results_replacements: List[Dict[str, Any]] = []
+        if analysis_stage != "initial" and evidence_summary["counts"]["no_results"]:
+            replacement_fields = evidence_artifact_fields or source_notable_fields
+            no_results_replacements = _build_no_results_replacement_queries(
+                replacement_fields,
+                rule_name=case.rule_name,
+                rule_description=detection_rule.description if detection_rule else "",
+            )
+            if no_results_replacements:
+                phase2_queries = no_results_replacements
+
         if not phase2_queries and needs_more_queries:
             fallback_prompt_parts = [
                 "You are generating follow-up SOC investigation queries from an existing analysis.",
@@ -3601,6 +3931,9 @@ def analyze_case(request: AnalyzeRequest):
                 if len(phase2_queries) >= 3:
                     break
 
+        display_analysis = _safe_analysis_display(response_text)
+        display_analysis = _strip_machine_control_blocks(display_analysis)
+
         response_completed_at = time.perf_counter()
         timing = {
             "total_seconds": _round_timing_seconds(response_completed_at - request_started_at),
@@ -3621,7 +3954,7 @@ def analyze_case(request: AnalyzeRequest):
         return {
             "case_id": case_id,
             "model": model,
-            "analysis": response_text,
+            "analysis": display_analysis,
             "analysis_stage": analysis_stage,
             "used_prior_analysis": bool(prior_analysis),
             "detection_science_applied": bool(detection_rule),
