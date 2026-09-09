@@ -607,6 +607,7 @@ def _build_investigation_state(
 
         if title:
             evidence_timeline.append({
+                "id": item.get("id"),
                 "title": title,
                 "source_system": source_system,
                 "finding_type": finding_type,
@@ -753,6 +754,111 @@ def _upsert_investigation_state(db, model_cls, state_payload: Dict[str, Any]):
     return record
 
 
+def _load_supportive_results_for_case(db, case_id: str) -> List[Dict[str, Any]]:
+    """Load all saved evidence rows for a case as dicts for investigation-state rebuild."""
+    from db.models import SupportiveQueryResult  # type: ignore
+
+    rows = (
+        db.query(SupportiveQueryResult)
+        .filter(SupportiveQueryResult.case_id == case_id)
+        .order_by(SupportiveQueryResult.created_at.desc())
+        .all()
+    )
+    results: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            raw = json.loads(r.raw_result) if r.raw_result else None
+        except Exception:
+            raw = r.raw_result
+        results.append({
+            "id": r.id,
+            "query_title": r.query_title,
+            "source_system": r.source_system,
+            "raw_result": raw,
+            "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
+        })
+    return results
+
+
+def _rebuild_investigation_state_from_evidence(db, case, analysis_stage: str = "evidence_only"):
+    """Rebuild and upsert investigation loop state from current evidence rows."""
+    from db.models import InvestigationState  # type: ignore
+
+    supportive_results = _load_supportive_results_for_case(db, case.case_id)
+    previous_state_record = db.query(InvestigationState).filter(
+        InvestigationState.case_id == case.case_id
+    ).first()
+    previous_state_payload = (
+        _serialize_investigation_state_record(previous_state_record)
+        if previous_state_record
+        else {}
+    )
+    analysis_text = (case.analysis_summary or "").strip()
+    investigation_state = _build_investigation_state(
+        case,
+        analysis_text,
+        [],
+        supportive_results,
+        analysis_stage,
+        previous_state_payload,
+    )
+    _upsert_investigation_state(db, InvestigationState, investigation_state)
+    return investigation_state
+
+
+def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach SupportiveQueryResult ids onto timeline items so the UI can delete them.
+
+    Older investigation_state rows were saved before timeline items included
+    ``id``. Without this enrichment, the delete control stays hidden for those
+    cases until evidence is re-saved or state is rebuilt.
+    """
+    if not state_payload:
+        return state_payload
+
+    evidence_summary = state_payload.get("evidence_summary") or {}
+    timeline = evidence_summary.get("timeline") or []
+    if not timeline:
+        return state_payload
+
+    needs_ids = any(not item.get("id") for item in timeline if isinstance(item, dict))
+    if not needs_ids:
+        return state_payload
+
+    try:
+        from db.models import SupportiveQueryResult  # type: ignore
+
+        rows = (
+            db.query(SupportiveQueryResult)
+            .filter(SupportiveQueryResult.case_id == case_id)
+            .order_by(SupportiveQueryResult.created_at.desc())
+            .all()
+        )
+    except Exception:
+        return state_payload
+
+    # Map (title, source_system) -> list of ids (newest first)
+    by_key: Dict[tuple, list] = {}
+    for r in rows:
+        key = ((r.query_title or "").strip().lower(), (r.source_system or "").strip().lower())
+        by_key.setdefault(key, []).append(r.id)
+
+    for item in timeline:
+        if not isinstance(item, dict) or item.get("id"):
+            continue
+        key = (
+            (item.get("title") or "").strip().lower(),
+            (item.get("source_system") or "").strip().lower(),
+        )
+        ids = by_key.get(key) or []
+        if ids:
+            item["id"] = ids.pop(0)
+
+    evidence_summary["timeline"] = timeline
+    state_payload["evidence_summary"] = evidence_summary
+    return state_payload
+
+
 def _build_supportive_phase2_fallback(
     supportive_query_defs,
     prior_analysis: str,
@@ -814,6 +920,11 @@ class InvestigationEvidenceBatchPayload(BaseModel):
     entries: List[InvestigationEvidenceEntryPayload] = Field(default_factory=list)
     source_system: str = Field("phase2_manual", description="Source or stage label for this evidence batch")
     replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
+
+
+class InvestigationEvidenceIdsPayload(BaseModel):
+    """Payload for deleting one or more evidence rows by id."""
+    ids: List[int] = Field(default_factory=list, description="SupportiveQueryResult ids to delete for this case")
 
 
 class SupportiveQueryPayload(BaseModel):
@@ -2773,7 +2884,8 @@ def get_investigation_state(case_id: str):
 
         state = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
         if state:
-            return _serialize_investigation_state_record(state)
+            payload = _serialize_investigation_state_record(state)
+            return _enrich_timeline_with_evidence_ids(db, case_id, payload)
 
         return {
             "case_id": case.case_id,
@@ -2927,49 +3039,175 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
 
         # Rebuild investigation loop state from the latest evidence so the
         # Investigation Loop view reflects saved entries even when the
-        # analyst has not rerun AI analysis yet.
-        from typing import List, Dict  # local import to avoid circular issues
-
-        supportive_rows = db.query(SupportiveQueryResult).filter(
-            SupportiveQueryResult.case_id == case_id
-        ).order_by(SupportiveQueryResult.created_at.desc()).all()
-
-        supportive_results: List[Dict[str, Any]] = []
-        for r in supportive_rows:
-            try:
-                raw = json.loads(r.raw_result) if r.raw_result else None
-            except Exception:
-                raw = r.raw_result
-            supportive_results.append({
-                "query_title": r.query_title,
-                "source_system": r.source_system,
-                "raw_result": raw,
-                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
-            })
-
-        previous_state_record = db.query(InvestigationState).filter(
-            InvestigationState.case_id == case_id
-        ).first()
-        previous_state_payload = (
-            _serialize_investigation_state_record(previous_state_record)
-            if previous_state_record
-            else {}
+        # analyst has not rerun AI analysis yet. Timeline items include row
+        # ids so the UI can delete individual evidence entries.
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
         )
-
-        analysis_text = (case.analysis_summary or "").strip()
-        phase2_queries: List[Dict[str, Any]] = []
-        investigation_state = _build_investigation_state(
-            case,
-            analysis_text,
-            phase2_queries,
-            supportive_results,
-            "evidence_only",
-            previous_state_payload,
-        )
-        _upsert_investigation_state(db, InvestigationState, investigation_state)
 
         db.commit()
-        return {"success": True, "saved_count": saved_count, "source_system": source_system}
+        return {
+            "success": True,
+            "saved_count": saved_count,
+            "source_system": source_system,
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.delete("/api/db/triage/{case_id}/evidence/{evidence_id}", tags=["Database"])
+def delete_case_evidence(case_id: str, evidence_id: int):
+    """Delete a single saved investigation evidence item and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        row = db.query(SupportiveQueryResult).filter(
+            SupportiveQueryResult.id == evidence_id,
+            SupportiveQueryResult.case_id == case_id,
+        ).first()
+        if not row:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Evidence {evidence_id} not found for case {case_id}",
+            )
+
+        deleted_title = row.query_title
+        deleted_source = row.source_system
+        db.delete(row)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_id": evidence_id,
+            "query_title": deleted_title,
+            "source_system": deleted_source,
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence/{evidence_id}/delete", tags=["Database"])
+def delete_case_evidence_post(case_id: str, evidence_id: int):
+    """POST wrapper for environments that disallow DELETE from the browser UI."""
+    return delete_case_evidence(case_id=case_id, evidence_id=evidence_id)
+
+
+@app.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
+def batch_delete_case_evidence(case_id: str, payload: InvestigationEvidenceIdsPayload):
+    """Delete one or more saved investigation evidence items and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        ids = [int(i) for i in (payload.ids or []) if i is not None]
+        if not ids:
+            raise HTTPException(status_code=400, detail="No evidence ids provided")
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        rows = (
+            db.query(SupportiveQueryResult)
+            .filter(
+                SupportiveQueryResult.case_id == case_id,
+                SupportiveQueryResult.id.in_(ids),
+            )
+            .all()
+        )
+        deleted_ids = [r.id for r in rows]
+        for row in rows:
+            db.delete(row)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_ids": deleted_ids,
+            "deleted_count": len(deleted_ids),
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
+def delete_all_case_evidence(case_id: str):
+    """Delete all saved investigation evidence for a case and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        deleted_count = (
+            db.query(SupportiveQueryResult)
+            .filter(SupportiveQueryResult.case_id == case_id)
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_count": int(deleted_count or 0),
+            "investigation_state": investigation_state,
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -3784,9 +4022,11 @@ def analyze_case(request: AnalyzeRequest):
             except Exception:
                 raw = r.raw_result
             supportive_results.append({
+                "id": r.id,
                 "query_title": r.query_title,
                 "source_system": r.source_system,
                 "raw_result": raw,
+                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
             })
 
         # Load prior structured closure notes for this rule to give the model
