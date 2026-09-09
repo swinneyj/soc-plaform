@@ -98,7 +98,10 @@
             return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence', payload);
         },
         deleteEvidence(caseId, evidenceId) {
-            return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/' + evidenceId + '/delete');
+            // Prefer batch-delete so single deletes use the same POST route everywhere.
+            return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/batch-delete', {
+                ids: [Number(evidenceId)]
+            });
         },
         deleteEvidenceBatch(caseId, ids) {
             return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/batch-delete', { ids: ids || [] });

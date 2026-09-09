@@ -74,7 +74,10 @@ window.AnalysisTab = {
     ],
     data() {
         return {
-            selectedEvidenceIds: []
+            // Stable selection keys (id when known, otherwise title|source|created_at).
+            // Must not depend solely on item.id — older timeline rows have no id and
+            // would leave every checkbox permanently disabled.
+            selectedEvidenceKeys: []
         };
     },
     watch: {
@@ -82,11 +85,11 @@ window.AnalysisTab = {
             handler(timeline) {
                 const valid = new Set(
                     (timeline || [])
-                        .map((item) => item && item.id)
-                        .filter((id) => id !== null && id !== undefined)
-                        .map((id) => String(id))
+                        .filter((item) => item)
+                        .map((item) => this.evidenceItemKey(item))
+                        .filter(Boolean)
                 );
-                this.selectedEvidenceIds = (this.selectedEvidenceIds || []).filter((id) => valid.has(String(id)));
+                this.selectedEvidenceKeys = (this.selectedEvidenceKeys || []).filter((key) => valid.has(String(key)));
             },
             deep: true
         }
@@ -95,19 +98,22 @@ window.AnalysisTab = {
         evidenceTimelineItems() {
             return (this.investigationState && this.investigationState.evidence_summary && this.investigationState.evidence_summary.timeline) || [];
         },
-        selectableEvidenceIds() {
+        selectableEvidenceKeys() {
             return this.evidenceTimelineItems
-                .map((item) => item && item.id)
-                .filter((id) => id !== null && id !== undefined);
+                .map((item) => this.evidenceItemKey(item))
+                .filter(Boolean);
         },
         allEvidenceSelected() {
-            const ids = this.selectableEvidenceIds;
-            if (!ids.length) return false;
-            const selected = new Set((this.selectedEvidenceIds || []).map((id) => String(id)));
-            return ids.every((id) => selected.has(String(id)));
+            const keys = this.selectableEvidenceKeys;
+            if (!keys.length) return false;
+            const selected = new Set((this.selectedEvidenceKeys || []).map(String));
+            return keys.every((key) => selected.has(String(key)));
         },
         someEvidenceSelected() {
-            return (this.selectedEvidenceIds || []).length > 0;
+            return (this.selectedEvidenceKeys || []).length > 0;
+        },
+        selectedEvidenceCount() {
+            return (this.selectedEvidenceKeys || []).length;
         }
     },
     methods: {
@@ -177,36 +183,47 @@ window.AnalysisTab = {
             this.$emit('update-phase2-finding', { key: this.getPhase2Key(q), value });
         },
         evidenceItemKey(item) {
-            return item && item.id !== null && item.id !== undefined ? String(item.id) : '';
+            if (!item) return '';
+            if (item.id !== null && item.id !== undefined && item.id !== '') {
+                return 'id:' + String(item.id);
+            }
+            // Fallback for timeline rows that predate id enrichment
+            return 'row:'
+                + String(item.title || '').trim().toLowerCase()
+                + '|'
+                + String(item.source_system || '').trim().toLowerCase()
+                + '|'
+                + String(item.created_at || '');
         },
         isEvidenceSelected(item) {
             const key = this.evidenceItemKey(item);
             if (!key) return false;
-            return (this.selectedEvidenceIds || []).map(String).includes(key);
+            return (this.selectedEvidenceKeys || []).map(String).includes(key);
         },
         toggleEvidenceSelection(item, checked) {
             const key = this.evidenceItemKey(item);
             if (!key) return;
-            const current = (this.selectedEvidenceIds || []).map(String);
+            const current = (this.selectedEvidenceKeys || []).map(String);
             if (checked) {
                 if (!current.includes(key)) {
-                    this.selectedEvidenceIds = current.concat([key]);
+                    this.selectedEvidenceKeys = current.concat([key]);
                 }
             } else {
-                this.selectedEvidenceIds = current.filter((id) => id !== key);
+                this.selectedEvidenceKeys = current.filter((k) => k !== key);
             }
         },
         toggleSelectAllEvidence(checked) {
             if (checked) {
-                this.selectedEvidenceIds = this.selectableEvidenceIds.map(String);
+                this.selectedEvidenceKeys = this.selectableEvidenceKeys.map(String);
             } else {
-                this.selectedEvidenceIds = [];
+                this.selectedEvidenceKeys = [];
             }
         },
         emitDeleteSelectedEvidence() {
-            const ids = (this.selectedEvidenceIds || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id));
-            if (!ids.length) return;
-            this.$emit('delete-evidence-batch', ids);
+            const selected = this.evidenceTimelineItems.filter((item) => this.isEvidenceSelected(item));
+            if (!selected.length) return;
+            // Pass full items so the parent can resolve DB ids when timeline lacks them
+            this.$emit('delete-evidence-batch', selected);
         },
         emitDeleteAllEvidence() {
             this.$emit('delete-all-evidence');
@@ -401,7 +418,7 @@ window.AnalysisTab = {
                                 title="Delete selected evidence items"
                                 @click="emitDeleteSelectedEvidence"
                             >
-                                Delete selected ({{ selectedEvidenceIds.length }})
+                                Delete selected ({{ selectedEvidenceCount }})
                             </button>
                             <button
                                 type="button"
@@ -417,7 +434,7 @@ window.AnalysisTab = {
                     <div class="flex items-center gap-2 mt-2 mb-1 px-1">
                         <input
                             type="checkbox"
-                            class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                            class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
                             :checked="allEvidenceSelected"
                             :indeterminate.prop="someEvidenceSelected && !allEvidenceSelected"
                             @change="toggleSelectAllEvidence($event.target.checked)"
@@ -428,16 +445,16 @@ window.AnalysisTab = {
                     <div class="space-y-2 mt-1">
                         <div
                             v-for="item in evidenceTimelineItems"
-                            :key="'timeline:' + (item.id || item.title) + item.created_at + item.source_system"
+                            :key="'timeline:' + evidenceItemKey(item)"
                             class="bg-gray-800 border border-gray-700 rounded p-3"
                             :class="{ 'border-blue-600': isEvidenceSelected(item) }"
                         >
                             <div class="flex items-start gap-3">
                                 <input
                                     type="checkbox"
-                                    class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0"
+                                    class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0 cursor-pointer"
                                     :checked="isEvidenceSelected(item)"
-                                    :disabled="!item.id"
+                                    @click.stop
                                     @change="toggleEvidenceSelection(item, $event.target.checked)"
                                     title="Select this evidence item"
                                 />
