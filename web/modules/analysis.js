@@ -404,15 +404,124 @@
             try {
                 const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
                 this.investigationState = res.data;
+                await this._ensureTimelineEvidenceIds(caseId);
             } catch (err) {
                 console.error('Failed to load investigation state:', err);
                 this.investigationState = null;
             }
         },
 
+        /**
+         * Older investigation_state rows were saved before timeline items included
+         * SupportiveQueryResult ids. Attach ids from the evidence ledger so delete
+         * controls work without requiring the analyst to re-save evidence.
+         */
+        async _ensureTimelineEvidenceIds(caseId) {
+            const state = this.investigationState;
+            const timeline = state && state.evidence_summary && state.evidence_summary.timeline;
+            if (!Array.isArray(timeline) || !timeline.length || !caseId) {
+                return;
+            }
+            const missing = timeline.some((item) => item && (item.id === null || item.id === undefined || item.id === ''));
+            if (!missing) {
+                return;
+            }
+
+            try {
+                const res = await axios.get(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
+                );
+                const rows = Array.isArray(res.data) ? res.data : [];
+                // newest first to match timeline preference
+                const byKey = {};
+                for (const row of rows) {
+                    const key = String(row.query_title || '').trim().toLowerCase()
+                        + '||'
+                        + String(row.source_system || '').trim().toLowerCase();
+                    if (!byKey[key]) byKey[key] = [];
+                    byKey[key].push(row.id);
+                }
+                // also allow title-only match when source differs slightly
+                const byTitle = {};
+                for (const row of rows) {
+                    const t = String(row.query_title || '').trim().toLowerCase();
+                    if (!byTitle[t]) byTitle[t] = [];
+                    byTitle[t].push(row.id);
+                }
+
+                let changed = false;
+                for (const item of timeline) {
+                    if (!item || (item.id !== null && item.id !== undefined && item.id !== '')) {
+                        continue;
+                    }
+                    const key = String(item.title || '').trim().toLowerCase()
+                        + '||'
+                        + String(item.source_system || '').trim().toLowerCase();
+                    let ids = byKey[key];
+                    if (!ids || !ids.length) {
+                        ids = byTitle[String(item.title || '').trim().toLowerCase()];
+                    }
+                    if (ids && ids.length) {
+                        item.id = ids.shift();
+                        changed = true;
+                    }
+                }
+                if (changed) {
+                    // trigger Vue reactivity on nested timeline
+                    this.investigationState = {
+                        ...state,
+                        evidence_summary: {
+                            ...state.evidence_summary,
+                            timeline: timeline.slice()
+                        }
+                    };
+                }
+            } catch (err) {
+                console.warn('Could not attach evidence ids to timeline:', err);
+            }
+        },
+
+        async _resolveEvidenceId(item) {
+            if (!item) return null;
+            if (item.id !== null && item.id !== undefined && item.id !== '') {
+                return Number(item.id);
+            }
+            if (!this.analysisCaseId) return null;
+            await this._ensureTimelineEvidenceIds(this.analysisCaseId);
+            if (item.id !== null && item.id !== undefined && item.id !== '') {
+                return Number(item.id);
+            }
+            // Final attempt: match live evidence list by title
+            try {
+                const res = await axios.get(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence'
+                );
+                const rows = Array.isArray(res.data) ? res.data : [];
+                const title = String(item.title || '').trim().toLowerCase();
+                const source = String(item.source_system || '').trim().toLowerCase();
+                let match = rows.find((r) =>
+                    String(r.query_title || '').trim().toLowerCase() === title
+                    && String(r.source_system || '').trim().toLowerCase() === source
+                );
+                if (!match && title) {
+                    match = rows.find((r) =>
+                        String(r.query_title || '').trim().toLowerCase() === title
+                    );
+                }
+                if (match && match.id !== null && match.id !== undefined) {
+                    item.id = match.id;
+                    return Number(match.id);
+                }
+            } catch (err) {
+                console.warn('Evidence id resolve failed:', err);
+            }
+            return null;
+        },
+
         async _refreshEvidenceAfterDelete(investigationState) {
             if (investigationState) {
                 this.investigationState = investigationState;
+                await this._ensureTimelineEvidenceIds(this.analysisCaseId);
             } else {
                 await this.loadInvestigationState(this.analysisCaseId);
             }
@@ -421,52 +530,177 @@
             await this.loadSavedPhase2Evidence(this.analysisCaseId);
         },
 
+        _evidenceRowToSaveEntry(row) {
+            const raw = row && row.raw_result;
+            let parsed = raw;
+            if (typeof raw === 'string') {
+                try {
+                    parsed = JSON.parse(raw);
+                } catch (e) {
+                    parsed = { result_text: raw };
+                }
+            }
+            parsed = parsed || {};
+            return {
+                query_title: row.query_title || 'Evidence',
+                query_text: parsed.query_text || '',
+                result_text: parsed.result_text || '',
+                analyst_summary: parsed.analyst_summary || '',
+                finding_type: parsed.finding_type || 'neutral'
+            };
+        },
+
+        /**
+         * Compatibility delete path for hosts that do not yet expose
+         * /evidence/batch-delete or /evidence/delete-all (405/404).
+         * Uses the long-standing POST /evidence save endpoint with
+         * replace_existing to rewrite remaining rows per source_system.
+         */
+        async _deleteEvidenceViaRewrite(idsToRemove, deleteAll) {
+            const caseId = this.analysisCaseId;
+            const listRes = await axios.get(
+                this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
+            );
+            const rows = Array.isArray(listRes.data) ? listRes.data : [];
+            const removeSet = new Set((idsToRemove || []).map((id) => Number(id)));
+
+            const remaining = deleteAll
+                ? []
+                : rows.filter((row) => !removeSet.has(Number(row.id)));
+
+            // Group remaining by source_system; also clear source systems that
+            // had only deleted rows by including empty groups from original set.
+            const sources = new Set();
+            rows.forEach((row) => sources.add((row.source_system || 'supportive_manual').trim() || 'supportive_manual'));
+            if (!sources.size) {
+                sources.add('supportive_manual');
+            }
+
+            const bySource = {};
+            sources.forEach((src) => { bySource[src] = []; });
+            remaining.forEach((row) => {
+                const src = (row.source_system || 'supportive_manual').trim() || 'supportive_manual';
+                if (!bySource[src]) bySource[src] = [];
+                bySource[src].push(this._evidenceRowToSaveEntry(row));
+            });
+
+            let lastState = null;
+            for (const sourceSystem of Object.keys(bySource)) {
+                const res = await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence',
+                    {
+                        source_system: sourceSystem,
+                        replace_existing: true,
+                        entries: bySource[sourceSystem]
+                    }
+                );
+                if (res.data && res.data.investigation_state) {
+                    lastState = res.data.investigation_state;
+                }
+            }
+            return lastState;
+        },
+
+        async _postDeleteIds(ids) {
+            const uniqueIds = Array.from(new Set((ids || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id))));
+            if (!uniqueIds.length) {
+                throw new Error('No evidence ids to delete');
+            }
+            try {
+                return await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/batch-delete',
+                    { ids: uniqueIds }
+                );
+            } catch (err) {
+                const status = err.response && err.response.status;
+                if (status === 404 || status === 405) {
+                    // API build on this port is missing dedicated delete routes.
+                    const state = await this._deleteEvidenceViaRewrite(uniqueIds, false);
+                    return { data: { investigation_state: state, success: true, deleted_ids: uniqueIds } };
+                }
+                throw err;
+            }
+        },
+
+        async _postDeleteAll() {
+            try {
+                return await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/delete-all'
+                );
+            } catch (err) {
+                const status = err.response && err.response.status;
+                if (status === 404 || status === 405) {
+                    const state = await this._deleteEvidenceViaRewrite([], true);
+                    return { data: { investigation_state: state, success: true } };
+                }
+                throw err;
+            }
+        },
+
         async deleteEvidence(item) {
             if (!this.analysisCaseId || !item) {
                 return;
             }
-            if (!item.id) {
-                alert('This evidence item is missing an id. Click Save Evidence once to refresh the timeline, then try delete again.');
+            const evidenceId = await this._resolveEvidenceId(item);
+            if (evidenceId === null || Number.isNaN(evidenceId)) {
+                alert('Could not resolve a database id for this evidence item. Try Save Evidence, then reload the case.');
                 return;
             }
-            const title = item.title || ('evidence #' + item.id);
+            const title = item.title || ('evidence #' + evidenceId);
             if (!confirm('Delete evidence "' + title + '" from this case?')) {
                 return;
             }
             try {
-                const res = await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/' + item.id + '/delete'
-                );
+                const res = await this._postDeleteIds([evidenceId]);
                 await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
             } catch (err) {
                 console.error('Failed to delete evidence:', err);
-                alert('Failed to delete evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+                const detail = err.response && err.response.data && err.response.data.detail
+                    ? err.response.data.detail
+                    : err.message;
+                alert('Failed to delete evidence: ' + detail);
             }
         },
 
-        async deleteEvidenceBatch(ids) {
+        async deleteEvidenceBatch(itemsOrIds) {
             if (!this.analysisCaseId) {
                 return;
             }
-            const evidenceIds = (ids || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id));
-            if (!evidenceIds.length) {
+            const list = Array.isArray(itemsOrIds) ? itemsOrIds : [];
+            const evidenceIds = [];
+            for (const entry of list) {
+                if (entry && typeof entry === 'object') {
+                    const resolved = await this._resolveEvidenceId(entry);
+                    if (resolved !== null && !Number.isNaN(resolved)) {
+                        evidenceIds.push(resolved);
+                    }
+                } else {
+                    const n = Number(entry);
+                    if (!Number.isNaN(n)) {
+                        evidenceIds.push(n);
+                    }
+                }
+            }
+            const uniqueIds = Array.from(new Set(evidenceIds));
+            if (!uniqueIds.length) {
+                alert('Could not resolve database ids for the selected evidence. Try Save Evidence, then reload the case.');
                 return;
             }
-            const label = evidenceIds.length === 1
+            const label = uniqueIds.length === 1
                 ? '1 selected evidence item'
-                : (evidenceIds.length + ' selected evidence items');
+                : (uniqueIds.length + ' selected evidence items');
             if (!confirm('Delete ' + label + ' from this case?')) {
                 return;
             }
             try {
-                const res = await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/batch-delete',
-                    { ids: evidenceIds }
-                );
+                const res = await this._postDeleteIds(uniqueIds);
                 await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
             } catch (err) {
                 console.error('Failed to delete selected evidence:', err);
-                alert('Failed to delete selected evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+                const detail = err.response && err.response.data && err.response.data.detail
+                    ? err.response.data.detail
+                    : err.message;
+                alert('Failed to delete selected evidence: ' + detail);
             }
         },
 
@@ -478,13 +712,14 @@
                 return;
             }
             try {
-                const res = await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/delete-all'
-                );
+                const res = await this._postDeleteAll();
                 await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
             } catch (err) {
                 console.error('Failed to delete all evidence:', err);
-                alert('Failed to delete all evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+                const detail = err.response && err.response.data && err.response.data.detail
+                    ? err.response.data.detail
+                    : err.message;
+                alert('Failed to delete all evidence: ' + detail);
             }
         },
 
@@ -529,6 +764,7 @@
                     }
                     this.analysisResult = newResult;
                     this.investigationState = newResult.investigation_state || this.investigationState;
+                    await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                 }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
@@ -645,6 +881,7 @@
                     }
                     this.phase2Result = newResult;
                     this.investigationState = newResult.investigation_state || this.investigationState;
+                    await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                 }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
