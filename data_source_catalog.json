@@ -1,0 +1,54 @@
+{
+  "description": "Known Splunk indexes, sourcetypes, and field conventions used for enrichment. Ground Phase 2 / supportive SPL against this catalog so the model does not invent indexes or field names.",
+  "updated": "2026-09-09",
+  "sources": [
+    {
+      "index": "linux",
+      "sourcetypes": ["linux:ps", "linux:secure", "linux:audit", "linux:syslog"],
+      "common_fields": ["host", "user", "process", "cmdline", "parent_process", "file_path", "path", "file_name", "action", "src_ip"],
+      "use_for": ["Linux process activity", "SSH auth (sshd)", "file/audit events", "key and config changes"]
+    },
+    {
+      "index": "nix",
+      "sourcetypes": ["linux:ps", "linux:secure", "linux:audit"],
+      "common_fields": ["host", "user", "process", "cmdline", "parent_process", "file_path", "file_name", "action"],
+      "use_for": ["Alternate Linux endpoint index used in some environments"]
+    },
+    {
+      "index": "endpoint",
+      "sourcetypes": ["*"],
+      "common_fields": ["host", "user", "process", "file_path", "file_name", "action"],
+      "use_for": ["Cross-platform endpoint detections including file activity under .ssh"]
+    },
+    {
+      "index": "network",
+      "sourcetypes": ["*"],
+      "common_fields": ["host", "user", "process", "dest_ip", "dest_hostname", "dest_port", "src_ip"],
+      "use_for": ["Egress and connection context after persistence activity"]
+    },
+    {
+      "index": "Windows",
+      "sourcetypes": ["XmlWinEventLog", "WinNetMon", "WinEventLog:Security"],
+      "common_fields": ["host", "User", "Image", "CommandLine", "ParentImage", "RemoteAddress", "RemotePort"],
+      "use_for": ["Windows process lineage and network for LotL / PowerShell rules"]
+    },
+    {
+      "index": "wineventlog",
+      "sourcetypes": ["WinEventLog:Security"],
+      "common_fields": ["host", "user", "EventCode", "Logon_Type", "src_ip"],
+      "use_for": ["Windows authentication and logon analysis"]
+    },
+    {
+      "index": "f5_bigip",
+      "sourcetypes": ["f5:bigip:ltm:ssl:error"],
+      "common_fields": ["src_ip", "dest_ip", "src_port", "dest_port"],
+      "use_for": ["F5 TLS handshake failures"]
+    }
+  ],
+  "placeholder_conventions": {
+    "host": "Primary affected host (maps from host / destination / destination_ip)",
+    "user": "Account associated with the activity (maps from user / username)",
+    "process": "Process or binary name",
+    "destination": "Destination host or IP when distinct from host"
+  }
+}

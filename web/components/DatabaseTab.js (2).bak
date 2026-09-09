@@ -154,7 +154,7 @@ window.DatabaseTab = {
                 <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
                     <div>
                         <h3 class="text-xl font-bold text-blue-400">Paste Splunk Notable</h3>
-                        <p class="text-sm text-gray-400">Paste Incident Review card text <span class="text-gray-500">or</span> multi-notable export from <code class="text-xs text-amber-200/80">| incident_review</code>. Duplicates are skipped by Rule ID (same notable will not be added twice).</p>
+                        <p class="text-sm text-gray-400">Paste Incident Review notable text here. The platform will sanitize it with the existing tokenizer and store the sanitized notable in the database.</p>
                     </div>
                     <textarea
                         :value="notablePasteText"
@@ -183,26 +183,20 @@ window.DatabaseTab = {
                             class="form-checkbox h-3 w-3 text-amber-500 bg-gray-900 border-gray-600 rounded" />
                         <span>Mark as closed historical notable</span>
                     </label>
-                    <div class="flex items-center justify-between gap-3">
-                        <div v-if="notablePasteResult" class="text-xs space-y-0.5 min-w-0">
-                            <p
-                                class="font-medium"
-                                :class="(notablePasteResult.skipped || 0) > 0 && !(notablePasteResult.added) ? 'text-amber-300' : (notablePasteResult.skipped || 0) > 0 ? 'text-amber-200' : 'text-green-300'"
-                            >
-                                {{ notablePasteResult.message || ('Saved ' + (notablePasteResult.segment_count || 1) + ' notable(s).') }}
-                            </p>
-                            <p class="text-gray-500 truncate">
-                                <span v-if="notablePasteResult.added != null">Added {{ notablePasteResult.added }}</span>
-                                <span v-if="notablePasteResult.skipped != null"> · Skipped {{ notablePasteResult.skipped }}</span>
-                                <span v-if="notablePasteResult.segment_count"> · {{ notablePasteResult.segment_count }} segment(s)</span>
-                                <span v-if="notablePasteResult.mapping_entries"> · {{ notablePasteResult.mapping_entries }} token mappings</span>
-                            </p>
-                        </div>
+                    <div class="flex items-center justify-between">
+                        <p v-if="notablePasteResult" class="text-xs text-gray-400">
+                            <span v-if="(notablePasteResult.segment_count || 1) === 1">
+                                Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
+                            </span>
+                            <span v-else>
+                                Saved {{ notablePasteResult.segment_count }} notables (first event {{ notablePasteResult.event_id }}) with {{ notablePasteResult.mapping_entries }} total token mappings.
+                            </span>
+                        </p>
                         <p v-else class="text-xs text-gray-500">Redaction stays local-first: sanitized text goes to the DB, mapping stays in Active_Workspace.</p>
                         <button
                             @click="$emit('save-pasted-notable')"
                             :disabled="notablePasteSaving || !(notablePasteText || '').trim()"
-                            class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition flex-shrink-0">
+                            class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
                             {{ notablePasteSaving ? 'Saving...' : 'Save Pasted Notable' }}
                         </button>
                     </div>
