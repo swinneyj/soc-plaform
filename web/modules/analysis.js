@@ -410,6 +410,17 @@
             }
         },
 
+        async _refreshEvidenceAfterDelete(investigationState) {
+            if (investigationState) {
+                this.investigationState = investigationState;
+            } else {
+                await this.loadInvestigationState(this.analysisCaseId);
+            }
+            await this.loadSavedSupportiveEvidence(this.analysisCaseId);
+            await this.loadSavedEnrichmentEvidence(this.analysisCaseId);
+            await this.loadSavedPhase2Evidence(this.analysisCaseId);
+        },
+
         async deleteEvidence(item) {
             if (!this.analysisCaseId || !item) {
                 return;
@@ -426,17 +437,54 @@
                 const res = await axios.post(
                     this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/' + item.id + '/delete'
                 );
-                if (res.data && res.data.investigation_state) {
-                    this.investigationState = res.data.investigation_state;
-                } else {
-                    await this.loadInvestigationState(this.analysisCaseId);
-                }
-                await this.loadSavedSupportiveEvidence(this.analysisCaseId);
-                await this.loadSavedEnrichmentEvidence(this.analysisCaseId);
-                await this.loadSavedPhase2Evidence(this.analysisCaseId);
+                await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
             } catch (err) {
                 console.error('Failed to delete evidence:', err);
                 alert('Failed to delete evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+            }
+        },
+
+        async deleteEvidenceBatch(ids) {
+            if (!this.analysisCaseId) {
+                return;
+            }
+            const evidenceIds = (ids || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+            if (!evidenceIds.length) {
+                return;
+            }
+            const label = evidenceIds.length === 1
+                ? '1 selected evidence item'
+                : (evidenceIds.length + ' selected evidence items');
+            if (!confirm('Delete ' + label + ' from this case?')) {
+                return;
+            }
+            try {
+                const res = await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/batch-delete',
+                    { ids: evidenceIds }
+                );
+                await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
+            } catch (err) {
+                console.error('Failed to delete selected evidence:', err);
+                alert('Failed to delete selected evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+            }
+        },
+
+        async deleteAllEvidence() {
+            if (!this.analysisCaseId) {
+                return;
+            }
+            if (!confirm('Delete ALL evidence for case ' + this.analysisCaseId + '? This cannot be undone.')) {
+                return;
+            }
+            try {
+                const res = await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/delete-all'
+                );
+                await this._refreshEvidenceAfterDelete(res.data && res.data.investigation_state);
+            } catch (err) {
+                console.error('Failed to delete all evidence:', err);
+                alert('Failed to delete all evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
             }
         },
 

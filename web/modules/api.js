@@ -100,6 +100,12 @@
         deleteEvidence(caseId, evidenceId) {
             return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/' + evidenceId + '/delete');
         },
+        deleteEvidenceBatch(caseId, ids) {
+            return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/batch-delete', { ids: ids || [] });
+        },
+        deleteAllEvidence(caseId) {
+            return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/delete-all');
+        },
         batchDeleteTriage(payload) {
             return post('/db/triage/batch-delete', payload);
         },

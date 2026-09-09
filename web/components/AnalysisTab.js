@@ -68,8 +68,48 @@ window.AnalysisTab = {
         'update-enrichment-finding',
         'update-phase2-manual',
         'update-phase2-finding',
-        'delete-evidence'
+        'delete-evidence',
+        'delete-evidence-batch',
+        'delete-all-evidence'
     ],
+    data() {
+        return {
+            selectedEvidenceIds: []
+        };
+    },
+    watch: {
+        'investigationState.evidence_summary.timeline': {
+            handler(timeline) {
+                const valid = new Set(
+                    (timeline || [])
+                        .map((item) => item && item.id)
+                        .filter((id) => id !== null && id !== undefined)
+                        .map((id) => String(id))
+                );
+                this.selectedEvidenceIds = (this.selectedEvidenceIds || []).filter((id) => valid.has(String(id)));
+            },
+            deep: true
+        }
+    },
+    computed: {
+        evidenceTimelineItems() {
+            return (this.investigationState && this.investigationState.evidence_summary && this.investigationState.evidence_summary.timeline) || [];
+        },
+        selectableEvidenceIds() {
+            return this.evidenceTimelineItems
+                .map((item) => item && item.id)
+                .filter((id) => id !== null && id !== undefined);
+        },
+        allEvidenceSelected() {
+            const ids = this.selectableEvidenceIds;
+            if (!ids.length) return false;
+            const selected = new Set((this.selectedEvidenceIds || []).map((id) => String(id)));
+            return ids.every((id) => selected.has(String(id)));
+        },
+        someEvidenceSelected() {
+            return (this.selectedEvidenceIds || []).length > 0;
+        }
+    },
     methods: {
         // Prefer parent-provided helpers; fall back to window utils if present
         getSupportiveKey(q) {
@@ -135,6 +175,41 @@ window.AnalysisTab = {
         },
         emitPhase2Finding(q, value) {
             this.$emit('update-phase2-finding', { key: this.getPhase2Key(q), value });
+        },
+        evidenceItemKey(item) {
+            return item && item.id !== null && item.id !== undefined ? String(item.id) : '';
+        },
+        isEvidenceSelected(item) {
+            const key = this.evidenceItemKey(item);
+            if (!key) return false;
+            return (this.selectedEvidenceIds || []).map(String).includes(key);
+        },
+        toggleEvidenceSelection(item, checked) {
+            const key = this.evidenceItemKey(item);
+            if (!key) return;
+            const current = (this.selectedEvidenceIds || []).map(String);
+            if (checked) {
+                if (!current.includes(key)) {
+                    this.selectedEvidenceIds = current.concat([key]);
+                }
+            } else {
+                this.selectedEvidenceIds = current.filter((id) => id !== key);
+            }
+        },
+        toggleSelectAllEvidence(checked) {
+            if (checked) {
+                this.selectedEvidenceIds = this.selectableEvidenceIds.map(String);
+            } else {
+                this.selectedEvidenceIds = [];
+            }
+        },
+        emitDeleteSelectedEvidence() {
+            const ids = (this.selectedEvidenceIds || []).map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+            if (!ids.length) return;
+            this.$emit('delete-evidence-batch', ids);
+        },
+        emitDeleteAllEvidence() {
+            this.$emit('delete-all-evidence');
         }
     },
     template: `
@@ -314,40 +389,83 @@ window.AnalysisTab = {
                 </ul>
             </div>
 
-            <div v-if="investigationState.evidence_summary?.timeline && investigationState.evidence_summary.timeline.length">
+            <div v-if="evidenceTimelineItems.length">
                 <details class="mt-2" open>
-                    <summary class="text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer flex items-center justify-between">
+                    <summary class="text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer flex items-center justify-between gap-2">
                         <span>Evidence Timeline</span>
-                        <span class="text-[10px] text-gray-400">{{ investigationState.evidence_summary.timeline.length }} item(s)</span>
-                    </summary>
-                    <div class="space-y-2 mt-2">
-                        <div
-                            v-for="item in investigationState.evidence_summary.timeline"
-                            :key="'timeline:' + (item.id || item.title) + item.created_at + item.source_system"
-                            class="bg-gray-800 border border-gray-700 rounded p-3 relative"
-                        >
-                            <div class="flex items-start justify-between gap-3">
-                                <div class="min-w-0 flex-1 pr-6">
-                                    <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
-                                    <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
-                                </div>
-                                <div class="flex flex-col items-end gap-1 flex-shrink-0">
-                                    <div class="text-right text-[11px] text-gray-500">
-                                        <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                        <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
-                                    </div>
-                                </div>
-                            </div>
+                        <span class="flex items-center gap-2 flex-shrink-0" @click.stop>
+                            <button
+                                v-if="someEvidenceSelected"
+                                type="button"
+                                class="text-[10px] px-2 py-0.5 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100"
+                                title="Delete selected evidence items"
+                                @click="emitDeleteSelectedEvidence"
+                            >
+                                Delete selected ({{ selectedEvidenceIds.length }})
+                            </button>
                             <button
                                 type="button"
-                                class="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-transparent hover:border-red-500 text-xs font-bold leading-none"
-                                title="Delete this evidence item"
-                                @click.stop="$emit('delete-evidence', item)"
+                                class="text-[10px] px-2 py-0.5 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200"
+                                title="Delete all evidence for this case"
+                                @click="emitDeleteAllEvidence"
                             >
-                                ×
+                                Delete all
                             </button>
-                            <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
-                            <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
+                            <span class="text-[10px] text-gray-400">{{ evidenceTimelineItems.length }} item(s)</span>
+                        </span>
+                    </summary>
+                    <div class="flex items-center gap-2 mt-2 mb-1 px-1">
+                        <input
+                            type="checkbox"
+                            class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                            :checked="allEvidenceSelected"
+                            :indeterminate.prop="someEvidenceSelected && !allEvidenceSelected"
+                            @change="toggleSelectAllEvidence($event.target.checked)"
+                            title="Select all visible evidence"
+                        />
+                        <span class="text-[11px] text-gray-500">Select all</span>
+                    </div>
+                    <div class="space-y-2 mt-1">
+                        <div
+                            v-for="item in evidenceTimelineItems"
+                            :key="'timeline:' + (item.id || item.title) + item.created_at + item.source_system"
+                            class="bg-gray-800 border border-gray-700 rounded p-3"
+                            :class="{ 'border-blue-600': isEvidenceSelected(item) }"
+                        >
+                            <div class="flex items-start gap-3">
+                                <input
+                                    type="checkbox"
+                                    class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0"
+                                    :checked="isEvidenceSelected(item)"
+                                    :disabled="!item.id"
+                                    @change="toggleEvidenceSelection(item, $event.target.checked)"
+                                    title="Select this evidence item"
+                                />
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="min-w-0">
+                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
+                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
+                                        </div>
+                                        <div class="flex items-start gap-2 flex-shrink-0">
+                                            <div class="text-right text-[11px] text-gray-500">
+                                                <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
+                                                <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold leading-none flex-shrink-0"
+                                                title="Delete this evidence item"
+                                                @click.stop="$emit('delete-evidence', item)"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
+                                    </div>
+                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
+                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </details>

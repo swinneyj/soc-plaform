@@ -152,6 +152,8 @@
                 @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
                 @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
                 @delete-evidence="deleteEvidence"
+                @delete-evidence-batch="deleteEvidenceBatch"
+                @delete-all-evidence="deleteAllEvidence"
             ></analysis-tab>
 
             <!-- Closure -->

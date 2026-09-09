@@ -922,6 +922,11 @@ class InvestigationEvidenceBatchPayload(BaseModel):
     replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
 
 
+class InvestigationEvidenceIdsPayload(BaseModel):
+    """Payload for deleting one or more evidence rows by id."""
+    ids: List[int] = Field(default_factory=list, description="SupportiveQueryResult ids to delete for this case")
+
+
 class SupportiveQueryPayload(BaseModel):
     """Payload for creating/updating supportive SPL queries.
 
@@ -3118,6 +3123,103 @@ def delete_case_evidence(case_id: str, evidence_id: int):
 def delete_case_evidence_post(case_id: str, evidence_id: int):
     """POST wrapper for environments that disallow DELETE from the browser UI."""
     return delete_case_evidence(case_id=case_id, evidence_id=evidence_id)
+
+
+@app.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
+def batch_delete_case_evidence(case_id: str, payload: InvestigationEvidenceIdsPayload):
+    """Delete one or more saved investigation evidence items and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        ids = [int(i) for i in (payload.ids or []) if i is not None]
+        if not ids:
+            raise HTTPException(status_code=400, detail="No evidence ids provided")
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        rows = (
+            db.query(SupportiveQueryResult)
+            .filter(
+                SupportiveQueryResult.case_id == case_id,
+                SupportiveQueryResult.id.in_(ids),
+            )
+            .all()
+        )
+        deleted_ids = [r.id for r in rows]
+        for row in rows:
+            db.delete(row)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_ids": deleted_ids,
+            "deleted_count": len(deleted_ids),
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
+def delete_all_case_evidence(case_id: str):
+    """Delete all saved investigation evidence for a case and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        deleted_count = (
+            db.query(SupportiveQueryResult)
+            .filter(SupportiveQueryResult.case_id == case_id)
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_count": int(deleted_count or 0),
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
