@@ -97,6 +97,9 @@
         saveEvidence(caseId, payload) {
             return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence', payload);
         },
+        deleteEvidence(caseId, evidenceId) {
+            return post('/db/triage/' + encodeURIComponent(caseId) + '/evidence/' + evidenceId + '/delete');
+        },
         batchDeleteTriage(payload) {
             return post('/db/triage/batch-delete', payload);
         },

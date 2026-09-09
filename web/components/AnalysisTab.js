@@ -67,7 +67,8 @@ window.AnalysisTab = {
         'update-enrichment-manual',
         'update-enrichment-finding',
         'update-phase2-manual',
-        'update-phase2-finding'
+        'update-phase2-finding',
+        'delete-evidence'
     ],
     methods: {
         // Prefer parent-provided helpers; fall back to window utils if present
@@ -314,7 +315,7 @@ window.AnalysisTab = {
             </div>
 
             <div v-if="investigationState.evidence_summary?.timeline && investigationState.evidence_summary.timeline.length">
-                <details class="mt-2">
+                <details class="mt-2" open>
                     <summary class="text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer flex items-center justify-between">
                         <span>Evidence Timeline</span>
                         <span class="text-[10px] text-gray-400">{{ investigationState.evidence_summary.timeline.length }} item(s)</span>
@@ -322,19 +323,29 @@ window.AnalysisTab = {
                     <div class="space-y-2 mt-2">
                         <div
                             v-for="item in investigationState.evidence_summary.timeline"
-                            :key="'timeline:' + item.title + item.created_at + item.source_system"
-                            class="bg-gray-800 border border-gray-700 rounded p-3"
+                            :key="'timeline:' + (item.id || item.title) + item.created_at + item.source_system"
+                            class="bg-gray-800 border border-gray-700 rounded p-3 relative"
                         >
                             <div class="flex items-start justify-between gap-3">
-                                <div>
+                                <div class="min-w-0 flex-1 pr-6">
                                     <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
                                     <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
                                 </div>
-                                <div class="text-right text-[11px] text-gray-500">
-                                    <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                    <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
+                                <div class="flex flex-col items-end gap-1 flex-shrink-0">
+                                    <div class="text-right text-[11px] text-gray-500">
+                                        <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
+                                        <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
+                                    </div>
                                 </div>
                             </div>
+                            <button
+                                type="button"
+                                class="absolute top-2 right-2 w-5 h-5 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-transparent hover:border-red-500 text-xs font-bold leading-none"
+                                title="Delete this evidence item"
+                                @click.stop="$emit('delete-evidence', item)"
+                            >
+                                ×
+                            </button>
                             <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
                             <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
                         </div>

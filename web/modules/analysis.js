@@ -410,6 +410,36 @@
             }
         },
 
+        async deleteEvidence(item) {
+            if (!this.analysisCaseId || !item) {
+                return;
+            }
+            if (!item.id) {
+                alert('This evidence item is missing an id. Click Save Evidence once to refresh the timeline, then try delete again.');
+                return;
+            }
+            const title = item.title || ('evidence #' + item.id);
+            if (!confirm('Delete evidence "' + title + '" from this case?')) {
+                return;
+            }
+            try {
+                const res = await axios.post(
+                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/' + item.id + '/delete'
+                );
+                if (res.data && res.data.investigation_state) {
+                    this.investigationState = res.data.investigation_state;
+                } else {
+                    await this.loadInvestigationState(this.analysisCaseId);
+                }
+                await this.loadSavedSupportiveEvidence(this.analysisCaseId);
+                await this.loadSavedEnrichmentEvidence(this.analysisCaseId);
+                await this.loadSavedPhase2Evidence(this.analysisCaseId);
+            } catch (err) {
+                console.error('Failed to delete evidence:', err);
+                alert('Failed to delete evidence: ' + (err.response && err.response.data && err.response.data.detail ? err.response.data.detail : err.message));
+            }
+        },
+
         async runAnalysis() {
             if (!this.analysisCaseId || !this.analysisModel) {
                 alert('Please select a case ID and model');
