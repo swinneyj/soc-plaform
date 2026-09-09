@@ -52,31 +52,29 @@
       "index": "Windows",
       "sourcetypes": [
         "WinNetMon",
-        "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
-        "WinEventLog:Microsoft-Windows-Sysmon/Operational",
         "XmlWinEventLog",
-        "WinEventLog:Security"
+        "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
+        "WinEventLog:Microsoft-Windows-Sysmon/Operational"
       ],
       "common_fields": [
         "host",
-        "UserName",
+        "Computer",
         "User",
+        "UserName",
         "ProcessName",
         "Image",
         "CommandLine",
         "ParentImage",
         "RemoteAddress",
         "RemotePort",
-        "LocalAddress",
-        "LocalPort",
-        "RemoteHostName",
-        "Direction"
+        "Direction",
+        "EventCode"
       ],
       "use_for": [
         "LotL outbound (WinNetMon + Sysmon join)",
         "Windows process lineage and network connects"
       ],
-      "notes": "Confirmed from lotl_outbound_connection correlation search: index=Windows sourcetype=WinNetMon Direction=outbound joined to Sysmon Operational."
+      "notes": "LotL: WinNetMon Direction=outbound primary. Sysmon often lands as sourcetype=XmlWinEventLog with EventCode 1/3 (not only the long Operational sourcetype). host may be UPPERCASE short name; Computer may be FQDN \u2014 use case-insensitive match on host/Computer."
     },
     {
       "index": "wineventlog",

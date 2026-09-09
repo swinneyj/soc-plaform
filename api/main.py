@@ -159,10 +159,86 @@ def _looks_like_spl_query(query_text: str) -> bool:
     return any(marker in query for marker in spl_markers)
 
 
+def _already_run_supportive_titles(supportive_results=None) -> set:
+    """Titles that already have saved investigation evidence for this case."""
+    titles = set()
+    for item in supportive_results or []:
+        title = (item.get("query_title") or "").strip()
+        if not title:
+            continue
+        raw = item.get("raw_result")
+        has_result = False
+        if isinstance(raw, dict):
+            has_result = bool(
+                (raw.get("result_text") or "").strip()
+                or (raw.get("analyst_summary") or "").strip()
+            )
+        elif raw:
+            has_result = True
+        if has_result:
+            titles.add(_normalize_phase2_text(title))
+    return titles
+
+
+def _load_data_source_catalog() -> Dict[str, Any]:
+    """Load optional data_source_catalog.json from platform root for prompt grounding."""
+    candidates = [
+        os.path.join(get_platform_root(), "data_source_catalog.json"),
+        os.path.join(os.path.dirname(get_platform_root()), "data_source_catalog.json"),
+    ]
+    for path in candidates:
+        try:
+            if os.path.isfile(path):
+                with open(path, "r", encoding="utf-8") as fh:
+                    data = json.load(fh)
+                if isinstance(data, dict):
+                    return data
+        except Exception:
+            continue
+    return {}
+
+
+def _format_catalog_for_prompt(catalog: Dict[str, Any], rule_id: str = "") -> str:
+    """Compact catalog slice for the analysis prompt."""
+    if not catalog:
+        return ""
+    lines = ["=== DATA SOURCE CATALOG (allowed indexes / conventions) ==="]
+    rule_map = catalog.get("rule_index_map") or {}
+    allowed = []
+    if rule_id and isinstance(rule_map, dict):
+        allowed = rule_map.get(rule_id) or rule_map.get((rule_id or "").strip()) or []
+    if allowed:
+        lines.append(f"Preferred indexes for rule '{rule_id}': {', '.join(allowed)}")
+    for src in (catalog.get("sources") or [])[:8]:
+        idx = src.get("index") or ""
+        st = src.get("sourcetypes") or []
+        notes = (src.get("notes") or "")[:200]
+        st_s = ", ".join(st[:4]) if isinstance(st, list) else str(st)
+        lines.append(f"- index={idx} sourcetypes=[{st_s}] {notes}".strip())
+    conventions = catalog.get("placeholder_conventions") or {}
+    if conventions:
+        lines.append("Placeholder conventions:")
+        for k, v in list(conventions.items())[:6]:
+            lines.append(f"  ${k}$: {v}")
+    lines.append(
+        "Do not invent indexes, sourcetypes, or field names outside this catalog and the supportive SPL templates."
+    )
+    return "\n".join(lines)
+
+
 def _ground_phase2_queries(
     phase2_queries: List[Dict[str, Any]],
     supportive_query_defs,
+    already_run_titles=None,
+    max_queries: int = 3,
 ) -> List[Dict[str, Any]]:
+    """Map model Phase 2 suggestions onto real supportive playbook templates only.
+
+    - Never emit free-form / invented SPL when a playbook exists or when it does not.
+    - Prefer title match to supportive defs; fall back to ranked unused playbook queries.
+    - Deprioritize queries that already have saved results for this case.
+    """
+    already_run_titles = already_run_titles or set()
     title_to_def = {}
     spl_to_def = {}
     for query_def in supportive_query_defs or []:
@@ -179,6 +255,10 @@ def _ground_phase2_queries(
         title_to_def[_normalize_phase2_text(title)] = payload
         spl_to_def[_normalize_phase2_text(spl_query)] = payload
 
+    # No playbook → no Phase 2 SPL cards (do not invent)
+    if not title_to_def:
+        return []
+
     grounded: List[Dict[str, Any]] = []
     seen_titles = set()
 
@@ -191,34 +271,44 @@ def _ground_phase2_queries(
             matched = title_to_def.get(_normalize_phase2_text(title))
         if not matched and spl_query:
             matched = spl_to_def.get(_normalize_phase2_text(spl_query))
+        # Soft title containment match (model shortens/paraphrases titles)
+        if not matched and title:
+            norm = _normalize_phase2_text(title)
+            for key, payload in title_to_def.items():
+                if norm and (norm in key or key in norm):
+                    matched = payload
+                    break
 
-        if matched:
-            dedupe_key = _normalize_phase2_text(matched["title"])
-            if dedupe_key not in seen_titles:
-                grounded.append(dict(matched))
-                seen_titles.add(dedupe_key)
+        if not matched:
+            # Discard invented SPL; playbook is the only source of truth
             continue
 
-        if title_to_def:
+        dedupe_key = _normalize_phase2_text(matched["title"])
+        if dedupe_key in seen_titles:
             continue
+        # Prefer not-yet-run; still allow if we need to fill later
+        grounded.append(dict(matched))
+        seen_titles.add(dedupe_key)
+        if len(grounded) >= max_queries:
+            break
 
-        if title and spl_query and _looks_like_spl_query(spl_query):
-            dedupe_key = _normalize_phase2_text(title)
-            if dedupe_key not in seen_titles:
-                grounded.append({
-                    "title": title,
-                    "spl": spl_query,
-                    "description": (query.get("description") or "").strip(),
-                })
-                seen_titles.add(dedupe_key)
+    # Re-order: not-yet-run first
+    grounded.sort(
+        key=lambda q: (0 if _normalize_phase2_text(q.get("title")) not in already_run_titles else 1)
+    )
+    grounded = grounded[:max_queries]
 
     if grounded:
         return grounded
 
-    if title_to_def:
-        return _build_supportive_phase2_fallback(supportive_query_defs, "", "")
-
-    return []
+    # Model suggested nothing usable → ranked fallback from playbook, skip already-run when possible
+    return _build_supportive_phase2_fallback(
+        supportive_query_defs,
+        "",
+        "",
+        already_run_titles=already_run_titles,
+        max_queries=max_queries,
+    )
 
 
 def _format_grounded_phase2_section(phase2_queries: List[Dict[str, Any]]) -> str:
@@ -667,14 +757,17 @@ def _build_supportive_phase2_fallback(
     supportive_query_defs,
     prior_analysis: str,
     response_text: str,
+    already_run_titles=None,
+    max_queries: int = 3,
 ) -> List[Dict[str, Any]]:
     response_text = response_text or ""
     prior_analysis = prior_analysis or ""
+    already_run_titles = already_run_titles or set()
     if not supportive_query_defs:
         return []
 
     analysis_text = f"{prior_analysis} {response_text}".lower()
-    scored_queries: List[tuple[int, Dict[str, Any]]] = []
+    scored_queries = []
 
     for query_def in supportive_query_defs:
         title = (getattr(query_def, "title", "") or "").strip()
@@ -683,13 +776,17 @@ def _build_supportive_phase2_fallback(
         if not title or not spl_query:
             continue
 
+        norm_title = _normalize_phase2_text(title)
         score = 0
         query_text = f"{title} {description} {spl_query}".lower()
-        for token in ["host", "user", "process", "parent", "source", "destination", "ip", "timeline", "recent", "auth", "ssh", "root"]:
+        for token in ["host", "user", "process", "parent", "source", "destination", "ip", "timeline", "recent", "auth", "ssh", "root", "outbound", "sysmon", "powershell"]:
             if token in analysis_text and token in query_text:
                 score += 2
         if any(token in query_text for token in ["confirm", "validate", "timeline", "recent", "activity"]):
             score += 1
+        # Prefer queries not already run with saved results
+        if norm_title in already_run_titles:
+            score -= 10
 
         scored_queries.append((score, {
             "title": title,
@@ -698,7 +795,11 @@ def _build_supportive_phase2_fallback(
         }))
 
     scored_queries.sort(key=lambda item: item[0], reverse=True)
-    return [item[1] for item in scored_queries[:3]]
+    # Prefer strictly unused first; if all already run, still return top scored
+    unused = [item[1] for item in scored_queries if _normalize_phase2_text(item[1]["title"]) not in already_run_titles]
+    if unused:
+        return unused[:max_queries]
+    return [item[1] for item in scored_queries[:max_queries]]
 
 
 class InvestigationEvidenceEntryPayload(BaseModel):
@@ -2764,7 +2865,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
     try:
         sys.path.insert(0, get_platform_root())
         from sqlalchemy import func  # type: ignore
-        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult, InvestigationState
 
         db = SessionLocal()
         case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
@@ -2816,6 +2917,48 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             )
             next_id += 1
             saved_count += 1
+
+        # Rebuild investigation loop state from the latest evidence so the
+        # Investigation Loop view reflects saved entries even when the
+        # analyst has not rerun AI analysis yet.
+        from typing import List, Dict  # local import to avoid circular issues
+
+        supportive_rows = db.query(SupportiveQueryResult).filter(
+            SupportiveQueryResult.case_id == case_id
+        ).order_by(SupportiveQueryResult.created_at.desc()).all()
+
+        supportive_results: List[Dict[str, Any]] = []
+        for r in supportive_rows:
+            try:
+                raw = json.loads(r.raw_result) if r.raw_result else None
+            except Exception:
+                raw = r.raw_result
+            supportive_results.append({
+                "query_title": r.query_title,
+                "source_system": r.source_system,
+                "raw_result": raw,
+            })
+
+        previous_state_record = db.query(InvestigationState).filter(
+            InvestigationState.case_id == case_id
+        ).first()
+        previous_state_payload = (
+            _serialize_investigation_state_record(previous_state_record)
+            if previous_state_record
+            else {}
+        )
+
+        analysis_text = (case.analysis_summary or "").strip()
+        phase2_queries: List[Dict[str, Any]] = []
+        investigation_state = _build_investigation_state(
+            case,
+            analysis_text,
+            phase2_queries,
+            supportive_results,
+            "evidence_only",
+            previous_state_payload,
+        )
+        _upsert_investigation_state(db, InvestigationState, investigation_state)
 
         db.commit()
         return {"success": True, "saved_count": saved_count, "source_system": source_system}
@@ -3181,11 +3324,7 @@ def list_recent_notables(
 
         db = SessionLocal()
 
-        # Optional delete/hide step using the same session.
-        # To keep triage cases and "Show source notable" working even
-        # after removal from the Recent list, we never delete the
-        # underlying SplunkEvent row. Instead, we mark it hidden so it
-        # disappears from Recent but remains available as a source.
+        # Optional delete/hide step using the same session
         if delete_event_id is not None:
             event = db.query(SplunkEvent).filter(
                 SplunkEvent.id == delete_event_id,
@@ -3197,8 +3336,11 @@ def list_recent_notables(
                 except Exception:
                     payload = {}
 
-                payload["hidden_from_recent"] = True
-                event.raw = json.dumps(payload)
+                if payload.get("historical"):
+                    payload["hidden_from_recent"] = True
+                    event.raw = json.dumps(payload)
+                else:
+                    db.delete(event)
                 db.commit()
         rows = db.query(SplunkEvent).filter(
             SplunkEvent.sourcetype == "splunk:notable:pasted"
@@ -3290,17 +3432,19 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        # Retain the underlying record in the database and simply hide it
-        # from the Recent list so stats, historical baselines, and triage
-        # source lookups remain accurate. This applies to both open and
-        # historical pasted notables.
+        # For historical (closed) pasted notables, retain the underlying
+        # record in the database and simply hide it from the recent list so
+        # stats and closed-notables summaries remain accurate.
         try:
             payload = json.loads(event.raw) if event.raw else {}
         except Exception:
             payload = {}
 
-        payload["hidden_from_recent"] = True
-        event.raw = json.dumps(payload)
+        if payload.get("historical"):
+            payload["hidden_from_recent"] = True
+            event.raw = json.dumps(payload)
+        else:
+            db.delete(event)
 
         db.commit()
 
@@ -3371,10 +3515,12 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                # Hide from Recent list but keep the row for
-                # downstream triage/source lookups.
-                payload_raw["hidden_from_recent"] = True
-                event.raw = json.dumps(payload_raw)
+                if payload_raw.get("historical"):
+                    payload_raw["hidden_from_recent"] = True
+                    event.raw = json.dumps(payload_raw)
+                else:
+                    db.delete(event)
+
                 deleted.append(eid)
 
             db.commit()
@@ -3714,10 +3860,11 @@ def analyze_case(request: AnalyzeRequest):
             "4. Supportive Query Recommendations (Phase 2 SPL)\n"
             "5. Triage Verdict\n"
             "6. Structured Closure Notes\n\n"
-            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
-            "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface. "
-            "If supportive SPL templates are provided, only use those templates and adapt placeholders conservatively; do not invent SQL, table names, or unrelated SPL. "
-            "In the narrative Phase 2 section, summarize the recommended query titles and purpose only; the machine-readable JSON block is the only place where full query text should appear.\n\n"
+            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 follow-up checks an analyst should run AFTER this analysis. "
+            "If supportive SPL templates are provided below, you MUST only recommend from that list (match by title). "
+            "Do not invent indexes, sourcetypes, field names, SQL, or SPL that is not in the provided templates or data-source catalog. "
+            "Prefer templates that are not already covered by saved investigation evidence. "
+            "In the narrative Phase 2 section, summarize recommended query titles and purpose only; put full query text only in the machine-readable JSON block.\n\n"
         )
         if prior_analysis:
             prompt_intro += (
@@ -3817,11 +3964,23 @@ def analyze_case(request: AnalyzeRequest):
 
         if supportive_query_defs:
             prompt_parts.append("\n\n=== RECOMMENDED SUPPORTIVE SPL QUERIES TO VALIDATE HYPOTHESIS ===")
+            prompt_parts.append(
+                "Phase 2 recommendations MUST use titles from this list only. "
+                "The UI will ground suggestions to these exact SPL templates."
+            )
             for idx, q in enumerate(supportive_query_defs, 1):
                 desc = q.description or ""
                 prompt_parts.append(
                     f"[{idx}] {q.title}: {desc}\nSPL: {q.spl_query}"
                 )
+
+        catalog_payload = _load_data_source_catalog()
+        rule_id_for_catalog = ""
+        if detection_rule and getattr(detection_rule, "rule_id", None):
+            rule_id_for_catalog = detection_rule.rule_id
+        catalog_text = _format_catalog_for_prompt(catalog_payload, rule_id_for_catalog)
+        if catalog_text:
+            prompt_parts.append("\n\n" + catalog_text)
 
         if prior_closures:
             prompt_parts.append("\n\n=== PRIOR CLOSURE NOTE EXAMPLES FOR THIS RULE ===")
@@ -3895,14 +4054,21 @@ def analyze_case(request: AnalyzeRequest):
                 except Exception:
                     phase2_queries = _extract_phase2_queries(fallback_response_text)
 
+        already_run_titles = _already_run_supportive_titles(supportive_results)
+
         if not phase2_queries:
             phase2_queries = _build_supportive_phase2_fallback(
                 supportive_query_defs,
                 prior_analysis,
                 response_text,
+                already_run_titles=already_run_titles,
             )
 
-        phase2_queries = _ground_phase2_queries(phase2_queries, supportive_query_defs)
+        phase2_queries = _ground_phase2_queries(
+            phase2_queries,
+            supportive_query_defs,
+            already_run_titles=already_run_titles,
+        )
         display_analysis = _sanitize_analysis_text(response_text, phase2_queries)
         investigation_state = _build_investigation_state(
             case,

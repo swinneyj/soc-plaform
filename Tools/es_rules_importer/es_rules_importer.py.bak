@@ -30,21 +30,8 @@ class Colors:
     FAIL = "\033[91m"
     ENDC = "\033[0m"
 
-def import_rules_from_json(
-    json_file: str,
-    silent: bool = False,
-    replace_rule_ids=None,
-    replace_all_supportive: bool = False,
-) -> dict:
-    """Import rules from JSON file into database.
-
-    Supportive query policy:
-      - Default (merge): insert new (rule_id, title); update SPL/description on
-        title match; leave DB-only rows alone.
-      - replace_rule_ids: for those rule_id values, delete ALL supportive rows
-        for the rule, then insert the JSON set (JSON is full playbook for that rule).
-      - replace_all_supportive: same wipe+insert for every rule present in the JSON.
-    """
+def import_rules_from_json(json_file: str, silent: bool = False) -> dict:
+    """Import rules from JSON file into database."""
     if not os.path.exists(json_file):
         return {"success": False, "error": f"File not found: {json_file}", "imported": 0}
     
@@ -62,10 +49,6 @@ def import_rules_from_json(
             rules = rules_data
         else:
             return {"success": False, "error": "JSON must be array or object with 'rules' key", "imported": 0}
-
-        replace_set = {str(r).strip() for r in (replace_rule_ids or []) if str(r).strip()}
-        if replace_all_supportive:
-            replace_set |= {str(r.get("rule_id") or "").strip() for r in rules if r.get("rule_id")}
         
         db = SessionLocal()
         imported = 0
@@ -74,7 +57,6 @@ def import_rules_from_json(
         supportive_imported = 0
         supportive_updated = 0
         supportive_skipped = 0
-        supportive_deleted = 0
         errors = []
         # Track the next explicit ID to assign for new supportive queries.
         # This avoids relying on a misaligned Postgres sequence and is safe
@@ -124,26 +106,12 @@ def import_rules_from_json(
                     db.add(rule)
                     imported += 1
 
-                rule_id = (rule.rule_id or "").strip()
-                do_replace = rule_id in replace_set
-
                 # Optional: import any supportive queries tied to this rule.
                 #
-                # Merge policy (per rule, per title) — default:
+                # Merge policy (per rule, per title):
                 #   - If JSON has a new (rule_id, title): insert.
                 #   - If JSON has same (rule_id, title): update description/SPL.
                 #   - If DB has extra rows not in JSON: keep them (do not delete).
-                #
-                # Replace policy (--replace-rule / --replace-all-supportive):
-                #   - Delete all supportive rows for this rule_id, then insert JSON set.
-                if do_replace:
-                    deleted = (
-                        db.query(SupportiveQuery)
-                        .filter(SupportiveQuery.rule_id == rule_id)
-                        .delete(synchronize_session=False)
-                    )
-                    supportive_deleted += int(deleted or 0)
-
                 for q in rule_data.get("supportive_queries", []):
                     try:
                         title = q.get("title", "").strip()
@@ -152,15 +120,11 @@ def import_rules_from_json(
                             supportive_skipped += 1
                             continue
 
-                        if do_replace:
-                            # After wipe, always insert
-                            existing_q = None
-                        else:
-                            existing_q = db.query(SupportiveQuery).filter(
-                                SupportiveQuery.rule_id == rule.rule_id,
-                                SupportiveQuery.title == title
-                            ).first()
-
+                        # Avoid duplicate supportive queries for the same rule & title
+                        existing_q = db.query(SupportiveQuery).filter(
+                            SupportiveQuery.rule_id == rule.rule_id,
+                            SupportiveQuery.title == title
+                        ).first()
                         if existing_q:
                             existing_q.description = q.get("description", existing_q.description)
                             existing_q.spl_query = spl_query
@@ -190,13 +154,7 @@ def import_rules_from_json(
         if not silent:
             print(f"{Colors.GREEN}[+] Import complete!{Colors.ENDC}")
             print(f"    Rules - Imported: {imported} | Updated: {updated} | Skipped: {skipped}")
-            print(
-                f"    Supportive Queries - Imported: {supportive_imported} | "
-                f"Updated: {supportive_updated} | Skipped: {supportive_skipped} | "
-                f"Deleted(replace): {supportive_deleted}"
-            )
-            if replace_set and not silent:
-                print(f"    Replace mode rule_ids: {', '.join(sorted(replace_set))}")
+            print(f"    Supportive Queries - Imported: {supportive_imported} | Updated: {supportive_updated} | Skipped: {supportive_skipped}")
             if errors:
                 print(f"    Errors: {len(errors)}")
                 for err in errors[:5]:
@@ -210,7 +168,6 @@ def import_rules_from_json(
             "supportive_imported": supportive_imported,
             "supportive_updated": supportive_updated,
             "supportive_skipped": supportive_skipped,
-            "supportive_deleted": supportive_deleted,
             "errors": errors
         }
     
@@ -256,37 +213,15 @@ def list_rules(silent: bool = False) -> dict:
 def main():
     import argparse
     
-    parser = argparse.ArgumentParser(
-        description="Import Splunk ES correlation rules and supportive queries"
-    )
+    parser = argparse.ArgumentParser(description="Import Splunk ES correlation rules")
     parser.add_argument('--import', type=str, dest='import_file', help='JSON file to import')
     parser.add_argument('--list', action='store_true', help='List all imported rules')
     parser.add_argument('--silent', action='store_true', help='Suppress output')
-    parser.add_argument(
-        '--replace-rule',
-        action='append',
-        default=[],
-        metavar='RULE_ID',
-        help=(
-            'Wipe all supportive queries for RULE_ID then insert the JSON set for that rule. '
-            'Repeatable. Example: --replace-rule linux_ssh_key_creation'
-        ),
-    )
-    parser.add_argument(
-        '--replace-all-supportive',
-        action='store_true',
-        help='For every rule in the JSON, wipe DB supportive rows then insert the JSON set.',
-    )
     
     args = parser.parse_args()
     
     if args.import_file:
-        result = import_rules_from_json(
-            args.import_file,
-            args.silent,
-            replace_rule_ids=args.replace_rule,
-            replace_all_supportive=args.replace_all_supportive,
-        )
+        result = import_rules_from_json(args.import_file, args.silent)
         if not result["success"]:
             print(f"{Colors.FAIL}[!] Error: {result['error']}{Colors.ENDC}")
             sys.exit(1)

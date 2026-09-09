@@ -17,8 +17,7 @@
         dest: ['destination', 'destination_ip', 'host'],
         user: ['user', 'username', 'user_identity'],
         account: ['user', 'username', 'user_identity'],
-        process: ['process', 'ProcessName', 'process_name', 'Image', 'image', 'file_name', 'value'],
-        dest_ip: ['dest_ip', 'RemoteAddress', 'destination_ip', 'dest'],
+        process: ['process', 'image', 'file_name', 'value'],
         src_ip: ['src_ip', 'source_ip'],
         source_ip: ['source_ip', 'src_ip']
     };

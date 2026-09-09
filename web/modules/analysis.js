@@ -611,6 +611,7 @@
 
             if (!options.silent) {
                 alert('Phase 2 evidence saved for case ' + this.analysisCaseId);
+                await this.loadInvestigationState(this.analysisCaseId);
             }
         },
 
@@ -669,6 +670,7 @@
 
             if (!options.silent) {
                 alert('Supportive evidence saved for case ' + this.analysisCaseId);
+                await this.loadInvestigationState(this.analysisCaseId);
             }
         },
 
@@ -702,6 +704,7 @@
 
             if (!options.silent) {
                 alert('Enrichment evidence saved for case ' + this.analysisCaseId);
+                await this.loadInvestigationState(this.analysisCaseId);
             }
         },
 
