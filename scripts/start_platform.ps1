@@ -11,6 +11,7 @@ param(
 )
 
 $script:LockFilePath = Join-Path $SharedDumpDir "db_in_use.lock.json"
+$LockStaleHours = 8
 
 function Test-HttpReady {
     param([string]$Url)
@@ -155,12 +156,27 @@ function Acquire-ShareLock {
     $existingLock = Read-LockFile
     if ($existingLock) {
         $sameOwner = ($existingLock.username -eq $env:USERNAME) -and ($existingLock.computer -eq $env:COMPUTERNAME)
-        if (-not $sameOwner -and -not $IgnoreExistingLock) {
+        $isStale = $false
+        if ($existingLock.PSObject.Properties.Name -contains 'timestamp' -and $existingLock.timestamp) {
+            try {
+                $lockTime = [DateTime]::Parse($existingLock.timestamp)
+                $age = (Get-Date) - $lockTime
+                if ($age.TotalHours -ge $LockStaleHours) {
+                    $isStale = $true
+                }
+            } catch {
+                # If we can't parse the timestamp, fall back to the original strict behavior.
+            }
+        }
+
+        if (-not $sameOwner -and -not $isStale -and -not $IgnoreExistingLock) {
             Write-Error "A shared DB lock already exists for user '$($existingLock.username)' on '$($existingLock.computer)' since $($existingLock.timestamp). Use -IgnoreExistingLock only if you intentionally want to take over."
             return $false
         }
         if ($sameOwner) {
             Write-Host "[*] Reusing existing lock owned by this user/machine"
+        } elseif ($isStale -and -not $sameOwner) {
+            Write-Warning "Existing lock from user '$($existingLock.username)' on '$($existingLock.computer)' at $($existingLock.timestamp) is older than $LockStaleHours hour(s). Treating as stale and taking over."
         } elseif ($IgnoreExistingLock) {
             Write-Warning "Overriding existing lock from another user/machine"
         }
