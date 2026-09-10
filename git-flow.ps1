@@ -27,7 +27,8 @@ param(
     [string] ${GitSyncPath} = ".\git-sync.ps1"
 )
 
-$ErrorActionPreference = "Stop"
+# Continue: git writes status to stderr; Stop turns those into terminating errors on Windows PowerShell
+$ErrorActionPreference = "Continue"
 
 function Get-DefaultUserName {
     $u = ${UserName}
