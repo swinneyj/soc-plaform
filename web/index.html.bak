@@ -85,6 +85,8 @@
                 @load-triage-notable-details="loadTriageNotableDetails"
                 @copy-triage-notable-fields="copyTriageNotableFields"
                 @analyze-case="analyzeCase"
+                @load-closed-notable-details="loadClosedNotableDetails"
+                @delete-closed-notable="deleteClosedNotable"
             ></database-tab>
 
             <!-- Analysis -->

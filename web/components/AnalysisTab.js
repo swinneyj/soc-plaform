@@ -406,19 +406,10 @@ window.AnalysisTab = {
                 </ul>
             </div>
 
-            <div
-                v-if="evidenceTimelineItems.length"
-                class="mt-3 rounded-lg border border-gray-600 bg-gray-900/80 shadow-sm"
-            >
-                <details open class="group">
-                    <summary
-                        class="cursor-pointer select-none list-none px-3 py-2.5 flex items-center justify-between gap-2 border-b border-gray-700/80 hover:bg-gray-800/60 rounded-t-lg"
-                    >
-                        <span class="flex items-center gap-2 min-w-0">
-                            <span class="inline-flex h-5 w-5 items-center justify-center rounded bg-blue-900/60 border border-blue-700/60 text-[10px] text-blue-300 font-bold flex-shrink-0">≡</span>
-                            <span class="text-xs font-semibold uppercase tracking-wide text-blue-300">Evidence Timeline</span>
-                            <span class="text-[10px] text-gray-500 font-normal normal-case tracking-normal">(click to expand/collapse)</span>
-                        </span>
+            <div v-if="evidenceTimelineItems.length">
+                <details class="mt-2" open>
+                    <summary class="text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer flex items-center justify-between gap-2">
+                        <span>Evidence Timeline</span>
                         <span class="flex items-center gap-2 flex-shrink-0" @click.stop>
                             <button
                                 v-if="someEvidenceSelected"
@@ -437,61 +428,59 @@ window.AnalysisTab = {
                             >
                                 Delete all
                             </button>
-                            <span class="text-[10px] text-gray-400 tabular-nums">{{ evidenceTimelineItems.length }} item(s)</span>
+                            <span class="text-[10px] text-gray-400">{{ evidenceTimelineItems.length }} item(s)</span>
                         </span>
                     </summary>
-                    <div class="px-3 pb-3 pt-2">
-                        <div class="flex items-center gap-2 mb-2">
-                            <input
-                                type="checkbox"
-                                class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                                :checked="allEvidenceSelected"
-                                :indeterminate.prop="someEvidenceSelected && !allEvidenceSelected"
-                                @change="toggleSelectAllEvidence($event.target.checked)"
-                                title="Select all visible evidence"
-                            />
-                            <span class="text-[11px] text-gray-500">Select all</span>
-                        </div>
-                        <div class="space-y-2">
-                            <div
-                                v-for="item in evidenceTimelineItems"
-                                :key="'timeline:' + evidenceItemKey(item)"
-                                class="bg-gray-800 border border-gray-700 rounded-md p-3 transition-colors"
-                                :class="{ 'border-blue-500 ring-1 ring-blue-500/40': isEvidenceSelected(item) }"
-                            >
-                                <div class="flex items-start gap-3">
-                                    <input
-                                        type="checkbox"
-                                        class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0 cursor-pointer"
-                                        :checked="isEvidenceSelected(item)"
-                                        @click.stop
-                                        @change="toggleEvidenceSelection(item, $event.target.checked)"
-                                        title="Select this evidence item"
-                                    />
-                                    <div class="min-w-0 flex-1">
-                                        <div class="flex items-start justify-between gap-3">
-                                            <div class="min-w-0">
-                                                <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
-                                                <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
-                                            </div>
-                                            <div class="flex items-start gap-2 flex-shrink-0">
-                                                <div class="text-right text-[11px] text-gray-500">
-                                                    <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                                    <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
-                                                </div>
-                                                <button
-                                                    type="button"
-                                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold leading-none flex-shrink-0"
-                                                    title="Delete this evidence item"
-                                                    @click.stop="$emit('delete-evidence', item)"
-                                                >
-                                                    ×
-                                                </button>
-                                            </div>
+                    <div class="flex items-center gap-2 mt-2 mb-1 px-1">
+                        <input
+                            type="checkbox"
+                            class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                            :checked="allEvidenceSelected"
+                            :indeterminate.prop="someEvidenceSelected && !allEvidenceSelected"
+                            @change="toggleSelectAllEvidence($event.target.checked)"
+                            title="Select all visible evidence"
+                        />
+                        <span class="text-[11px] text-gray-500">Select all</span>
+                    </div>
+                    <div class="space-y-2 mt-1">
+                        <div
+                            v-for="item in evidenceTimelineItems"
+                            :key="'timeline:' + evidenceItemKey(item)"
+                            class="bg-gray-800 border border-gray-700 rounded p-3"
+                            :class="{ 'border-blue-600': isEvidenceSelected(item) }"
+                        >
+                            <div class="flex items-start gap-3">
+                                <input
+                                    type="checkbox"
+                                    class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0 cursor-pointer"
+                                    :checked="isEvidenceSelected(item)"
+                                    @click.stop
+                                    @change="toggleEvidenceSelection(item, $event.target.checked)"
+                                    title="Select this evidence item"
+                                />
+                                <div class="min-w-0 flex-1">
+                                    <div class="flex items-start justify-between gap-3">
+                                        <div class="min-w-0">
+                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
+                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
                                         </div>
-                                        <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
-                                        <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
+                                        <div class="flex items-start gap-2 flex-shrink-0">
+                                            <div class="text-right text-[11px] text-gray-500">
+                                                <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
+                                                <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold leading-none flex-shrink-0"
+                                                title="Delete this evidence item"
+                                                @click.stop="$emit('delete-evidence', item)"
+                                            >
+                                                ×
+                                            </button>
+                                        </div>
                                     </div>
+                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
+                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
                                 </div>
                             </div>
                         </div>
