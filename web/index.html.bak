@@ -1,0 +1,493 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <style>
+        [v-cloak] { display: none; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100" id="app" v-cloak>
+    <div class="min-h-screen flex flex-col">
+        <header-nav
+            :current-tab="currentTab"
+            :ollama-health="ollamaHealth"
+            :api-healthy="apiHealthy"
+            @change-tab="currentTab = $event"
+        ></header-nav>
+
+        <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
+            <!-- Tools -->
+            <tools-tab
+                v-if="currentTab === 'tools'"
+                :tools="tools"
+                :tool-search="toolSearch"
+                :selected-category="selectedCategory"
+                :tool-args="toolArgs"
+                :selected-tool-for-execution="selectedToolForExecution"
+                @update:tool-search="toolSearch = $event"
+                @update:selected-category="selectedCategory = $event"
+                @select-tool="selectToolForExecution"
+                @close-tool-modal="closeToolModal"
+                @execute-tool="executeTool"
+                @change-tab="currentTab = $event"
+            ></tools-tab>
+
+            <!-- Database -->
+            <database-tab
+                v-if="currentTab === 'database'"
+                :db-stats="dbStats"
+                :notable-paste-text="notablePasteText"
+                :notable-paste-segment-estimate="notablePasteSegmentEstimate"
+                :notable-redaction-enabled="notableRedactionEnabled"
+                :notable-historical="notableHistorical"
+                :notable-paste-saving="notablePasteSaving"
+                :notable-paste-result="notablePasteResult"
+                :show-open-notables-only="showOpenNotablesOnly"
+                :filtered-recent-notables="filteredRecentNotables"
+                :historical-notables-visible="historicalNotablesVisible"
+                :historical-notables="historicalNotables"
+                :filtered-triage-data="filteredTriageData"
+                :db-search="dbSearch"
+                :db-verdict-filter="dbVerdictFilter"
+                :triage-from-pasted-only="triageFromPastedOnly"
+                :delete-analysis-with-case="deleteAnalysisWithCase"
+                :selected-notable-ids="selectedNotableIds"
+                :selected-triage-case-ids="selectedTriageCaseIds"
+                :triage-notable-details="triageNotableDetails"
+                @change-tab="currentTab = $event"
+                @update:notable-paste-text="notablePasteText = $event"
+                @update:notable-redaction-enabled="notableRedactionEnabled = $event"
+                @update:notable-historical="notableHistorical = $event"
+                @save-pasted-notable="savePastedNotable"
+                @load-historical-notables="loadHistoricalNotables"
+                @update:historical-notables-visible="historicalNotablesVisible = $event"
+                @load-recent-notables="loadRecentNotables"
+                @delete-pasted-notable="deletePastedNotable"
+                @delete-selected-pasted-notables="deleteSelectedPastedNotables"
+                @promote-notable-to-triage="promoteNotableToTriage"
+                @promote-all-open-pasted-notables="promoteAllOpenPastedNotables"
+                @update:selected-notable-ids="selectedNotableIds = $event"
+                @update:show-open-notables-only="showOpenNotablesOnly = $event"
+                @update:db-search="dbSearch = $event"
+                @update:db-verdict-filter="dbVerdictFilter = $event"
+                @update:triage-from-pasted-only="triageFromPastedOnly = $event"
+                @update:selected-triage-case-ids="selectedTriageCaseIds = $event"
+                @update:delete-analysis-with-case="deleteAnalysisWithCase = $event"
+                @load-triage-data="loadTriageData"
+                @delete-triage-case="deleteTriageCase"
+                @delete-selected-triage-cases="deleteSelectedTriageCases"
+                @load-triage-notable-details="loadTriageNotableDetails"
+                @copy-triage-notable-fields="copyTriageNotableFields"
+                @analyze-case="analyzeCase"
+                @load-closed-notable-details="loadClosedNotableDetails"
+                @delete-closed-notable="deleteClosedNotable"
+            ></database-tab>
+
+            <!-- Analysis -->
+            <analysis-tab
+                v-if="currentTab === 'analysis'"
+                :ollama-health="ollamaHealth"
+                :analysis-case-search="analysisCaseSearch"
+                :analysis-case-id="analysisCaseId"
+                :analysis-cases="analysisCases"
+                :filtered-analysis-cases="filteredAnalysisCases"
+                :analysis-model="analysisModel"
+                :analysis-context="analysisContext"
+                :analysis-running="analysisRunning"
+                :analysis-result="analysisResult"
+                :analysis-source-notable="analysisSourceNotable"
+                :analysis-rule="analysisRule"
+                :show-phase1-analysis="showPhase1Analysis"
+                :phase2-model="phase2Model"
+                :phase2-result="phase2Result"
+                :investigation-state="investigationState"
+                :evidence-finding-options="evidenceFindingOptions"
+                :supportive-manual-results="supportiveManualResults"
+                :supportive-finding-types="supportiveFindingTypes"
+                :enrichment-manual-results="enrichmentManualResults"
+                :enrichment-finding-types="enrichmentFindingTypes"
+                :phase2-manual-results="phase2ManualResults"
+                :phase2-finding-types="phase2FindingTypes"
+                :phase2-edited-queries="phase2EditedQueries"
+                :render-supportive-query-fn="renderSupportiveQuery"
+                :render-phase2-query-fn="renderPhase2Query"
+                :has-unresolved-placeholders-fn="hasUnresolvedPlaceholders"
+                :get-supportive-key-fn="getSupportiveKey"
+                :get-enrichment-key-fn="getEnrichmentKey"
+                :get-phase2-key-fn="getPhase2Key"
+                :get-phase2-template-fn="getPhase2Template"
+                :format-loop-status-fn="formatLoopStatus"
+                :format-disposition-label-fn="formatDispositionLabel"
+                :format-finding-label-fn="formatFindingLabel"
+                @update:analysis-case-search="analysisCaseSearch = $event"
+                @update:analysis-case-id="analysisCaseId = $event"
+                @update:analysis-model="analysisModel = $event"
+                @update:analysis-context="analysisContext = $event"
+                @update:phase2-model="phase2Model = $event"
+                @update:show-phase1-analysis="showPhase1Analysis = $event"
+                @on-analysis-case-changed="onAnalysisCaseChanged"
+                @run-analysis="runAnalysis"
+                @run-phase2-analysis="runPhase2Analysis"
+                @cancel-analysis="cancelAnalysis"
+                @save-analysis-state="saveAnalysisState"
+                @copy-analysis-result="copyAnalysisResult"
+                @go-to-closure-from-analysis="goToClosureFromAnalysis"
+                @open-placeholder-alias-editor="openPlaceholderAliasEditor"
+                @open-supportive-editor="openSupportiveEditor"
+                @save-supportive-evidence="saveSupportiveEvidence"
+                @copy-supportive-spl="copySupportiveSPL"
+                @copy-enrichment-spl="copyEnrichmentSPL"
+                @copy-phase2-spl="copyPhase2SPL"
+                @promote-phase2-query="promotePhase2Query"
+                @on-phase2-template-input="onPhase2TemplateInput"
+                @save-phase2-evidence="savePhase2Evidence"
+                @update-supportive-manual="({key, value}) => supportiveManualResults = { ...supportiveManualResults, [key]: value }"
+                @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
+                @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
+                @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
+                @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
+                @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
+                @delete-evidence="deleteEvidence"
+                @delete-evidence-batch="deleteEvidenceBatch"
+                @delete-all-evidence="deleteAllEvidence"
+            ></analysis-tab>
+
+            <!-- Closure -->
+            <closure-tab
+                v-if="currentTab === 'closure'"
+                :triage-data="triageData"
+                :available-rules="availableRules"
+                :selected-rule="selectedRule"
+                :closure-form="closureForm"
+                :closure-result="closureResult"
+                :closure-generating="closureGenerating"
+                :closure-suggested-rule-name="closureSuggestedRuleName"
+                :closure-suggested-disposition="closureSuggestedDisposition"
+                @update:closure-form="closureForm = $event"
+                @select-case="onCaseSelected"
+                @select-rule="onRuleSelected"
+                @generate-closure-note="generateClosureNote"
+                @copy-closure-note="copyToClipboard"
+                @download-closure-note="downloadClosureNote"
+            ></closure-tab>
+
+            <!-- Jobs -->
+            <jobs-tab
+                v-if="currentTab === 'jobs'"
+                :jobs="jobs"
+            ></jobs-tab>
+
+            <!-- Reports -->
+            <reports-tab
+                v-if="currentTab === 'reports'"
+                :reports="reports"
+            ></reports-tab>
+
+            <!-- Code Review -->
+            <code-review-tab
+                v-if="currentTab === 'code-review'"
+                :code-review-form="codeReviewForm"
+                :code-review-models="codeReviewModels"
+                :code-review-running="codeReviewRunning"
+                :code-review-result="codeReviewResult"
+                :code-reviews-list="codeReviewsList"
+                :code-review-drag-active="codeReviewDragActive"
+                :code-review-sections="codeReviewSections"
+                :code-review-sections-busy="codeReviewSectionsBusy"
+                :code-review-sections-filter="codeReviewSectionsFilter"
+                :code-review-sections-code-only="codeReviewSectionsCodeOnly"
+                :code-review-sections-features-only="codeReviewSectionsFeaturesOnly"
+                :code-review-sections-min-lines="codeReviewSectionsMinLines"
+                :code-review-sections-use-local="codeReviewSectionsUseLocal"
+                :code-review-sections-show-advanced="codeReviewSectionsShowAdvanced"
+                :code-review-search-term="codeReviewSearchTerm"
+                :code-review-find-term="codeReviewFindTerm"
+                :code-review-find-case-sensitive="codeReviewFindCaseSensitive"
+                :code-review-find-matches="codeReviewFindMatches"
+                :code-review-find-index="codeReviewFindIndex"
+                :filtered-code-review-sections="filteredCodeReviewSections"
+                :grouped-code-review-sections="groupedCodeReviewSections"
+                :ollama-health="ollamaHealth"
+                @update:code-review-form="codeReviewForm = $event"
+                @update:code-review-search-term="codeReviewSearchTerm = $event"
+                @update:code-review-sections-filter="codeReviewSectionsFilter = $event"
+                @update:code-review-sections-code-only="codeReviewSectionsCodeOnly = $event"
+                @update:code-review-sections-features-only="codeReviewSectionsFeaturesOnly = $event"
+                @update:code-review-sections-min-lines="codeReviewSectionsMinLines = $event"
+                @update:code-review-sections-use-local="codeReviewSectionsUseLocal = $event"
+                @update:code-review-sections-show-advanced="codeReviewSectionsShowAdvanced = $event"
+                @update:code-review-find-term="codeReviewFindTerm = $event"
+                @update:code-review-find-case-sensitive="codeReviewFindCaseSensitive = $event"
+                @submit-code-review="submitCodeReview"
+                @detect-code-review-sections="detectCodeReviewSections"
+                @focus-code-review-on-section="focusCodeReviewOnSection"
+                @focus-code-review-section="focusCodeReviewSection"
+                @handle-file-upload="handleFileUpload"
+                @handle-folder-upload="handleFolderUpload"
+                @on-code-review-drag-over="onCodeReviewDragOver"
+                @on-code-review-drag-leave="onCodeReviewDragLeave"
+                @on-code-review-drop="onCodeReviewDrop"
+                @run-code-review-find="runCodeReviewFind"
+                @clear-code-review-find="clearCodeReviewFind"
+                @code-review-find-next="codeReviewFindNext"
+                @code-review-find-prev="codeReviewFindPrev"
+                @copy-code-review-to-clipboard="copyCodeReviewToClipboard"
+                @load-full-code-review="loadFullCodeReview"
+                @on-code-review-find-keydown="onCodeReviewFindKeydown"
+                @on-code-review-textarea-keydown="onCodeReviewTextareaKeydown"
+            ></code-review-tab>
+
+            <!-- Supportive Query Editor Modal -->
+            <div
+                v-if="supportiveEditorOpen"
+                class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+            >
+                <div class="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-3xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-sm font-bold text-blue-300">Manage Supportive Queries</h3>
+                            <p class="text-[11px] text-gray-400" v-if="supportiveEditorRuleId">
+                                Rule ID: <span class="font-mono">{{ supportiveEditorRuleId }}</span>
+                            </p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button
+                                type="button"
+                                class="ml-3 text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-gray-300"
+                                @click="openPlaceholderAliasEditor"
+                                title="Manage dynamic placeholder aliases ($host$, $process$, etc.)"
+                            >
+                                Manage Placeholder Aliases
+                            </button>
+                            <button
+                                type="button"
+                                class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white"
+                                @click="saveSupportiveQueries"
+                                :disabled="supportiveEditorBusy"
+                            >
+                                {{ supportiveEditorBusy ? 'Saving...' : 'Save Changes' }}
+                            </button>
+                            <button
+                                type="button"
+                                class="text-gray-400 hover:text-white text-xl"
+                                @click="closeSupportiveEditor"
+                            >
+                                &times;
+                            </button>
+                        </div>
+                    </div>
+
+                    <p v-if="supportiveEditorError" class="text-xs text-red-400 mb-2">
+                        {{ supportiveEditorError }}
+                    </p>
+
+                    <div class="space-y-3">
+                        <div
+                            v-for="(q, idx) in supportiveEditorQueries"
+                            :key="q.localKey || q.id || idx"
+                            class="border border-gray-700 rounded p-3 bg-gray-800"
+                        >
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-[11px] text-gray-400">
+                                    Query {{ idx + 1 }}
+                                </p>
+                                <button
+                                    type="button"
+                                    class="text-[11px] text-red-300 hover:text-red-400"
+                                    @click="removeSupportiveQuery(idx, q)"
+                                    :disabled="supportiveEditorBusy"
+                                >
+                                    Remove
+                                </button>
+                            </div>
+                            <div class="space-y-2">
+                                <div>
+                                    <label class="text-[11px] text-gray-400">Title</label>
+                                    <input
+                                        v-model="q.title"
+                                        type="text"
+                                        class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                        :disabled="supportiveEditorBusy"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="text-[11px] text-gray-400">Description (optional)</label>
+                                    <input
+                                        v-model="q.description"
+                                        type="text"
+                                        class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                        :disabled="supportiveEditorBusy"
+                                    />
+                                </div>
+                                <div>
+                                    <label class="text-[11px] text-gray-400">SPL Query</label>
+                                    <textarea
+                                        v-model="q.spl_query"
+                                        rows="3"
+                                        class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[11px] text-gray-100 font-mono whitespace-pre-wrap"
+                                        :disabled="supportiveEditorBusy"
+                                    ></textarea>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="mt-2">
+                            <button
+                                type="button"
+                                class="px-3 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] text-gray-100"
+                                @click="addSupportiveQueryRow"
+                                :disabled="supportiveEditorBusy"
+                            >
+                                + Add Query
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="mt-4 flex items-center justify-end space-x-2">
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-200"
+                            @click="closeSupportiveEditor"
+                            :disabled="supportiveEditorBusy"
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Placeholder Alias Editor Modal (dynamic, no-code management) -->
+        <div
+            v-if="placeholderAliasEditorOpen"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+        >
+            <div class="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-2xl w-full mx-4 max-h-[85vh] overflow-y-auto">
+                <div class="flex items-center justify-between mb-4">
+                    <div>
+                        <h3 class="text-lg font-bold text-blue-300">Manage Placeholder Aliases</h3>
+                        <p class="text-xs text-gray-400">Add or edit mappings so $alias$ in supportive SPL resolves automatically from source notables.</p>
+                    </div>
+                    <button type="button" class="text-gray-400 hover:text-white text-2xl leading-none" @click="closePlaceholderAliasEditor">&times;</button>
+                </div>
+
+                <p v-if="placeholderAliasEditorError" class="text-xs text-red-400 mb-3">{{ placeholderAliasEditorError }}</p>
+
+                <!-- Add / Edit Form -->
+                <div class="bg-gray-800 border border-gray-700 rounded p-4 mb-4">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div>
+                            <label class="text-xs text-gray-400">Alias Name (e.g. url, signature, parent_process)</label>
+                            <input v-model="newAliasForm.alias" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url">
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-400 flex items-center justify-between">
+                                <span>Source Fields (comma-separated, order = priority)</span>
+                                <button type="button" class="text-[10px] px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded ml-2"
+                                    @click="loadPlaceholderAliasSuggestions" :disabled="placeholderAliasSuggestionsBusy">
+                                    {{ placeholderAliasSuggestionsBusy ? 'Loading…' : 'Suggest from recent notables' }}
+                                </button>
+                            </label>
+                            <input v-model="newAliasForm.fields" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="url, request_url, destination_url">
+                            <div v-if="placeholderAliasSuggestions.length" class="mt-2 flex flex-wrap gap-1">
+                                <span class="text-[10px] text-gray-500 mr-1">Suggestions:</span>
+                                <button
+                                    v-for="s in placeholderAliasSuggestions"
+                                    :key="s.field"
+                                    type="button"
+                                    class="text-[10px] px-2 py-0.5 rounded border"
+                                    :class="isAliasFieldSelected(s.field) ? 'bg-blue-700 border-blue-500 text-white' : 'bg-gray-800 border-gray-600 text-gray-200'"
+                                    @click="toggleAliasFieldCandidate(s.field)"
+                                >
+                                    {{ s.field }}<span class="text-[9px] text-gray-400" v-if="s.count"> ({{ s.count }})</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="mt-3">
+                        <label class="text-xs text-gray-400">Description (optional)</label>
+                        <input v-model="newAliasForm.description" type="text" class="w-full mt-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm text-white" placeholder="URL involved in the event">
+                    </div>
+
+                    <div class="mt-3 flex gap-2">
+                        <button @click="savePlaceholderAlias" :disabled="placeholderAliasEditorBusy"
+                            class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold">
+                            {{ placeholderAliasEditorBusy ? 'Saving...' : (editingAliasId ? 'Update Alias' : 'Add Alias') }}
+                        </button>
+                        <button v-if="editingAliasId" @click="() => { editingAliasId = null; newAliasForm = { alias: '', fields: '', description: '' }; }"
+                            class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-sm">
+                            Cancel Edit
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Existing Aliases List -->
+                <div v-if="placeholderAliasList.length" class="space-y-2">
+                    <p class="text-xs text-gray-400 mb-1">Current Aliases (used automatically in Analysis tab)</p>
+                    <div v-for="a in placeholderAliasList" :key="a.id" class="bg-gray-800 border border-gray-700 rounded p-3 flex justify-between items-start">
+                        <div class="flex-1 min-w-0">
+                            <div class="flex items-center gap-2">
+                                <span class="font-mono text-blue-300 text-sm">${{ a.alias }}$</span>
+                                <span v-if="a.description" class="text-xs text-gray-400">— {{ a.description }}</span>
+                            </div>
+                            <div class="text-xs text-gray-400 mt-0.5">Fields: <span class="font-mono text-gray-300">{{ (a.fields || []).join(', ') || '(none)' }}</span></div>
+                        </div>
+                        <div class="flex gap-1 ml-3 flex-shrink-0">
+                            <button @click="editPlaceholderAlias(a)" class="text-xs px-2 py-0.5 bg-gray-700 hover:bg-gray-600 rounded">Edit</button>
+                            <button @click="deletePlaceholderAlias(a.id)" class="text-xs px-2 py-0.5 bg-red-900/60 hover:bg-red-800 rounded text-red-300">Delete</button>
+                        </div>
+                    </div>
+                </div>
+                <p v-else class="text-xs text-gray-500 italic">No custom aliases defined yet. Default aliases (host, dest, process, user) are always available.</p>
+
+                <div class="mt-4 pt-3 border-t border-gray-700 flex justify-end">
+                    <button @click="closePlaceholderAliasEditor" class="px-4 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 rounded">Close</button>
+                </div>
+            </div>
+        </div>
+
+        <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
+            <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
+                <p>SOC Platform v1.1.0 • Local AI • <a href="/docs" class="text-blue-400 hover:text-blue-300">API Docs</a></p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Vue -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+
+    <!-- utils (pure helpers) -->
+    <script src="utils/keys.js"></script>
+    <script src="utils/queryRender.js"></script>
+    <script src="utils/selection.js"></script>
+    <script src="utils/pocSummary.js"></script>
+    <script src="utils/codeSections.js"></script>
+
+    <!-- modules (API + domain) -->
+    <script src="modules/api.js"></script>
+    <script src="modules/database.js"></script>
+    <script src="modules/analysis.js"></script>
+    <script src="modules/codeReview.js"></script>
+    <script src="modules/tools.js"></script>
+    <script src="modules/closure.js"></script>
+
+    <!-- components (UI) -->
+    <script src="components/HeaderNav.js"></script>
+    <script src="components/ToolsTab.js"></script>
+    <script src="components/DatabaseTab.js"></script>
+    <script src="components/AnalysisTab.js"></script>
+    <script src="components/ClosureTab.js"></script>
+    <script src="components/JobsTab.js"></script>
+    <script src="components/ReportsTab.js"></script>
+    <script src="components/CodeReviewTab.js"></script>
+
+    <!-- root app (full logic from live, with component registration) -->
+    <script src="app.modular.js"></script>
+</body>
+</html>
