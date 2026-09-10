@@ -45,8 +45,15 @@ window.DatabaseTab = {
         'delete-selected-triage-cases',
         'load-triage-notable-details',
         'copy-triage-notable-fields',
-        'analyze-case'
+        'analyze-case',
+        'load-closed-notable-details',
+        'delete-closed-notable'
     ],
+    data() {
+        return {
+            openClosedNotableId: null
+        };
+    },
     computed: {
         allPastedSelected() {
             const items = this.filteredRecentNotables || [];
@@ -62,6 +69,13 @@ window.DatabaseTab = {
         }
     },
     methods: {
+        handleClosedNotableClick(item) {
+            if (!item || !item.id) {
+                return;
+            }
+            this.openClosedNotableId = item.id;
+            this.$emit('load-closed-notable-details', item);
+        },
         toggleNotableSelection(id, checked) {
             const current = Array.isArray(this.selectedNotableIds) ? this.selectedNotableIds.slice() : [];
             const idx = current.indexOf(id);
@@ -365,11 +379,19 @@ window.DatabaseTab = {
                                 <th class="px-2 py-1 text-left">User</th>
                                 <th class="px-2 py-1 text-left">Urgency</th>
                                 <th class="px-2 py-1 text-left">Disposition</th>
+                                <th class="px-2 py-1 text-left">Closure summary</th>
                                 <th class="px-2 py-1 text-left">Saved</th>
+                                <th class="px-2 py-1 text-left">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            <tr v-for="item in historicalNotables" :key="item.id" class="border-b border-gray-800">
+                            <tr
+                                v-for="item in historicalNotables"
+                                :key="item.id"
+                                class="border-b border-gray-800 hover:bg-gray-750 cursor-pointer"
+                                @click.stop="handleClosedNotableClick(item)"
+                                :title="item.history_summary || ''"
+                            >
                                 <td class="px-2 py-1 align-top">{{ item.id }}</td>
                                 <td class="px-2 py-1 align-top">
                                     <div class="font-semibold text-blue-300">{{ item.title || 'Untitled notable' }}</div>
@@ -379,10 +401,74 @@ window.DatabaseTab = {
                                 <td class="px-2 py-1 align-top">{{ item.user || 'n/a' }}</td>
                                 <td class="px-2 py-1 align-top">{{ item.urgency || 'n/a' }}</td>
                                 <td class="px-2 py-1 align-top">{{ item.disposition || 'n/a' }}</td>
+                                <td class="px-2 py-1 align-top max-w-xs">
+                                    <span class="block truncate" v-if="item.history_summary" :title="item.history_summary">
+                                        {{ item.history_summary }}
+                                    </span>
+                                    <span v-else class="text-gray-500">n/a</span>
+                                </td>
                                 <td class="px-2 py-1 align-top">{{ item.saved_at ? new Date(item.saved_at).toLocaleString() : 'n/a' }}</td>
+                                <td class="px-2 py-1 align-top">
+                                    <button
+                                        @click.stop="$emit('delete-closed-notable', item)"
+                                        class="px-2 py-1 bg-red-700 hover:bg-red-800 rounded text-[11px] font-semibold"
+                                        title="Delete this closed notable from summaries"
+                                    >
+                                        Delete
+                                    </button>
+                                </td>
                             </tr>
                         </tbody>
                     </table>
+                    <div
+                        v-if="openClosedNotableId && triageNotableDetails && triageNotableDetails[openClosedNotableId]"
+                        class="mt-4 bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-200"
+                    >
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="font-semibold text-blue-300">
+                                Closed notable {{ openClosedNotableId }} details
+                            </div>
+                            <button
+                                class="text-[11px] text-gray-400 hover:text-gray-200"
+                                @click.stop="openClosedNotableId = null"
+                            >
+                                Close
+                            </button>
+                        </div>
+                        <div v-if="triageNotableDetails[openClosedNotableId].loading">
+                            Loading closed notable details...
+                        </div>
+                        <div v-else-if="triageNotableDetails[openClosedNotableId].error" class="text-red-400">
+                            {{ triageNotableDetails[openClosedNotableId].error }}
+                        </div>
+                        <div v-else-if="triageNotableDetails[openClosedNotableId].data" class="space-y-2">
+                            <div v-if="triageNotableDetails[openClosedNotableId].data.fields">
+                                <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                    <div
+                                        v-for="(value, key) in triageNotableDetails[openClosedNotableId].data.fields"
+                                        :key="key"
+                                        class="flex flex-col"
+                                    >
+                                        <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                        <span class="text-gray-200 break-words">{{ value }}</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[openClosedNotableId].data.sanitized_text }}
+                                </pre>
+                            </div>
+                            <div v-if="triageNotableDetails[openClosedNotableId].data.history">
+                                <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[openClosedNotableId].data.history }}
+                                </pre>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
 

@@ -330,6 +330,28 @@ createApp({
                 this.historicalNotables = [];
             }
         },
+        async loadClosedNotableDetails(notableSummary) {
+            if (!notableSummary || !notableSummary.id) {
+                return;
+            }
+
+            const id = notableSummary.id;
+            const existing = this.triageNotableDetails[id];
+            if (existing && (existing.loading || existing.data)) {
+                return;
+            }
+
+            this.$set(this.triageNotableDetails, id, { loading: true, error: null, data: null });
+
+            try {
+                const res = await axios.get(this.apiUrl + '/db/notables/' + id);
+                this.$set(this.triageNotableDetails, id, { loading: false, error: null, data: res.data });
+            } catch (err) {
+                console.error('Failed to load closed notable details:', err);
+                const detail = err.response?.data?.detail || err.message;
+                this.$set(this.triageNotableDetails, id, { loading: false, error: detail, data: null });
+            }
+        },
         areAllPastedNotablesSelected() {
             const items = this.filteredRecentNotables;
             if (!items.length) {
@@ -648,6 +670,20 @@ createApp({
                     error: err.response?.data?.detail || err.message,
                     data: null
                 };
+            }
+        },
+        async deleteClosedNotable(notableSummary) {
+            if (!notableSummary || !notableSummary.id) {
+                return;
+            }
+
+            const id = notableSummary.id;
+            try {
+                await axios.post(this.apiUrl + '/db/notables/' + id + '/delete');
+                await this.loadHistoricalNotables();
+                await this.loadDbStats();
+            } catch (err) {
+                alert('Error deleting closed notable: ' + (err.response?.data?.detail || err.message));
             }
         },
         async loadRules() {

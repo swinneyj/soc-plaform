@@ -3658,19 +3658,44 @@ def list_historical_notables(
             except Exception:
                 continue
 
-            if not payload.get("historical"):
+            # Only include historical notables that have not been explicitly hidden.
+            if not payload.get("historical") or payload.get("hidden_from_historical"):
                 continue
 
             fields = payload.get("fields", {}) or {}
+
+            # Prefer a well-formed parsed host value; if the parsed host
+            # looks malformed (e.g., long narrative closure text), fall
+            # back to the Splunk event host instead.
+            raw_host = (fields.get("host") or "").strip()
+            host_display = raw_host
+            if not raw_host or not is_usable_primary_entity("host", raw_host):
+                host_display = event.host
+
+            # Build a compact summary of the history/closure text so
+            # the frontend can show a one-line closure indicator while
+            # keeping the full text available on demand.
+            history_text = (payload.get("history") or "").strip()
+            history_summary = ""
+            if history_text:
+                # Use the first non-empty line and truncate to a
+                # reasonable length for table display.
+                first_line = next((ln.strip() for ln in history_text.split("\n") if ln.strip()), "")
+                if len(first_line) > 160:
+                    history_summary = first_line[:157].rstrip() + "..."
+                else:
+                    history_summary = first_line
+
             summaries.append({
                 "id": event.id,
                 "title": fields.get("title") or fields.get("correlation_search") or event.source,
                 "correlation_search": fields.get("correlation_search"),
-                "host": fields.get("host") or event.host,
+                "host": host_display,
                 "user": fields.get("user") or fields.get("username"),
                 "urgency": fields.get("urgency"),
                 "disposition": fields.get("disposition"),
                 "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+                "history_summary": history_summary,
             })
 
         return summaries
@@ -3712,7 +3737,11 @@ def delete_pasted_notable(event_id: int):
             payload = {}
 
         if payload.get("historical"):
+            # Hide historical notables from both the recent list and the
+            # closed-notables summary while retaining the underlying record
+            # for any aggregate stats.
             payload["hidden_from_recent"] = True
+            payload["hidden_from_historical"] = True
             event.raw = json.dumps(payload)
         else:
             db.delete(event)
@@ -3787,7 +3816,11 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                     payload_raw = {}
 
                 if payload_raw.get("historical"):
+                    # Hide historical notables from both the recent list
+                    # and the closed-notables summary while retaining the
+                    # underlying record for any aggregate stats.
                     payload_raw["hidden_from_recent"] = True
+                    payload_raw["hidden_from_historical"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
                     db.delete(event)
@@ -3892,6 +3925,34 @@ def promote_notable_to_triage(event_id: int):
             "case_id": case_id,
             "verdict": verdict,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/db/notables/{event_id}", tags=["Database"])
+def get_pasted_notable(event_id: int):
+    """Return full details for a single pasted notable by ID.
+
+    Reuses the same shape as recent-notables serialization so the
+    frontend can show sanitized text, fields, and history for a closed
+    notable selected from the summary table.
+    """
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        event = db.query(SplunkEvent).filter(
+            SplunkEvent.id == event_id,
+            SplunkEvent.sourcetype == "splunk:notable:pasted",
+        ).first()
+
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
+
+        return serialize_recent_notable(event)
     except HTTPException:
         raise
     except Exception as e:
