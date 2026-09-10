@@ -59,15 +59,75 @@ function Assert-Repo {
     }
 }
 
-function Ensure-CleanOrConfirm {
+function Test-WorkingTreeDirty {
     $status = git status --porcelain
-    if (-not $status) {
+    return [bool]$status
+}
+
+function Ensure-CleanForBranchSwitch {
+    <#
+      Returns:
+        $true  - safe to switch branches (clean, or user chose continue/stash handled by caller)
+        $false - abort
+      Sets $Script:DidStash = $true if we stashed for the caller to pop later.
+    #>
+    $Script:DidStash = $false
+    if (-not (Test-WorkingTreeDirty)) {
         return $true
     }
+
     Write-Host "Working tree has uncommitted changes:" -ForegroundColor Yellow
     git status -sb
-    $r = Read-Host "Continue anyway? [y/N]"
-    return ($r -match '^[Yy]')
+    Write-Host ""
+    Write-Host "  [S] Stash, continue, then stash pop when done (recommended for tools like git-flow.ps1)"
+    Write-Host "  [C] Commit on current branch first (abort this action so you can menu 1 / commit)"
+    Write-Host "  [Y] Continue anyway (may fail if checkout would overwrite files)"
+    Write-Host "  [N] Abort"
+    $r = Read-Host "Choose"
+    switch -Regex ($r) {
+        '^[Ss]$' {
+            $stashMsg = "git-flow auto-stash $(Get-Date -Format 'yyyy-MM-dd HH:mm')"
+            git stash push -u -m $stashMsg
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "Stash failed - aborting." -ForegroundColor Red
+                return $false
+            }
+            $Script:DidStash = $true
+            Write-Host "Stashed. Will try to pop when this action finishes." -ForegroundColor Green
+            return $true
+        }
+        '^[Cc]$' {
+            Write-Host "Aborted. Commit your changes (menu 1 or git commit), then retry." -ForegroundColor Yellow
+            return $false
+        }
+        '^[Yy]$' {
+            return $true
+        }
+        default {
+            Write-Host "Aborted." -ForegroundColor Yellow
+            return $false
+        }
+    }
+}
+
+function Restore-StashIfNeeded {
+    if (-not $Script:DidStash) {
+        return
+    }
+    Write-Host "Restoring stashed changes (git stash pop)..." -ForegroundColor Cyan
+    git stash pop
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "stash pop had conflicts or failed. Resolve with: git status / git stash list" -ForegroundColor Yellow
+    }
+    else {
+        Write-Host "Stash restored." -ForegroundColor Green
+    }
+    $Script:DidStash = $false
+}
+
+# Back-compat name used by older call sites
+function Ensure-CleanOrConfirm {
+    return (Ensure-CleanForBranchSwitch)
 }
 
 function Get-CommitMessage {
@@ -150,9 +210,11 @@ function Save-MyStaging {
     }
 
     Write-Host "Pushing $($Script:MyStaging)..."
-    $usedSync = Invoke-GitSync -Branch $Script:MyStaging -Message $msg
-    if (-not $usedSync) {
-        git push -u origin $Script:MyStaging
+    # Plain git only. git-sync.ps1 has been observed passing -Message into git fetch.
+    git push -u origin $Script:MyStaging
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "Push failed. Check remote permissions / network." -ForegroundColor Red
+        return
     }
     Write-Host "Done. Your work is on origin/$($Script:MyStaging)" -ForegroundColor Green
 }
@@ -185,53 +247,76 @@ function Show-Compare {
 
 function Update-SharedStaging-FromMain {
     Write-Header "Refresh origin/${SharedStaging} from ${MainBranch}"
-    if (-not (Ensure-CleanOrConfirm)) {
+    if (-not (Ensure-CleanForBranchSwitch)) {
         return
     }
-    git fetch origin
-    git checkout ${MainBranch}
-    git pull origin ${MainBranch}
+    $startBranch = Get-CurrentBranch
+    try {
+        git fetch origin
+        git checkout ${MainBranch}
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Could not checkout ${MainBranch}." -ForegroundColor Red
+            return
+        }
+        git pull origin ${MainBranch}
 
-    Ensure-Branch-FromMain -Name ${SharedStaging}
-    git merge ${MainBranch} -m "Sync ${SharedStaging} with ${MainBranch}"
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "Conflicts - resolve, commit, then push ${SharedStaging}" -ForegroundColor Red
-        return
+        Ensure-Branch-FromMain -Name ${SharedStaging}
+        git merge ${MainBranch} -m "Sync ${SharedStaging} with ${MainBranch}"
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "Conflicts - resolve, commit, then push ${SharedStaging}" -ForegroundColor Red
+            return
+        }
+        git push -u origin ${SharedStaging}
+        Write-Host "origin/${SharedStaging} is up to date with main." -ForegroundColor Green
     }
-    git push -u origin ${SharedStaging}
-    Write-Host "origin/${SharedStaging} is up to date with main." -ForegroundColor Green
+    finally {
+        # Return to the branch you started on when possible
+        if ($startBranch -and ((Get-CurrentBranch) -ne $startBranch)) {
+            git checkout $startBranch 2>$null
+        }
+        Restore-StashIfNeeded
+    }
 }
 
 function Merge-MyStaging-Into-Shared {
     Write-Header "Merge $($Script:MyStaging) into ${SharedStaging}"
-    if (-not (Ensure-CleanOrConfirm)) {
+    if (-not (Ensure-CleanForBranchSwitch)) {
         return
     }
-    git fetch origin
+    $startBranch = Get-CurrentBranch
+    try {
+        git fetch origin
 
-    Ensure-Branch-FromMain -Name $Script:MyStaging
-    git push -u origin $Script:MyStaging 2>$null
+        Ensure-Branch-FromMain -Name $Script:MyStaging
+        git push -u origin $Script:MyStaging 2>$null
 
-    Ensure-Branch-FromMain -Name ${SharedStaging}
-    git pull origin ${SharedStaging}
+        Ensure-Branch-FromMain -Name ${SharedStaging}
+        git pull origin ${SharedStaging}
 
-    Write-Host "Commits that will merge into ${SharedStaging}:"
-    git log --oneline "${SharedStaging}..$($Script:MyStaging)"
-    $go = Read-Host "Merge $($Script:MyStaging) into ${SharedStaging}? [Y/n]"
-    if ($go -match '^[Nn]') {
-        return
+        Write-Host "Commits that will merge into ${SharedStaging}:"
+        git log --oneline "${SharedStaging}..$($Script:MyStaging)"
+        $go = Read-Host "Merge $($Script:MyStaging) into ${SharedStaging}? [Y/n]"
+        if ($go -match '^[Nn]') {
+            return
+        }
+
+        $msg = Get-CommitMessage "Merge $($Script:MyStaging) into ${SharedStaging}"
+        git merge $Script:MyStaging -m $msg
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "CONFLICT - fix files, git add -A, git commit, then push ${SharedStaging}" -ForegroundColor Red
+            Write-Host "You are NOT on main; conflicts are safe to resolve here." -ForegroundColor Yellow
+            return
+        }
+
+        git push origin ${SharedStaging}
+        Write-Host "Pushed origin/${SharedStaging}" -ForegroundColor Green
     }
-
-    $msg = Get-CommitMessage "Merge $($Script:MyStaging) into ${SharedStaging}"
-    git merge $Script:MyStaging -m $msg
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "CONFLICT - fix files, git add -A, git commit, then push ${SharedStaging}" -ForegroundColor Red
-        Write-Host "You are NOT on main; conflicts are safe to resolve here." -ForegroundColor Yellow
-        return
+    finally {
+        if ($startBranch -and ((Get-CurrentBranch) -ne $startBranch)) {
+            git checkout $startBranch 2>$null
+        }
+        Restore-StashIfNeeded
     }
-
-    git push origin ${SharedStaging}
-    Write-Host "Pushed origin/${SharedStaging}" -ForegroundColor Green
 }
 
 function Test-MainPromoteChecklist {
@@ -385,7 +470,8 @@ Assert-Repo
 Write-Host "Using personal staging branch: $($Script:MyStaging)" -ForegroundColor DarkGray
 Write-Host "Override with -UserName dalton  or  `$env:GIT_FLOW_USER='dalton'" -ForegroundColor DarkGray
 
-while ($true) {
+$Script:KeepRunning = $true
+while ($Script:KeepRunning) {
     Show-Menu
     $choice = Read-Host "Choose"
     switch -Regex ($choice) {
@@ -396,7 +482,7 @@ while ($true) {
         '^5$' { Update-SharedStaging-FromMain }
         '^6$' { Merge-SharedStaging-Into-Main }
         '^7$' { Prefer-RemoteDangerous }
-        '^[Qq]$' { break }
+        '^[Qq]$' { $Script:KeepRunning = $false }
         default { Write-Host "Unknown option" -ForegroundColor Yellow }
     }
 }
