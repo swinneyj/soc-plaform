@@ -396,64 +396,112 @@
             this.onAnalysisCaseChanged();
         },
 
+        _emptyInvestigationState(caseId) {
+            return {
+                case_id: caseId || '',
+                rule_id: '',
+                current_hypothesis: '',
+                provisional_disposition: 'undetermined',
+                disposition_confidence: 0,
+                loop_status: 'collecting_evidence',
+                iteration_count: 0,
+                unresolved_questions: [],
+                closure_blockers: ['No saved investigative evidence exists yet for this case.'],
+                recommended_next_actions: [],
+                evidence_summary: {
+                    total_items: 0,
+                    substantive_items: 0,
+                    pending_items: 0,
+                    by_finding: { supports: 0, refutes: 0, neutral: 0 },
+                    by_source_system: {},
+                    recent_titles: [],
+                    timeline: []
+                },
+                last_analysis_stage: 'initial',
+                updated_at: null
+            };
+        },
+
         async loadInvestigationState(caseId) {
             if (!caseId) {
                 return;
             }
 
+            // Always show the Investigation Loop panel for the selected case.
+            // If the API is down or returns nothing useful, fall back to an empty
+            // shell and hydrate the timeline from GET /evidence.
             try {
                 const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
-                this.investigationState = res.data;
-                await this._ensureTimelineEvidenceIds(caseId);
+                this.investigationState = res.data || this._emptyInvestigationState(caseId);
             } catch (err) {
                 console.error('Failed to load investigation state:', err);
-                this.investigationState = null;
+                this.investigationState = this._emptyInvestigationState(caseId);
             }
+            await this._hydrateTimelineFromEvidence(caseId);
         },
 
         /**
-         * Older investigation_state rows were saved before timeline items included
-         * SupportiveQueryResult ids. Attach ids from the evidence ledger so delete
-         * controls work without requiring the analyst to re-save evidence.
+         * Build / repair Evidence Timeline from the durable evidence ledger.
+         * - Attaches missing ids onto existing timeline rows
+         * - If timeline is empty but evidence rows exist, builds timeline from them
+         *   so the panel is never blank solely because investigation_state is stale
          */
-        async _ensureTimelineEvidenceIds(caseId) {
-            const state = this.investigationState;
-            const timeline = state && state.evidence_summary && state.evidence_summary.timeline;
-            if (!Array.isArray(timeline) || !timeline.length || !caseId) {
-                return;
-            }
-            const missing = timeline.some((item) => item && (item.id === null || item.id === undefined || item.id === ''));
-            if (!missing) {
-                return;
+        async _hydrateTimelineFromEvidence(caseId) {
+            if (!caseId) return;
+            if (!this.investigationState) {
+                this.investigationState = this._emptyInvestigationState(caseId);
             }
 
+            let rows = [];
             try {
                 const res = await axios.get(
                     this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
                 );
-                const rows = Array.isArray(res.data) ? res.data : [];
-                // newest first to match timeline preference
+                rows = Array.isArray(res.data) ? res.data : [];
+            } catch (err) {
+                console.warn('Could not load evidence ledger for timeline:', err);
+                return;
+            }
+
+            const state = this.investigationState;
+            const summary = Object.assign({}, state.evidence_summary || {});
+            let timeline = Array.isArray(summary.timeline) ? summary.timeline.slice() : [];
+
+            // Build from ledger when timeline is empty
+            if (!timeline.length && rows.length) {
+                timeline = rows.map((row) => {
+                    let raw = row.raw_result;
+                    if (typeof raw === 'string') {
+                        try { raw = JSON.parse(raw); } catch (e) { raw = { result_text: raw }; }
+                    }
+                    raw = raw || {};
+                    const summaryText = (raw.analyst_summary || raw.result_text || '').toString().trim();
+                    const finding = (raw.finding_type || 'neutral').toString().toLowerCase();
+                    return {
+                        id: row.id,
+                        title: row.query_title || 'Evidence',
+                        source_system: row.source_system || 'unknown',
+                        finding_type: finding,
+                        summary: summaryText.slice(0, 500),
+                        has_substantive_observation: !!summaryText,
+                        created_at: row.created_at || null
+                    };
+                });
+            } else if (timeline.length && rows.length) {
+                // Attach missing ids
                 const byKey = {};
-                for (const row of rows) {
-                    const key = String(row.query_title || '').trim().toLowerCase()
-                        + '||'
-                        + String(row.source_system || '').trim().toLowerCase();
-                    if (!byKey[key]) byKey[key] = [];
-                    byKey[key].push(row.id);
-                }
-                // also allow title-only match when source differs slightly
                 const byTitle = {};
                 for (const row of rows) {
                     const t = String(row.query_title || '').trim().toLowerCase();
+                    const s = String(row.source_system || '').trim().toLowerCase();
+                    const key = t + '||' + s;
+                    if (!byKey[key]) byKey[key] = [];
+                    byKey[key].push(row.id);
                     if (!byTitle[t]) byTitle[t] = [];
                     byTitle[t].push(row.id);
                 }
-
-                let changed = false;
                 for (const item of timeline) {
-                    if (!item || (item.id !== null && item.id !== undefined && item.id !== '')) {
-                        continue;
-                    }
+                    if (!item || (item.id !== null && item.id !== undefined && item.id !== '')) continue;
                     const key = String(item.title || '').trim().toLowerCase()
                         + '||'
                         + String(item.source_system || '').trim().toLowerCase();
@@ -463,22 +511,40 @@
                     }
                     if (ids && ids.length) {
                         item.id = ids.shift();
-                        changed = true;
                     }
                 }
-                if (changed) {
-                    // trigger Vue reactivity on nested timeline
-                    this.investigationState = {
-                        ...state,
-                        evidence_summary: {
-                            ...state.evidence_summary,
-                            timeline: timeline.slice()
-                        }
-                    };
-                }
-            } catch (err) {
-                console.warn('Could not attach evidence ids to timeline:', err);
             }
+
+            // Refresh summary counts from timeline
+            const byFinding = { supports: 0, refutes: 0, neutral: 0 };
+            let substantive = 0;
+            let pending = 0;
+            for (const item of timeline) {
+                if (item && item.has_substantive_observation) {
+                    substantive += 1;
+                    const ft = (item.finding_type || 'neutral').toLowerCase();
+                    if (byFinding[ft] === undefined) byFinding.neutral += 1;
+                    else byFinding[ft] += 1;
+                } else {
+                    pending += 1;
+                }
+            }
+            summary.timeline = timeline;
+            summary.total_items = substantive;
+            summary.substantive_items = substantive;
+            summary.pending_items = pending;
+            summary.by_finding = byFinding;
+            summary.saved_entries = rows.length;
+
+            this.investigationState = {
+                ...state,
+                evidence_summary: summary
+            };
+        },
+
+        // Back-compat alias used by delete/refresh paths
+        async _ensureTimelineEvidenceIds(caseId) {
+            return this._hydrateTimelineFromEvidence(caseId);
         },
 
         async _resolveEvidenceId(item) {
