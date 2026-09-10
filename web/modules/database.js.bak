@@ -149,54 +149,6 @@
             }
         },
 
-        async loadClosedNotableDetails(notableSummary) {
-            if (!notableSummary || !notableSummary.id) {
-                return;
-            }
-
-            const id = notableSummary.id;
-            const existing = this.triageNotableDetails[id];
-            if (existing && (existing.loading || existing.data)) {
-                return;
-            }
-
-            // Vue 3: direct assignment is reactive when the parent object
-            // (triageNotableDetails) was declared in data().
-            this.triageNotableDetails[id] = { loading: true, error: null, data: null };
-
-            try {
-                const res = await axios.get(this.apiUrl + '/db/notables/' + id);
-                this.triageNotableDetails[id] = { loading: false, error: null, data: res.data };
-            } catch (err) {
-                console.error('Failed to load closed notable details:', err);
-                const detail = (err.response && err.response.data && err.response.data.detail) || err.message;
-                this.triageNotableDetails[id] = { loading: false, error: detail, data: null };
-            }
-        },
-
-        async deleteClosedNotable(notableSummary) {
-            if (!notableSummary || !notableSummary.id) {
-                return;
-            }
-
-            if (!confirm('Remove this closed notable from the summary list? The underlying record is retained for stats but will be hidden from the Closed Notables view.')) {
-                return;
-            }
-
-            const id = notableSummary.id;
-            try {
-                await axios.post(this.apiUrl + '/db/notables/' + id + '/delete');
-                // Drop any cached details for this id so the details panel closes cleanly
-                if (this.triageNotableDetails && this.triageNotableDetails[id]) {
-                    delete this.triageNotableDetails[id];
-                }
-                await this.loadHistoricalNotables();
-                await this.loadDbStats();
-            } catch (err) {
-                alert('Error deleting closed notable: ' + ((err.response && err.response.data && err.response.data.detail) || err.message));
-            }
-        },
-
         async loadTriageData() {
             try {
                 const params = { limit: 50 };
