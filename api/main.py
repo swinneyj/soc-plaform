@@ -4290,7 +4290,7 @@ def analyze_case(request: AnalyzeRequest):
         response_text = result["response"] or ""
         phase2_queries = _extract_phase2_queries(response_text)
 
-        if not phase2_queries:
+        if False and not phase2_queries:
             fallback_prompt_parts = [
                 "You are generating follow-up SOC investigation queries from an existing analysis.",
                 "Return ONLY a JSON array. Do not include markdown fences, prose, headings, or commentary.",
