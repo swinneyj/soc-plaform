@@ -216,8 +216,15 @@ if ($EnsureOllama) {
 
 $env:POSTGRES_HOST_PORT = "$PostgresHostPort"
 $env:API_HOST_PORT = "$ApiPort"
-$env:COMPOSE_DATABASE_URL = "postgresql+psycopg://soc_platform@postgres:5432/soc_platform"
-$env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:$PostgresHostPort/soc_platform"
+if (-not $env:POSTGRES_PASSWORD) {
+    Write-Error "POSTGRES_PASSWORD is required. Copy .env.example to .env and set a private password, then export it before starting."
+    exit 1
+}
+$encodedPassword = [System.Uri]::EscapeDataString($env:POSTGRES_PASSWORD)
+$databaseUser = if ($env:POSTGRES_USER) { $env:POSTGRES_USER } else { "soc_platform" }
+$databaseName = if ($env:POSTGRES_DB) { $env:POSTGRES_DB } else { "soc_platform" }
+$env:COMPOSE_DATABASE_URL = "postgresql+psycopg://$databaseUser`:$encodedPassword@postgres:5432/$databaseName"
+$env:DATABASE_URL = "postgresql+psycopg://$databaseUser`:$encodedPassword@localhost`:$PostgresHostPort/$databaseName"
 
 Write-Host "[*] Starting postgres and redis via docker compose..."
 docker compose up -d postgres redis
@@ -282,7 +289,7 @@ if (-not (Wait-ForHttp -Url $healthUrl -MaxAttempts 60 -DelaySeconds 2)) {
 }
 
 Write-Host "[+] API is healthy"
-Write-Host "[+] DATABASE_URL=$($env:DATABASE_URL)"
+Write-Host "[+] DATABASE_URL configured (password hidden)"
 
 if ($OpenBrowser) {
     Start-Process "http://127.0.0.1:$ApiPort"

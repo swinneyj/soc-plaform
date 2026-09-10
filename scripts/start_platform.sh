@@ -7,8 +7,12 @@ cd "${REPO_ROOT}"
 POSTGRES_HOST_PORT="${POSTGRES_HOST_PORT:-5433}"
 API_HOST_PORT="${API_HOST_PORT:-8000}"
 export POSTGRES_HOST_PORT API_HOST_PORT
-export COMPOSE_DATABASE_URL="${COMPOSE_DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}"
-export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://soc_platform@localhost:${POSTGRES_HOST_PORT}/soc_platform}"
+if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
+  echo "[!] POSTGRES_PASSWORD is required. Copy .env.example to .env and export a private password before starting." >&2
+  exit 1
+fi
+export COMPOSE_DATABASE_URL="${COMPOSE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-soc_platform}}"
+export DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD}@localhost:${POSTGRES_HOST_PORT}/${POSTGRES_DB:-soc_platform}}"
 
 echo "============================================"
 echo "  Starting SOC Platform"
@@ -57,7 +61,7 @@ echo "[*] Waiting for API health at http://127.0.0.1:${API_HOST_PORT}/health"
 for attempt in $(seq 1 60); do
   if curl --fail --silent "http://127.0.0.1:${API_HOST_PORT}/health" >/dev/null 2>&1; then
     echo "[+] API is healthy"
-    echo "[+] DATABASE_URL=${DATABASE_URL}"
+    echo "[+] DATABASE_URL configured (password hidden)"
     exit 0
   fi
   if [[ "${attempt}" == 60 ]]; then

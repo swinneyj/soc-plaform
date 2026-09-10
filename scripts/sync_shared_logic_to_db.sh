@@ -2,13 +2,17 @@
 set -Eeuo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://soc_platform@localhost:5433/soc_platform}"
+if [[ -z "${POSTGRES_PASSWORD:-}" && -z "${DATABASE_URL:-}" ]]; then
+  echo "[!] Set DATABASE_URL or POSTGRES_PASSWORD before syncing shared logic." >&2
+  exit 1
+fi
+DATABASE_URL="${DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD}@localhost:5433/${POSTGRES_DB:-soc_platform}}"
 export DATABASE_URL
-COMPOSE_DATABASE_URL="${COMPOSE_DATABASE_URL:-postgresql+psycopg://soc_platform@postgres:5432/soc_platform}"
+COMPOSE_DATABASE_URL="${COMPOSE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-soc_platform}}"
 export COMPOSE_DATABASE_URL
 
 echo "[*] Syncing shared logic from repo files into database..."
-echo "[*] DATABASE_URL=${DATABASE_URL}"
+echo "[*] DATABASE_URL configured (password hidden)"
 
 IMPORTER="${REPO_ROOT}/Tools/es_rules_importer/es_rules_importer.py"
 if [[ ! -f "${IMPORTER}" ]]; then

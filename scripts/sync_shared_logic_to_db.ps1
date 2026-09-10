@@ -6,13 +6,19 @@ param(
 Set-Location $RepoRoot
 
 if (-not $DatabaseUrl) {
-    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+    if (-not $env:POSTGRES_PASSWORD) {
+        throw "Set DATABASE_URL or POSTGRES_PASSWORD before syncing shared logic."
+    }
+    $encodedPassword = [System.Uri]::EscapeDataString($env:POSTGRES_PASSWORD)
+    $databaseUser = if ($env:POSTGRES_USER) { $env:POSTGRES_USER } else { "soc_platform" }
+    $databaseName = if ($env:POSTGRES_DB) { $env:POSTGRES_DB } else { "soc_platform" }
+    $DatabaseUrl = "postgresql+psycopg://$databaseUser`:$encodedPassword@localhost`:5433/$databaseName"
 }
 
 $env:DATABASE_URL = $DatabaseUrl
 
 Write-Host "[*] Syncing shared logic from repo files into database..."
-Write-Host "[*] DATABASE_URL=$DatabaseUrl"
+Write-Host "[*] DATABASE_URL configured (password hidden)"
 
 $sampleRules = Join-Path $RepoRoot "sample_rules.json"
 $supportiveRules = Join-Path $RepoRoot "supportive_rules.json"

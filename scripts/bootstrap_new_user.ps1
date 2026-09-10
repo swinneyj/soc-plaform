@@ -12,7 +12,16 @@ param(
 )
 
 if (-not $DatabaseUrl) {
-    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:$PostgresHostPort/soc_platform"
+    $DatabaseUrl = $env:DATABASE_URL
+}
+if (-not $DatabaseUrl) {
+    if (-not $env:POSTGRES_PASSWORD) {
+        throw "POSTGRES_PASSWORD is required. Copy .env.example to .env and set a private password."
+    }
+    $encodedPassword = [System.Uri]::EscapeDataString($env:POSTGRES_PASSWORD)
+    $databaseUser = if ($env:POSTGRES_USER) { $env:POSTGRES_USER } else { "soc_platform" }
+    $databaseName = if ($env:POSTGRES_DB) { $env:POSTGRES_DB } else { "soc_platform" }
+    $DatabaseUrl = "postgresql+psycopg://$databaseUser`:$encodedPassword@localhost`:$PostgresHostPort/$databaseName"
 }
 
 Set-Location $RepoRoot
@@ -68,5 +77,5 @@ if (-not $SkipSharedLogicSync) {
 }
 
 $env:DATABASE_URL = $DatabaseUrl
-Write-Host "[*] Launching API on port $ApiPort with DATABASE_URL=$DatabaseUrl"
+Write-Host "[*] Launching API on port $ApiPort with DATABASE_URL configured (password hidden)"
 python -m uvicorn --app-dir $RepoRoot api.main:app --host 127.0.0.1 --port $ApiPort
