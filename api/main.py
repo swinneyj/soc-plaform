@@ -964,6 +964,11 @@ class InvestigationEvidenceBatchPayload(BaseModel):
     replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
 
 
+class InvestigationEvidenceIdsPayload(BaseModel):
+    """Payload for deleting one or more evidence rows by id."""
+    ids: List[int] = Field(default_factory=list, description="SupportiveQueryResult ids to delete for this case")
+
+
 class SupportiveQueryPayload(BaseModel):
     """Payload for creating/updating supportive SPL queries.
 
@@ -3133,7 +3138,6 @@ def get_triage_case(case_id: str):
             pass
 
 
-@app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
 def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Attach SupportiveQueryResult ids onto timeline items so the UI can delete them.
 
@@ -3167,18 +3171,21 @@ def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str
 
     # Map (title, source_system) -> list of ids (newest first)
     by_key: Dict[tuple, list] = {}
+    by_title: Dict[str, list] = {}
     for r in rows:
-        key = ((r.query_title or "").strip().lower(), (r.source_system or "").strip().lower())
-        by_key.setdefault(key, []).append(r.id)
+        title_key = (r.query_title or "").strip().lower()
+        source_key = (r.source_system or "").strip().lower()
+        by_key.setdefault((title_key, source_key), []).append(r.id)
+        by_title.setdefault(title_key, []).append(r.id)
 
     for item in timeline:
         if not isinstance(item, dict) or item.get("id"):
             continue
-        key = (
-            (item.get("title") or "").strip().lower(),
-            (item.get("source_system") or "").strip().lower(),
-        )
-        ids = by_key.get(key) or []
+        title_key = (item.get("title") or "").strip().lower()
+        source_key = (item.get("source_system") or "").strip().lower()
+        ids = by_key.get((title_key, source_key)) or []
+        if not ids:
+            ids = by_title.get(title_key) or []
         if ids:
             item["id"] = ids.pop(0)
 
@@ -3187,6 +3194,7 @@ def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str
     return state_payload
 
 
+@app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
 def get_investigation_state(case_id: str):
     """Return the latest persisted investigation loop state for a case."""
     db = None
@@ -3381,6 +3389,106 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
         except Exception:
             pass
 
+
+
+# Static evidence delete paths MUST be registered before the parameterized
+# /evidence/{evidence_id} routes so "batch-delete" / "delete-all" are not
+# captured as evidence_id values.
+@app.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
+def batch_delete_case_evidence(case_id: str, payload: InvestigationEvidenceIdsPayload):
+    """Delete one or more saved investigation evidence items and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        ids = [int(i) for i in (payload.ids or []) if i is not None]
+        if not ids:
+            raise HTTPException(status_code=400, detail="No evidence ids provided")
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        rows = (
+            db.query(SupportiveQueryResult)
+            .filter(
+                SupportiveQueryResult.case_id == case_id,
+                SupportiveQueryResult.id.in_(ids),
+            )
+            .all()
+        )
+        deleted_ids = [r.id for r in rows]
+        for row in rows:
+            db.delete(row)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_ids": deleted_ids,
+            "deleted_count": len(deleted_ids),
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
+def delete_all_case_evidence(case_id: str):
+    """Delete all saved investigation evidence for a case and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        deleted_count = (
+            db.query(SupportiveQueryResult)
+            .filter(SupportiveQueryResult.case_id == case_id)
+            .delete(synchronize_session=False)
+        )
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_count": int(deleted_count or 0),
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
 
 
 @app.delete("/api/db/triage/{case_id}/evidence/{evidence_id}", tags=["Database"])
