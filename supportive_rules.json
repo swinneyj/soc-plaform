@@ -182,6 +182,26 @@
           "title": "Source IP spray pattern",
           "description": "Identify source IPs performing password spraying against PingFederate.",
           "spl_query": "index=auth sourcetype=pingfederate signature=$signature$ | stats count dc(user) as distinct_users by src_ip | where distinct_users>5 | sort -count"
+        },
+        {
+          "title": "Post-authentication service and application access",
+          "description": "Identify enterprise applications and cloud resources accessed by the user immediately after authentication.",
+          "spl_query": "index=auth sourcetype=pingfederate user=$user$ outcome=\"SUCCESS\" | table _time, src_ip, app, target_service, session_id"
+        },
+        {
+          "title": "Impossible travel and concurrent IP activity for target user",
+          "description": "Detect concurrent sessions or rapid geographic shifts indicating active session hijacking or credential sharing.",
+          "spl_query": "index=auth sourcetype=pingfederate user=$user$ | stats earliest(_time) as first_time, latest(_time) as last_time, values(src_ip) as ips, values(country) as countries by user | where mvcount(ips)>1"
+        },
+        {
+          "title": "Self-service credential tampering or MFA device registration",
+          "description": "Detect secondary persistence via newly registered MFA factors or recovery methods following successful login.",
+          "spl_query": "index=audit sourcetype=\"pingfederate:audit\" user=$user$ (action=\"*mfa*\" OR action=\"*password*\" OR action=\"*device*\") | table _time, action, status, src_ip, user_agent"
+        },
+        {
+          "title": "Downstream endpoint process execution by compromised account",
+          "description": "Detect host-level command execution and lateral movement originating from the compromised identity.",
+          "spl_query": "index=endpoint (sourcetype=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" OR sourcetype=\"WinEventLog:Security\") user=$user$ | table _time, host, Image, CommandLine, ParentImage"
         }
       ]
     }

@@ -107,13 +107,7 @@
                 }
             }
         },
-        async generateClosureNote() {
-            const missingFields = this.selectedRule.required_closure_fields.filter(f => !this.closureForm.fieldValues[f]);
-            if (missingFields.length > 0) {
-                alert('Please fill in all required fields: ' + missingFields.join(', '));
-                return;
-            }
-
+        async generateClosureNote(force = false) {
             this.closureGenerating = true;
             try {
                 const res = await axios.post(this.apiUrl + '/db/closure-note', {
@@ -121,11 +115,24 @@
                     case_id: this.closureForm.caseId,
                     field_values: this.closureForm.fieldValues,
                     analyst_notes: this.closureForm.analystNotes,
-                    disposition: this.closureForm.disposition
+                    disposition: this.closureForm.disposition,
+                    force_closure: force
                 });
+                if (res.data && res.data.blocked) {
+                    const blockersList = (res.data.readiness && res.data.readiness.blockers) || [];
+                    const nl = String.fromCharCode(10);
+                    const msg = 'Investigation closure criteria not yet fully met:' + nl + nl +
+                        '- ' + blockersList.join(nl + '- ') + nl + nl +
+                        'Do you want to override and generate the closure note anyway?';
+                    const proceed = confirm(msg);
+                    if (proceed) {
+                        return this.generateClosureNote(true);
+                    }
+                    return;
+                }
                 this.closureResult = res.data;
             } catch (err) {
-                alert('Error: ' + err.response?.data?.detail || err.message);
+                alert('Error: ' + (err.response?.data?.detail || err.message));
             } finally {
                 this.closureGenerating = false;
             }

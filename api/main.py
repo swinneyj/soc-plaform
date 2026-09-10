@@ -39,7 +39,12 @@ from services.investigation_state import (
     _serialize_investigation_state_record,
     _summarize_evidence_observation,
     _upsert_investigation_state,
+    _apply_investigation_state_to_analysis_text,
 )
+from services.analysis_service import sanitize_analysis_text as _sanitize_analysis_text
+
+NL = chr(10)
+NL2 = chr(10) + chr(10)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -257,9 +262,14 @@ def _ground_phase2_queries(
     title_to_def = {}
     spl_to_def = {}
     for query_def in supportive_query_defs or []:
-        title = (getattr(query_def, "title", "") or "").strip()
-        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
-        description = (getattr(query_def, "description", "") or "").strip()
+        if isinstance(query_def, dict):
+            title = (query_def.get("title") or "").strip()
+            spl_query = (query_def.get("spl_query") or query_def.get("spl") or "").strip()
+            description = (query_def.get("description") or "").strip()
+        else:
+            title = (getattr(query_def, "title", "") or "").strip()
+            spl_query = (getattr(query_def, "spl_query", "") or getattr(query_def, "spl", "") or "").strip()
+            description = (getattr(query_def, "description", "") or "").strip()
         if not title or not spl_query:
             continue
         payload = {
@@ -396,60 +406,6 @@ def _format_state_closure_section(investigation_state: Dict[str, Any]) -> str:
     lines.append(f"Closure-ready disposition: {disposition}.")
     lines.append("Use the saved evidence timeline and required closure fields to generate the final operator note.")
     return "\n".join(lines).strip()
-
-
-def _apply_investigation_state_to_analysis_text(analysis_text: str, investigation_state: Dict[str, Any]) -> str:
-    verdict_section = _format_state_verdict_section(investigation_state)
-    closure_section = _format_state_closure_section(investigation_state)
-
-    verdict_pattern = re.compile(
-        r"(?:^|\n)(?:###\s+)?Triage Verdict[\s\S]*?(?=\n(?:###\s+)?Structured Closure Notes\b|$)",
-        flags=re.IGNORECASE,
-    )
-    closure_pattern = re.compile(
-        r"(?:^|\n)(?:###\s+)?Structured Closure Notes[\s\S]*$",
-        flags=re.IGNORECASE,
-    )
-
-    updated = analysis_text or ""
-    if verdict_pattern.search(updated):
-        updated = verdict_pattern.sub("\n\n" + verdict_section + "\n\n", updated, count=1)
-    else:
-        updated = f"{updated}\n\n{verdict_section}".strip()
-
-    if closure_pattern.search(updated):
-        updated = closure_pattern.sub("\n\n" + closure_section, updated, count=1)
-    else:
-        updated = f"{updated}\n\n{closure_section}".strip()
-
-    return updated.strip()
-
-
-def _sanitize_analysis_text(response_text: str, phase2_queries: List[Dict[str, Any]]) -> str:
-    cleaned = response_text or ""
-    cleaned = re.sub(
-        r"\*{0,2}PHASE2_QUERIES_JSON_START\*{0,2}[\s\S]*?(?:\*{0,2}PHASE2_QUERIES_JSON_END\*{0,2}|$)",
-        "",
-        cleaned,
-        flags=re.IGNORECASE,
-    ).strip()
-
-    section_text = _format_grounded_phase2_section(phase2_queries)
-    section_pattern = re.compile(
-        r"(?:^|\n)(?:###\s+)?Supportive Query Recommendations \(Phase 2 SPL\)[\s\S]*?(?=\n(?:###\s+)?(?:Triage Verdict|Structured Closure Notes)\b|$)",
-        flags=re.IGNORECASE,
-    )
-    if section_pattern.search(cleaned):
-        cleaned = section_pattern.sub("\n\n" + section_text + "\n\n", cleaned, count=1)
-    elif phase2_queries:
-        triage_pattern = re.compile(r"\n(?:###\s+)?Triage Verdict\b", flags=re.IGNORECASE)
-        triage_match = triage_pattern.search(cleaned)
-        if triage_match:
-            cleaned = cleaned[:triage_match.start()].rstrip() + "\n\n" + section_text + "\n\n" + cleaned[triage_match.start():].lstrip()
-        else:
-            cleaned = f"{cleaned}\n\n{section_text}".strip()
-
-    return cleaned.strip()
 
 
 def _load_supportive_results_for_case(db, case_id: str) -> List[Dict[str, Any]]:
@@ -654,6 +610,9 @@ class InvestigationEvidenceEntryPayload(BaseModel):
     result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
     analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
     finding_type: Optional[str] = Field("neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis")
+    result_status: Optional[str] = Field("success", description="Execution status: success, no_results, data_source_unavailable, query_failed, not_run, benign_result")
+    collection_time: Optional[str] = Field(None, description="ISO timestamp when evidence was collected")
+    source_system: Optional[str] = Field("splunk", description="Telemetry source system (splunk, mde, defender, edr, firewall, etc.)")
 
 
 class InvestigationEvidenceBatchPayload(BaseModel):
@@ -2749,7 +2708,6 @@ def get_triage_case(case_id: str):
             pass
 
 
-@app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
 def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str, Any]) -> Dict[str, Any]:
     """Attach SupportiveQueryResult ids onto timeline items so the UI can delete them.
 
@@ -2803,6 +2761,7 @@ def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str
     return state_payload
 
 
+@app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
 def get_investigation_state(case_id: str):
     """Return the latest persisted investigation loop state for a case."""
     db = None
@@ -2918,7 +2877,15 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
         source_system = (payload.source_system or "phase2_manual").strip() or "phase2_manual"
-        if payload.replace_existing:
+        valid_entries = [
+            e for e in (payload.entries or [])
+            if (getattr(e, "query_title", "") or "").strip() and (
+                (getattr(e, "result_text", "") or "").strip() or
+                (getattr(e, "analyst_summary", "") or "").strip() or
+                (getattr(e, "query_text", "") or "").strip()
+            )
+        ]
+        if payload.replace_existing and valid_entries:
             db.query(SupportiveQueryResult).filter(
                 SupportiveQueryResult.case_id == case_id,
                 SupportiveQueryResult.source_system == source_system,
@@ -2946,6 +2913,9 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                     "result_text": result_text,
                     "analyst_summary": analyst_summary,
                     "finding_type": (entry.finding_type or "neutral").strip() or "neutral",
+                    "result_status": (getattr(entry, "result_status", None) or "success").strip() or "success",
+                    "collection_time": getattr(entry, "collection_time", None) or datetime.datetime.utcnow().isoformat(),
+                    "source_system": getattr(entry, "source_system", source_system) or source_system,
                 },
                 ensure_ascii=False,
             )
@@ -3056,6 +3026,94 @@ def delete_case_evidence(case_id: str, evidence_id: int):
 def delete_case_evidence_post(case_id: str, evidence_id: int):
     """POST wrapper for environments that disallow DELETE from the browser UI."""
     return delete_case_evidence(case_id=case_id, evidence_id=evidence_id)
+
+
+@app.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
+def delete_case_evidence_batch(case_id: str, payload: dict):
+    """Delete multiple saved investigation evidence items by ID and rebuild loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        raw_ids = payload.get("ids") or payload.get("evidence_ids") or []
+        ids = [int(i) for i in raw_ids if i is not None and str(i).isdigit()]
+        if not ids:
+            return {"success": True, "deleted_ids": []}
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        db.query(SupportiveQueryResult).filter(
+            SupportiveQueryResult.case_id == case_id,
+            SupportiveQueryResult.id.in_(ids)
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_ids": ids,
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
+def delete_all_case_evidence(case_id: str):
+    """Delete all saved investigation evidence for a case and reset loop state."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        db.query(SupportiveQueryResult).filter(
+            SupportiveQueryResult.case_id == case_id
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        investigation_state = _rebuild_investigation_state_from_evidence(
+            db, case, analysis_stage="evidence_only"
+        )
+        db.commit()
+        return {
+            "success": True,
+            "deleted_all": True,
+            "investigation_state": investigation_state,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            if db is not None:
+                db.close()
+        except Exception:
+            pass
 
 
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
@@ -3869,51 +3927,20 @@ def get_triage_source_notable(case_id: str):
     """Return the source pasted notable details for a promoted triage case."""
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent
+        from db.models import SessionLocal
+        from services.evidence_service import resolve_source_notable_for_case
 
         db = SessionLocal()
-        events = db.query(SplunkEvent).filter(
-            SplunkEvent.sourcetype == "splunk:notable:pasted"
-        ).order_by(SplunkEvent.ingested_at.desc()).all()
-
-        for event in events:
-            try:
-                payload = json.loads(event.raw) if event.raw else {}
-            except Exception:
-                continue
-
-            if payload.get("promoted_case_id") == case_id:
-                fields = payload.get("fields", {})
-                raw_fields = payload.get("raw_fields") or fields
-                parse_assessment = payload.get("parse_assessment") or build_parse_assessment(
-                    raw_fields,
-                    payload.get("sanitized_text", ""),
-                    payload.get("history") or "",
-                )
-                return {
-                    "event_id": event.id,
-                    "historical": payload.get("historical", False),
-                    "raw_fields": raw_fields,
-                    "fields": fields,
-                    "key_fields": extract_triage_key_fields(fields, raw_fields),
-                    "sanitized_text": payload.get("sanitized_text", ""),
-                    "history": payload.get("history"),
-                    "parse_assessment": parse_assessment,
-                    "saved_at": payload.get("saved_at") or (
-                        event.ingested_at.isoformat() if event.ingested_at else None
-                    ),
-                }
-
-        raise HTTPException(status_code=404, detail=f"Source pasted notable for case {case_id} not found")
+        try:
+            return resolve_source_notable_for_case(db, case_id)
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        finally:
+            db.close()
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            db.close()
-        except Exception:
-            pass
 
 # In api/main.py -> analyze_case()
 
@@ -3925,7 +3952,7 @@ def analyze_case(request: AnalyzeRequest):
         context = request.context
 
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState, AnalysisResult
         from services.ollama_service import get_ollama_client
 
         db = SessionLocal()
@@ -4066,6 +4093,29 @@ def analyze_case(request: AnalyzeRequest):
                 for q in extras:
                     if q.title not in existing_titles:
                         supportive_query_defs.append(q)
+
+            # Merge specialized follow-up queries from supportive_rules.json
+            repo_supportive_path = os.path.join(get_platform_root(), "supportive_rules.json")
+            if os.path.isfile(repo_supportive_path):
+                try:
+                    with open(repo_supportive_path, "r", encoding="utf-8") as rf:
+                        rules_file_data = json.load(rf)
+                    existing_titles = {_normalize_phase2_text(getattr(q, "title", "")) for q in supportive_query_defs}
+                    for r_entry in (rules_file_data.get("rules") or []):
+                        if (r_entry.get("rule_id") or "").strip().lower() == rule_id.lower():
+                            for sq in (r_entry.get("supportive_queries") or []):
+                                t = sq.get("title") or ""
+                                if _normalize_phase2_text(t) not in existing_titles:
+                                    class VirtualQuery:
+                                        def __init__(self, t, d, s, qid=None):
+                                            self.id = qid
+                                            self.title = t
+                                            self.description = d
+                                            self.spl_query = s
+                                    supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
+                                    existing_titles.add(_normalize_phase2_text(t))
+                except Exception as ex:
+                    print(f"Failed to load supportive_rules.json: {ex}", file=sys.stderr)
 
         db.close()
 
@@ -4329,6 +4379,7 @@ def analyze_case(request: AnalyzeRequest):
             "case_id": case_id,
             "model": model,
             "analysis": display_analysis,
+            "analysis_sections": _extract_analysis_sections(response_text),
             "analysis_stage": analysis_stage,
             "used_prior_analysis": bool(prior_analysis),
             "detection_science_applied": bool(detection_rule),
@@ -4337,7 +4388,7 @@ def analyze_case(request: AnalyzeRequest):
             "investigation_evidence_count": len(supportive_results),
             "supportive_queries": [
                 {
-                    "id": q.id,
+                    "id": getattr(q, "id", None),
                     "title": q.title,
                     "description": q.description,
                     "spl_query": q.spl_query,
@@ -4807,79 +4858,58 @@ def list_rules():
     except Exception:
         return []
 
-@app.post("/api/db/closure-note", tags=["Rules"])
-def generate_closure_note(request: dict):
-    # Generate a closure note for a case based on rule template.
+@app.get("/api/db/triage/{case_id}/closure-readiness", tags=["Rules"])
+def check_closure_readiness(case_id: str):
+    """Evaluate whether a case satisfies all investigation gating rules for closure."""
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, ESCorrelationRule, ClosureNote, TriageResult
-        
-        rule_id = request.get('rule_id')
-        case_id = request.get('case_id')
-        field_values = request.get('field_values', {})
-        analyst_notes = request.get('analyst_notes', '')
-        disposition = request.get('disposition', 'Undetermined')
-        
-        if not rule_id or not case_id:
-            raise HTTPException(status_code=400, detail="rule_id and case_id required")
-        
+        from db.models import SessionLocal, InvestigationState
+        from services.investigation_state import _serialize_investigation_state_record
+        from services.closure_service import evaluate_closure_readiness
+
         db = SessionLocal()
-        rule = db.query(ESCorrelationRule).filter(ESCorrelationRule.rule_id == rule_id).first()
-        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
-        
-        if not rule:
-            db.close()
-            raise HTTPException(status_code=404, detail=f"Rule {rule_id} not found")
-        if not case:
-            db.close()
-            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-        
-        # Extract all data while session is active
-        rule_name = rule.rule_name
-        rule_template = rule.closure_template
-        
-        # Build closure note from template - add all replacement values
-        all_values = dict(field_values)
-        all_values['rule_name'] = rule_name
-        all_values['case_id'] = case_id
-        all_values['date'] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        all_values['disposition'] = disposition
-        
-        try:
-            generated_note = rule_template.format(**all_values)
-        except KeyError as e:
-            db.close()
-            raise HTTPException(status_code=400, detail=f"Missing field in template: {str(e)}")
-        
-        # Map disposition to status
-        status_map = {
-            'True Positive': 'true_positive',
-            'Benign Positive': 'benign_positive',
-            'False Positive': 'false_positive',
-            'Other': 'other',
-            'Undetermined': 'undetermined'
-        }
-        closure_status = status_map.get(disposition, 'undetermined')
-        
-        # Save closure note
-        closure_note = ClosureNote(
-            case_id=case_id,
-            rule_id=rule_id,
-            analyst_notes=analyst_notes,
-            generated_note=generated_note,
-            status=closure_status
-        )
-        db.add(closure_note)
-        db.commit()
+        inv = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
+        state_payload = _serialize_investigation_state_record(inv) if inv else {}
+        readiness = evaluate_closure_readiness(state_payload)
         db.close()
-        
-        return {
-            "success": True,
-            "case_id": case_id,
-            "rule_name": rule_name,
-            "disposition": disposition,
-            "generated_note": generated_note
-        }
+        return readiness
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/closure-note", tags=["Rules"])
+def generate_closure_note(request: dict):
+    """Generate an operator-ready structured closure note backed by investigation state and evidence."""
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal
+        from services.closure_service import generate_structured_closure_note
+
+        rule_id = request.get("rule_id")
+        case_id = request.get("case_id")
+        field_values = request.get("field_values", {})
+        analyst_notes = request.get("analyst_notes", "")
+        disposition = request.get("disposition", "Undetermined")
+        force_closure = bool(request.get("force_closure", False))
+
+        if not case_id:
+            raise HTTPException(status_code=400, detail="case_id is required")
+
+        db = SessionLocal()
+        try:
+            return generate_structured_closure_note(
+                db,
+                case_id=case_id,
+                rule_id=rule_id,
+                field_values=field_values,
+                analyst_notes=analyst_notes,
+                disposition=disposition,
+                force_closure=force_closure,
+            )
+        except KeyError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        finally:
+            db.close()
     except HTTPException:
         raise
     except Exception as e:

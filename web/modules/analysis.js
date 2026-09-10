@@ -981,14 +981,23 @@
                     result_text: resultText,
                     analyst_summary: '',
                     finding_type: this.phase2FindingTypes[key] || 'neutral',
+                    result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
                 });
             }
 
-            await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            if (!entries.length) {
+                return;
+            }
+
+            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
                 source_system: 'phase2_manual',
                 replace_existing: true,
                 entries,
             });
+
+            if (res.data && res.data.investigation_state) {
+                this.investigationState = res.data.investigation_state;
+            }
 
             if (!options.silent) {
                 alert('Phase 2 evidence saved for case ' + this.analysisCaseId);
@@ -1040,14 +1049,23 @@
                     result_text: resultText,
                     analyst_summary: '',
                     finding_type: this.supportiveFindingTypes[key] || 'neutral',
+                    result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
                 });
             }
 
-            await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            if (!entries.length) {
+                return;
+            }
+
+            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
                 source_system: 'supportive_manual',
                 replace_existing: true,
                 entries,
             });
+
+            if (res.data && res.data.investigation_state) {
+                this.investigationState = res.data.investigation_state;
+            }
 
             if (!options.silent) {
                 alert('Supportive evidence saved for case ' + this.analysisCaseId);
@@ -1075,6 +1093,10 @@
                     analyst_summary: '',
                     finding_type: this.enrichmentFindingTypes[key] || 'neutral',
                 });
+            }
+
+            if (!entries.length) {
+                return;
             }
 
             await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {

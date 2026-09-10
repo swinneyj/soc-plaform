@@ -1,7 +1,8 @@
 /**
  * components/AnalysisTab.js
  * Presentational AI Analysis tab.
- * All business logic stays in the root app (or modules/analysis.js later).
+ * Implements 5 distinct progressive investigation stages with clean sub-views,
+ * formatted visual assessment cards, and Phase 1 context inheritance.
  */
 window.AnalysisTab = {
     props: [
@@ -41,7 +42,7 @@ window.AnalysisTab = {
         'placeholderAliasSuggestionsBusy',
         'newAliasForm',
         'editingAliasId',
-        // pure helpers passed from parent (or component methods below fall back to window utils)
+        // pure helpers passed from parent
         'renderSupportiveQueryFn',
         'renderPhase2QueryFn',
         'hasUnresolvedPlaceholdersFn',
@@ -97,10 +98,9 @@ window.AnalysisTab = {
     ],
     data() {
         return {
-            // Stable selection keys (id when known, otherwise title|source|created_at).
-            // Must not depend solely on item.id — older timeline rows have no id and
-            // would leave every checkbox permanently disabled.
-            selectedEvidenceKeys: []
+            selectedEvidenceKeys: [],
+            currentStage: 1,
+            evidenceResultStatuses: {}
         };
     },
     watch: {
@@ -137,10 +137,34 @@ window.AnalysisTab = {
         },
         selectedEvidenceCount() {
             return (this.selectedEvidenceKeys || []).length;
+        },
+        stage1Complete() {
+            return Boolean(this.analysisCaseId);
+        },
+        stage2Complete() {
+            return Boolean(this.analysisResult || (this.investigationState && this.investigationState.iteration_count >= 1));
+        },
+        stage3Complete() {
+            return Boolean(
+                this.investigationState &&
+                this.investigationState.evidence_summary &&
+                (this.investigationState.evidence_summary.substantive_items >= 1 || this.investigationState.evidence_summary.total_items >= 1)
+            );
+        },
+        stage4Complete() {
+            return Boolean(
+                (this.investigationState && this.investigationState.iteration_count >= 2) ||
+                (this.phase2Result && this.phase2Result.analysis)
+            );
+        },
+        stage5Ready() {
+            return Boolean(
+                this.investigationState &&
+                this.investigationState.loop_status === 'ready_for_closure'
+            );
         }
     },
     methods: {
-        // Prefer parent-provided helpers; fall back to window utils if present
         getSupportiveKey(q) {
             if (typeof this.getSupportiveKeyFn === 'function') return this.getSupportiveKeyFn(q);
             if (window.QueryKeys) return window.QueryKeys.supportive(q);
@@ -187,6 +211,26 @@ window.AnalysisTab = {
             if (typeof this.formatFindingLabelFn === 'function') return this.formatFindingLabelFn(v);
             return v || '—';
         },
+        getAnalysisSection(sectionKey) {
+            if (!this.analysisResult) return '';
+            const sec = this.analysisResult.analysis_sections || {};
+            if (sec[sectionKey]) return sec[sectionKey].trim();
+            const text = this.analysisResult.analysis || '';
+            const pattern = new RegExp('(?:\*\*|###\s+)?' + sectionKey.replace(/\s+/g, '\s+') + '[\s\S]*?(?=(?:\*\*|###\s+)|$)', 'i');
+            const match = text.match(pattern);
+            if (match) {
+                const headerPattern = new RegExp('^(?:\*\*|###\s+)?' + sectionKey.replace(/\s+/g, '\s+') + '[\s\S]*?\n', 'i');
+                return match[0].replace(headerPattern, '').trim();
+            }
+            return '';
+        },
+        getParsedQuestions() {
+            const raw = this.getAnalysisSection('key questions');
+            if (!raw) return [];
+            return raw.split(String.fromCharCode(10))
+                .map(l => l.replace(/^\d+[\.\)]\s*|-\s*|\*\s*/, '').trim())
+                .filter(l => Boolean(l) && (l.endsWith('?') || l.length > 10));
+        },
         emitSupportiveManual(q, value) {
             this.$emit('update-supportive-manual', { key: this.getSupportiveKey(q), value });
         },
@@ -210,7 +254,6 @@ window.AnalysisTab = {
             if (item.id !== null && item.id !== undefined && item.id !== '') {
                 return 'id:' + String(item.id);
             }
-            // Fallback for timeline rows that predate id enrichment
             return 'row:'
                 + String(item.title || '').trim().toLowerCase()
                 + '|'
@@ -245,7 +288,6 @@ window.AnalysisTab = {
         emitDeleteSelectedEvidence() {
             const selected = this.evidenceTimelineItems.filter((item) => this.isEvidenceSelected(item));
             if (!selected.length) return;
-            // Pass full items so the parent can resolve DB ids when timeline lacks them
             this.$emit('delete-evidence-batch', selected);
         },
         emitDeleteAllEvidence() {
@@ -256,7 +298,119 @@ window.AnalysisTab = {
         <div class="space-y-6">
     <div>
         <h2 class="text-3xl font-bold mb-2">AI Analysis</h2>
-        <p class="text-gray-400">Run your local Ollama models on security cases</p>
+        <p class="text-gray-400">Run local Ollama models with progressive 5-stage investigation workflows</p>
+    </div>
+
+    <!-- 5-Stage Investigation Workflow Stepper with dynamic progress coloring -->
+    <div class="flex items-center space-x-2 bg-gray-900 border border-gray-700 rounded-lg p-2.5 overflow-x-auto text-xs">
+        <button
+            type="button"
+            @click="currentStage = 1"
+            :class="[
+                currentStage === 1
+                    ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
+                    : stage1Complete
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/80 hover:bg-emerald-900/90'
+                        : 'text-gray-400 bg-gray-800/80 border border-gray-700 hover:text-white'
+            ]"
+            class="px-3 py-1.5 rounded flex items-center gap-1.5 transition"
+        >
+            <span
+                class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="stage1Complete && currentStage !== 1 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
+            >{{ stage1Complete && currentStage !== 1 ? '✓' : '1' }}</span>
+            <span>Case & Context</span>
+        </button>
+
+        <span :class="stage1Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
+
+        <button
+            type="button"
+            @click="currentStage = 2"
+            :class="[
+                currentStage === 2
+                    ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
+                    : stage2Complete
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/80 hover:bg-emerald-900/90'
+                        : 'text-gray-400 bg-gray-800/80 border border-gray-700 hover:text-white'
+            ]"
+            class="px-3 py-1.5 rounded flex items-center gap-1.5 transition"
+        >
+            <span
+                class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="stage2Complete && currentStage !== 2 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
+            >{{ stage2Complete && currentStage !== 2 ? '✓' : '2' }}</span>
+            <span>Initial Assessment</span>
+        </button>
+
+        <span :class="stage2Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
+
+        <button
+            type="button"
+            @click="currentStage = 3"
+            :class="[
+                currentStage === 3
+                    ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
+                    : stage3Complete
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/80 hover:bg-emerald-900/90'
+                        : 'text-gray-400 bg-gray-800/80 border border-gray-700 hover:text-white'
+            ]"
+            class="px-3 py-1.5 rounded flex items-center gap-1.5 transition"
+        >
+            <span
+                class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="stage3Complete && currentStage !== 3 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
+            >{{ stage3Complete && currentStage !== 3 ? '✓' : '3' }}</span>
+            <span>Evidence Collection</span>
+            <span v-if="investigationState && investigationState.evidence_summary && (investigationState.evidence_summary.substantive_items || investigationState.evidence_summary.total_items)" class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-blue-950 text-blue-200 border border-blue-700">
+                {{ investigationState.evidence_summary.substantive_items || investigationState.evidence_summary.total_items }}
+            </span>
+        </button>
+
+        <span :class="stage3Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
+
+        <button
+            type="button"
+            @click="currentStage = 4"
+            :class="[
+                currentStage === 4
+                    ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
+                    : stage4Complete
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-600/80 hover:bg-emerald-900/90'
+                        : 'text-gray-400 bg-gray-800/80 border border-gray-700 hover:text-white'
+            ]"
+            class="px-3 py-1.5 rounded flex items-center gap-1.5 transition"
+        >
+            <span
+                class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="stage4Complete && currentStage !== 4 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
+            >{{ stage4Complete && currentStage !== 4 ? '✓' : '4' }}</span>
+            <span>Phase 2 Follow-Up</span>
+        </button>
+
+        <span :class="stage4Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
+
+        <button
+            type="button"
+            @click="currentStage = 5"
+            :class="[
+                currentStage === 5
+                    ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
+                    : stage5Ready
+                        ? 'bg-emerald-600 text-white font-bold animate-pulse shadow-md border border-emerald-400'
+                        : 'text-gray-400 bg-gray-800/80 border border-gray-700 hover:text-white'
+            ]"
+            class="px-3 py-1.5 rounded flex items-center gap-1.5 transition"
+        >
+            <span
+                class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
+                :class="stage5Ready && currentStage !== 5 ? 'bg-white text-emerald-700' : 'bg-black/40'"
+            >{{ stage5Ready ? '★' : '5' }}</span>
+            <span>Verdict & Closure</span>
+            <span v-if="stage5Ready" class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 text-white font-bold uppercase tracking-wider">
+                Ready
+            </span>
+        </button>
     </div>
 
     <div v-if="!ollamaHealth.available" class="bg-red-900 bg-opacity-30 border border-red-700 rounded-lg p-6 text-red-200">
@@ -264,50 +418,51 @@ window.AnalysisTab = {
         <p class="text-sm mt-2">Start Ollama with: <code class="bg-black px-2 py-1 rounded">ollama serve</code></p>
     </div>
 
-    <div v-else class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
-        <div>
-            <label class="text-sm text-gray-400">Case to Analyze</label>
-            <input
-                :value="analysisCaseSearch" @input="$emit('update:analysis-case-search', $event.target.value)"
-                type="text"
-                placeholder="Filter cases by ID, rule, verdict, or summary"
-                class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
-            <select 
-                :value="analysisCaseId" @input="$emit('update:analysis-case-id', $event.target.value)"
-                @change="$emit('on-analysis-case-changed')"
-                class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
-                <option value="">-- Choose a case from the database --</option>
-                <option v-for="case_ in filteredAnalysisCases" :key="case_.case_id" :value="case_.case_id">
-                    {{ case_.case_id }} - {{ case_.rule_name }} ({{ case_.verdict }})
-                </option>
-            </select>
-            <p class="mt-2 text-xs text-gray-400">
-                Showing {{ filteredAnalysisCases.length }} of {{ analysisCases.length }} cases for AI analysis.
-            </p>
+    <!-- Active Case Anchor (always visible so user knows case context) -->
+    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+        <div class="flex items-center justify-between gap-4">
+            <div class="min-w-0 flex-1">
+                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Active Case</label>
+                <div class="flex items-center gap-3 mt-1">
+                    <select
+                        :value="analysisCaseId"
+                        @input="$emit('update:analysis-case-id', $event.target.value)"
+                        @change="$emit('on-analysis-case-changed')"
+                        class="bg-gray-700 border border-gray-600 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-blue-500 min-w-[280px]"
+                    >
+                        <option value="">-- Choose a case from the database --</option>
+                        <option v-for="case_ in filteredAnalysisCases" :key="case_.case_id" :value="case_.case_id">
+                            {{ case_.case_id }} - {{ case_.rule_name }} ({{ case_.verdict }})
+                        </option>
+                    </select>
+                    <span v-if="analysisCaseId" class="text-xs px-2.5 py-1 rounded font-mono font-bold bg-blue-950 border border-blue-700 text-blue-300">
+                        {{ analysisCaseId }}
+                    </span>
+                </div>
+            </div>
+            <div class="text-right text-xs text-gray-400 flex items-center gap-3">
+                <div>
+                    <span class="text-gray-500">Stage:</span>
+                    <span class="ml-1 text-white font-semibold">Stage {{ currentStage }} of 5</span>
+                </div>
+            </div>
         </div>
+    </div>
 
+    <!-- ============================================================= -->
+    <!-- STAGE 1: CASE & RULE CONTEXT -->
+    <!-- ============================================================= -->
+    <div v-show="currentStage === 1" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
         <div>
-            <label class="text-sm text-gray-400">Model</label>
-            <select :value="analysisModel" @input="$emit('update:analysis-model', $event.target.value)" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
-                <option v-for="model in ollamaHealth.models" :key="model" :value="model">
-                    {{ model }}
-                </option>
-            </select>
-        </div>
-
-        <div>
-            <label class="text-sm text-gray-400">Additional Context (Optional)</label>
-            <textarea 
-                :value="analysisContext" @input="$emit('update:analysis-context', $event.target.value)" 
-                placeholder="Add context for the analysis (freeform notes, summaries, etc.)" 
-                class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-24"></textarea>
+            <h3 class="text-lg font-bold text-blue-300">Stage 1: Case & Notable Context</h3>
+            <p class="text-xs text-gray-400 mt-1">Review the ingested notable telemetry, anchor fields, and detection rule science before running analysis.</p>
         </div>
 
         <div v-if="analysisSourceNotable && analysisSourceNotable.parse_assessment" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
             <div class="flex items-center justify-between gap-3">
                 <div>
-                    <p class="text-sm font-semibold text-blue-300">Parse Quality</p>
-                    <p class="text-xs text-gray-400">How complete the pasted notable is before full AI analysis.</p>
+                    <p class="text-sm font-semibold text-blue-300">Parse Quality Assessment</p>
+                    <p class="text-xs text-gray-400">Evaluates completeness of technical fields before AI analysis.</p>
                 </div>
                 <div class="text-right">
                     <p class="text-xl font-bold text-white">{{ analysisSourceNotable.parse_assessment.score || 0 }}</p>
@@ -319,452 +474,462 @@ window.AnalysisTab = {
                 </div>
             </div>
 
-            <div v-if="analysisSourceNotable.parse_assessment.missing_anchors && analysisSourceNotable.parse_assessment.missing_anchors.length">
-                <p class="text-[11px] font-semibold text-gray-300 mb-1">Missing anchors</p>
-                <div class="flex flex-wrap gap-2">
-                    <span v-for="item in analysisSourceNotable.parse_assessment.missing_anchors" :key="item" class="bg-amber-950 border border-amber-700 text-amber-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                </div>
-            </div>
-
-            <div v-if="analysisSourceNotable.parse_assessment.mode !== 'normal'" class="bg-blue-950 border border-blue-800 rounded p-3 space-y-3">
-                <p class="text-xs text-blue-100">This case needs one or two broad data points before the model can reason confidently. Run one of these generic queries, paste the result, then rerun analysis.</p>
-                <div v-if="analysisSourceNotable.parse_assessment.generic_queries && analysisSourceNotable.parse_assessment.generic_queries.length" class="space-y-3">
-                    <div v-for="q in analysisSourceNotable.parse_assessment.generic_queries" :key="getEnrichmentKey(q)" class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2">
-                        <div class="flex items-start justify-between gap-2">
-                            <div>
-                                <p class="text-xs font-semibold text-blue-300">{{ q.title }}</p>
-                                <p class="text-xs text-gray-400">{{ q.description }}</p>
-                            </div>
-                            <button type="button" class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200" @click="$emit('copy-enrichment-spl', q)">Copy SPL</button>
-                        </div>
-                        <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ q.spl }}</pre>
-                        <div>
-                            <label class="text-[11px] text-gray-400">Results / notes for this enrichment query (optional)</label>
-                            <textarea
-                                :value="enrichmentManualResults[getEnrichmentKey(q)] || ''" @input="emitEnrichmentManual(q, $event.target.value)"
-                                rows="3"
-                                class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
-                                placeholder="Paste a short summary or key rows from this generic query..."
-                            ></textarea>
-                        </div>
-                        <div>
-                            <label class="text-[11px] text-gray-400">Finding</label>
-                            <select
-                                :value="enrichmentFindingTypes[getEnrichmentKey(q)] || ''" @change="emitEnrichmentFinding(q, $event.target.value)"
-                                class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
-                            >
-                                <option v-for="option in evidenceFindingOptions" :key="'enrich:' + option" :value="option">{{ option }}</option>
-                            </select>
-                        </div>
+            <div v-if="analysisSourceNotable.fields" class="mt-3">
+                <p class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">Extracted Entity Fields</p>
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                    <div v-for="(val, k) in analysisSourceNotable.fields" :key="k" class="bg-gray-800 border border-gray-700 rounded p-2 overflow-hidden">
+                        <span class="text-gray-400 font-mono text-[11px] block truncate">{{ k }}:</span>
+                        <span class="text-white font-mono text-xs font-semibold truncate block mt-0.5" :title="val">{{ val }}</span>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-4 mt-4">
-            <div class="flex items-start justify-between gap-3">
-                <div>
-                    <h3 class="text-sm font-semibold text-blue-300">Investigation Loop State</h3>
-                    <p class="text-[11px] text-gray-400">Track what the case currently suggests, what is still blocking closure, and whether the next loop needs more evidence.</p>
-                </div>
-                <div class="text-right text-[11px] text-gray-400">
-                    <p>Iteration {{ investigationState.iteration_count || 0 }}</p>
-                    <p v-if="investigationState.updated_at">Updated {{ new Date(investigationState.updated_at).toLocaleString() }}</p>
-                </div>
-            </div>
-
-            <div class="flex flex-wrap gap-2 text-xs">
-                <span class="px-2 py-1 rounded border border-blue-500 text-blue-200 bg-blue-950">
-                    Status: {{ formatLoopStatus(investigationState.loop_status) }}
-                </span>
-                <span class="px-2 py-1 rounded border border-amber-500 text-amber-200 bg-amber-950">
-                    Disposition: {{ formatDispositionLabel(investigationState.provisional_disposition) }}
-                </span>
-                <span class="px-2 py-1 rounded border border-emerald-500 text-emerald-200 bg-emerald-950">
-                    Confidence: {{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%
-                </span>
-            </div>
-
-            <div>
-                <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Current Hypothesis</p>
-                <p class="text-sm text-gray-200 whitespace-pre-wrap">{{ investigationState.current_hypothesis || 'No persisted hypothesis yet.' }}</p>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
-                <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                    <p class="text-gray-400">Substantive Evidence</p>
-                    <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.substantive_items ?? investigationState.evidence_summary?.total_items ?? 0 }}</p>
-                </div>
-                <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                    <p class="text-gray-400">Supports / Refutes</p>
-                    <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.by_finding?.supports || 0 }} / {{ investigationState.evidence_summary?.by_finding?.refutes || 0 }}</p>
-                </div>
-                <div class="bg-gray-800 border border-gray-700 rounded p-3">
-                    <p class="text-gray-400">Pending / Neutral</p>
-                    <p class="text-xl font-bold text-white">{{ investigationState.evidence_summary?.pending_items || 0 }} / {{ investigationState.evidence_summary?.by_finding?.neutral || 0 }}</p>
-                </div>
-            </div>
-
-            <div v-if="investigationState.closure_blockers && investigationState.closure_blockers.length">
-                <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Closure Blockers</p>
-                <div class="flex flex-wrap gap-2">
-                    <span v-for="item in investigationState.closure_blockers" :key="'blocker:' + item" class="bg-red-950 border border-red-700 text-red-200 px-2 py-1 rounded text-[11px]">{{ item }}</span>
-                </div>
-            </div>
-
-            <div v-if="investigationState.unresolved_questions && investigationState.unresolved_questions.length">
-                <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Open Questions</p>
-                <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                    <li v-for="item in investigationState.unresolved_questions" :key="'question:' + item">{{ item }}</li>
-                </ul>
-            </div>
-
-            <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length">
-                <p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Next Best Actions</p>
-                <ul class="list-disc list-inside text-sm text-gray-300 space-y-1">
-                    <li v-for="item in investigationState.recommended_next_actions" :key="'action:' + item.title + item.description">
-                        <span class="font-semibold text-blue-300">{{ item.title }}</span>
-                        <span v-if="item.description">: {{ item.description }}</span>
-                    </li>
-                </ul>
-            </div>
-
-            <div v-if="evidenceTimelineItems.length">
-                <details class="mt-2" open>
-                    <summary class="text-[11px] uppercase tracking-wide text-gray-500 mb-1 cursor-pointer flex items-center justify-between gap-2">
-                        <span>Evidence Timeline</span>
-                        <span class="flex items-center gap-2 flex-shrink-0" @click.stop>
-                            <button
-                                v-if="someEvidenceSelected"
-                                type="button"
-                                class="text-[10px] px-2 py-0.5 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100"
-                                title="Delete selected evidence items"
-                                @click="emitDeleteSelectedEvidence"
-                            >
-                                Delete selected ({{ selectedEvidenceCount }})
-                            </button>
-                            <button
-                                type="button"
-                                class="text-[10px] px-2 py-0.5 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200"
-                                title="Delete all evidence for this case"
-                                @click="emitDeleteAllEvidence"
-                            >
-                                Delete all
-                            </button>
-                            <span class="text-[10px] text-gray-400">{{ evidenceTimelineItems.length }} item(s)</span>
-                        </span>
-                    </summary>
-                    <div class="flex items-center gap-2 mt-2 mb-1 px-1">
-                        <input
-                            type="checkbox"
-                            class="rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                            :checked="allEvidenceSelected"
-                            :indeterminate.prop="someEvidenceSelected && !allEvidenceSelected"
-                            @change="toggleSelectAllEvidence($event.target.checked)"
-                            title="Select all visible evidence"
-                        />
-                        <span class="text-[11px] text-gray-500">Select all</span>
-                    </div>
-                    <div class="space-y-2 mt-1">
-                        <div
-                            v-for="item in evidenceTimelineItems"
-                            :key="'timeline:' + evidenceItemKey(item)"
-                            class="bg-gray-800 border border-gray-700 rounded p-3"
-                            :class="{ 'border-blue-600': isEvidenceSelected(item) }"
-                        >
-                            <div class="flex items-start gap-3">
-                                <input
-                                    type="checkbox"
-                                    class="mt-0.5 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 flex-shrink-0 cursor-pointer"
-                                    :checked="isEvidenceSelected(item)"
-                                    @click.stop
-                                    @change="toggleEvidenceSelection(item, $event.target.checked)"
-                                    title="Select this evidence item"
-                                />
-                                <div class="min-w-0 flex-1">
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div class="min-w-0">
-                                            <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
-                                            <p class="text-[11px] text-gray-400">{{ item.source_system }} • {{ formatFindingLabel(item.finding_type) }}</p>
-                                        </div>
-                                        <div class="flex items-start gap-2 flex-shrink-0">
-                                            <div class="text-right text-[11px] text-gray-500">
-                                                <p>{{ item.has_substantive_observation ? 'Observed' : 'Pending' }}</p>
-                                                <p v-if="item.created_at">{{ new Date(item.created_at).toLocaleString() }}</p>
-                                            </div>
-                                            <button
-                                                type="button"
-                                                class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold leading-none flex-shrink-0"
-                                                title="Delete this evidence item"
-                                                @click.stop="$emit('delete-evidence', item)"
-                                            >
-                                                ×
-                                            </button>
-                                        </div>
-                                    </div>
-                                    <p v-if="item.summary" class="text-xs text-gray-300 mt-2 whitespace-pre-wrap">{{ item.summary }}</p>
-                                    <p v-else class="text-xs text-amber-300 mt-2">No substantive analyst observation saved yet.</p>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+            <div v-if="analysisSourceNotable.sanitized_text" class="mt-3">
+                <details>
+                    <summary class="text-xs text-gray-400 font-semibold cursor-pointer hover:text-white">View Raw Sanitized Notable Log</summary>
+                    <pre class="mt-2 text-xs text-gray-300 bg-black/50 p-3 rounded overflow-x-auto whitespace-pre-wrap font-mono">{{ analysisSourceNotable.sanitized_text }}</pre>
                 </details>
             </div>
         </div>
 
-        <div v-if="analysisRule && showPhase1Analysis" class="mt-2">
-            <div class="flex items-center justify-between mb-1">
-                <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
-                <div class="flex items-center gap-2">
-                    <button
-                        type="button"
-                        class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
-                        @click="$emit('save-supportive-evidence')"
-                    >
-                        Save Evidence
-                    </button>
-                    <button
-                        type="button"
-                        class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
-                        @click="$emit('open-supportive-editor', analysisRule)"
-                    >
-                        Manage
-                    </button>
+        <div v-if="analysisRule" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
+            <h4 class="text-xs font-bold text-blue-300 uppercase tracking-wider">Detection Rule Science</h4>
+            <p class="text-sm font-semibold text-white">{{ analysisRule.rule_name }}</p>
+            <p class="text-xs text-gray-300">{{ analysisRule.description }}</p>
+            <div class="flex gap-2 pt-1 text-xs">
+                <span class="px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700 font-mono">Severity: {{ analysisRule.severity }}</span>
+                <span v-if="analysisRule.drilldown_fields" class="px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700 font-mono">Drilldowns: {{ (analysisRule.drilldown_fields || []).join(', ') }}</span>
+            </div>
+        </div>
+
+        <div class="flex justify-end pt-4 border-t border-gray-700">
+            <button
+                type="button"
+                @click="currentStage = 2"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
+            >
+                <span>Proceed to Initial Assessment</span>
+                <span>&rarr;</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- STAGE 2: INITIAL AI ASSESSMENT -->
+    <!-- ============================================================= -->
+    <div v-show="currentStage === 2" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+        <div>
+            <h3 class="text-lg font-bold text-blue-300">Stage 2: Initial AI Assessment</h3>
+            <p class="text-xs text-gray-400 mt-1">Select an Ollama model, provide optional analyst context, and execute initial threat reasoning.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Model</label>
+                <select
+                    :value="analysisModel"
+                    @input="$emit('update:analysis-model', $event.target.value)"
+                    class="w-full mt-1.5 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
+                    <option v-for="model in ollamaHealth.models" :key="model" :value="model">{{ model }}</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Analyst Context / Notes (Optional)</label>
+                <input
+                    :value="analysisContext"
+                    @input="$emit('update:analysis-context', $event.target.value)"
+                    type="text"
+                    placeholder="Add operational context, asset tier, or maintenance window notes..."
+                    class="w-full mt-1.5 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                />
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-2">
+            <button
+                type="button"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
+                :disabled="analysisRunning || !analysisCaseId"
+                @click="$emit('run-analysis')"
+            >
+                <span v-if="analysisRunning" class="animate-spin">⟳</span>
+                <span>{{ analysisRunning ? 'Analyzing with ' + analysisModel + '...' : (analysisResult ? 'Re-run Initial Analysis' : 'Run Initial Analysis') }}</span>
+            </button>
+            <span v-if="analysisRunning" class="text-xs text-blue-400 animate-pulse">Querying local Ollama instance...</span>
+        </div>
+
+        <!-- Formatted Initial Assessment Visual Cards -->
+        <div v-if="analysisResult" class="space-y-4 pt-4 border-t border-gray-700">
+            <!-- 1. Initial Thoughts / Hypothesis Card -->
+            <div class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-2">
+                <div class="flex items-center gap-2 text-blue-300 font-semibold text-xs uppercase tracking-wider">
+                    <span>💡</span>
+                    <span>Threat Hypothesis & Initial Thoughts</span>
+                </div>
+                <p class="text-xs text-gray-200 leading-relaxed whitespace-pre-wrap">{{ getAnalysisSection('initial thoughts') || analysisResult.summary || 'Initial evaluation completed.' }}</p>
+            </div>
+
+            <!-- 2. Key Questions Card -->
+            <div v-if="getParsedQuestions().length" class="bg-gray-900 border border-amber-800/80 rounded-lg p-4 space-y-2">
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2 text-amber-300 font-semibold text-xs uppercase tracking-wider">
+                        <span>❓</span>
+                        <span>Key Questions to Answer</span>
+                    </div>
+                    <span class="text-[10px] text-amber-400 font-semibold uppercase">{{ getParsedQuestions().length }} Inquiries to Resolve</span>
+                </div>
+                <ul class="space-y-1.5 text-xs text-gray-200">
+                    <li v-for="(q, idx) in getParsedQuestions()" :key="idx" class="flex items-start gap-2">
+                        <span class="w-4 h-4 rounded-full bg-amber-950 border border-amber-700 text-amber-300 flex items-center justify-center text-[10px] font-bold flex-shrink-0 mt-0.5">{{ idx + 1 }}</span>
+                        <span>{{ q }}</span>
+                    </li>
+                </ul>
+            </div>
+
+            <!-- 3. Investigative Analysis Narrative Card -->
+            <div v-if="getAnalysisSection('investigative analysis')" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
+                <div class="flex items-center gap-2 text-gray-300 font-semibold text-xs uppercase tracking-wider">
+                    <span>🔍</span>
+                    <span>Investigative Analysis</span>
+                </div>
+                <p class="text-xs text-gray-300 leading-relaxed whitespace-pre-wrap">{{ getAnalysisSection('investigative analysis') }}</p>
+            </div>
+
+            <!-- 4. Preliminary Triage Verdict Card -->
+            <div
+                class="bg-gray-900 border rounded-lg p-4 flex items-center justify-between"
+                :class="{
+                    'border-red-600/80 bg-red-950/20': (analysisResult.verdict || '').toLowerCase() === 'malicious',
+                    'border-emerald-600/80 bg-emerald-950/20': (analysisResult.verdict || '').toLowerCase() === 'benign',
+                    'border-gray-700': !analysisResult.verdict
+                }"
+            >
+                <div>
+                    <p class="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">Preliminary Verdict</p>
+                    <p class="text-lg font-bold text-white capitalize mt-0.5">{{ analysisResult.verdict || 'Undetermined' }}</p>
+                </div>
+                <div class="text-right">
+                    <p class="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">Confidence</p>
+                    <p class="text-lg font-bold text-emerald-400 mt-0.5">{{ ((analysisResult.confidence || 0) * 100).toFixed(0) }}%</p>
                 </div>
             </div>
-            <div v-if="analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-3">
-                <div
-                    v-for="q in analysisRule.supportive_queries"
-                    :key="q.id"
-                    class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2"
+        </div>
+
+        <div class="flex justify-between pt-4 border-t border-gray-700">
+            <button
+                type="button"
+                @click="currentStage = 1"
+                class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
+            >
+                &larr; Back to Case Context
+            </button>
+            <button
+                type="button"
+                @click="currentStage = 3"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
+            >
+                <span>Proceed to Evidence Collection</span>
+                <span>&rarr;</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- STAGE 3: EVIDENCE COLLECTION -->
+    <!-- ============================================================= -->
+    <div v-show="currentStage === 3" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+        <div class="flex items-center justify-between">
+            <div>
+                <h3 class="text-lg font-bold text-blue-300">Stage 3: Evidence Collection</h3>
+                <p class="text-xs text-gray-400 mt-1">Execute supportive playbook queries in Splunk/MDE, paste results with finding status, and persist to the ledger.</p>
+            </div>
+            <div class="flex items-center gap-2">
+                <button
+                    type="button"
+                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow"
+                    @click="$emit('save-supportive-evidence')"
                 >
-                    <div class="flex items-start justify-between gap-2">
-                        <div>
-                            <p class="text-xs font-semibold text-blue-300 mb-0.5">{{ q.title }}</p>
-                            <p class="text-xs text-gray-400" v-if="q.description">{{ q.description }}</p>
-                        </div>
-                        <button
-                            type="button"
-                            class="ml-2 px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200 flex-shrink-0"
-                            @click="$emit('copy-supportive-spl', q)"
-                        >
-                            Copy SPL
-                        </button>
+                    Save Evidence
+                </button>
+                <button
+                    type="button"
+                    class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-xs font-semibold text-gray-200"
+                    @click="$emit('open-supportive-editor', analysisRule)"
+                >
+                    Manage
+                </button>
+            </div>
+        </div>
+
+        <!-- Supportive Queries Cards -->
+        <div v-if="analysisRule && analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-4">
+            <div
+                v-for="q in analysisRule.supportive_queries"
+                :key="q.id"
+                class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3"
+            >
+                <div class="flex items-start justify-between gap-2">
+                    <div>
+                        <p class="text-xs font-bold text-blue-300">{{ q.title }}</p>
+                        <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
                     </div>
-                    <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ renderSupportiveQuery(q) }}</pre>
-                    <p v-if="hasUnresolvedPlaceholders(renderSupportiveQuery(q))" class="text-[11px] text-amber-300">This query still has unresolved placeholders. Gather enrichment data or populate more case fields before copying it into Splunk.</p>
-                    <div class="mt-1">
-                        <label class="text-[11px] text-gray-400">Results / notes for this query (optional)</label>
-                        <textarea
-                            :value="supportiveManualResults[getSupportiveKey(q)] || ''" @input="emitSupportiveManual(q, $event.target.value)"
-                            rows="3"
-                            class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
-                            placeholder="Paste key rows or a short summary from this query's results..."
-                        ></textarea>
-                    </div>
-                    <div class="mt-1">
-                        <label class="text-[11px] text-gray-400">Finding</label>
+                    <button
+                        type="button"
+                        class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200 flex-shrink-0"
+                        @click="$emit('copy-supportive-spl', q)"
+                    >
+                        Copy SPL
+                    </button>
+                </div>
+                <pre class="text-xs text-gray-200 bg-black/60 rounded p-2.5 whitespace-pre-wrap font-mono">{{ renderSupportiveQuery(q) }}</pre>
+
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Observation Notes</label>
+                    <textarea
+                        :value="supportiveManualResults[getSupportiveKey(q)] || ''"
+                        @input="emitSupportiveManual(q, $event.target.value)"
+                        rows="3"
+                        class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+                        placeholder="Paste key rows or a short summary from this query's results..."
+                    ></textarea>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Result Status</label>
                         <select
-                            :value="supportiveFindingTypes[getSupportiveKey(q)] || ''" @change="emitSupportiveFinding(q, $event.target.value)"
-                            class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+                            v-model="evidenceResultStatuses[getSupportiveKey(q)]"
+                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                        >
+                            <option value="success">Success (Events Found)</option>
+                            <option value="no_results">No Results (0 Events)</option>
+                            <option value="data_source_unavailable">Data Source Unavailable</option>
+                            <option value="query_failed">Query Failed</option>
+                            <option value="benign_result">Benign / Authorized Activity</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Finding Direction</label>
+                        <select
+                            :value="supportiveFindingTypes[getSupportiveKey(q)] || ''"
+                            @change="emitSupportiveFinding(q, $event.target.value)"
+                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                         >
                             <option v-for="option in evidenceFindingOptions" :key="'supportive:' + option" :value="option">{{ option }}</option>
                         </select>
                     </div>
                 </div>
-                <p class="mt-1 text-[11px] text-gray-500">
-                    Run these queries in Splunk, paste important results into the fields above, and the platform will include them alongside any additional context when sending the case to the model.
-                </p>
-            </div>
-            <p v-else class="text-[11px] text-amber-300 mt-1">
-                No supportive queries defined yet for this rule. Use **Manage** to add some.
-            </p>
-        </div>
-
-        <button 
-            @click="$emit('run-analysis')"
-            :disabled="analysisRunning"
-            class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
-            {{ analysisRunning ? 'Running Analysis...' : 'Run Analysis' }}
-        </button>
-
-        <div class="mt-2 flex items-center justify-end gap-2">
-            <button
-                type="button"
-                class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
-                @click="$emit('save-analysis-state')"
-            >
-                Save Analysis
-            </button>
-            <button
-                type="button"
-                class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold text-red-100 disabled:bg-gray-700 disabled:text-gray-400"
-                @click="$emit('cancel-analysis')"
-                :disabled="!analysisRunning"
-            >
-                Cancel Analysis
-            </button>
-        </div>
-    </div>
-
-    <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="text-xl font-bold text-blue-400">Analysis Result (Phase 1)</h3>
-            <div class="flex items-center gap-2">
-                <button
-                    type="button"
-                    class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
-                    @click="$emit('copy-analysis-result')"
-                >
-                    Copy Analysis
-                </button>
-                <button
-                    type="button"
-                    class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs font-semibold text-gray-200"
-                    @click="$emit('update:show-phase1-analysis', false)"
-                >
-                    Hide Phase 1
-                </button>
             </div>
         </div>
-        <div v-if="showPhase1Analysis">
-            <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.investigation_evidence_count || analysisResult.supportive_results_count">
-                Included
-                <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
-                closed baseline notables and
-                <span class="font-semibold">{{ analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0 }}</span>
-                saved evidence item{{ ((analysisResult.investigation_evidence_count || analysisResult.supportive_results_count || 0) === 1) ? '' : 's' }} in this analysis.
-            </p>
-            <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
-                <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
-            </div>
-        </div>
-        <div v-else class="text-xs text-gray-400 mb-2 flex items-center justify-between">
-            <span>Phase 1 body is hidden to keep the view compact.</span>
-            <button
-                type="button"
-                class="px-3 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] font-semibold text-gray-100"
-                @click="$emit('update:show-phase1-analysis', true)"
-            >
-                Show Phase 1
-            </button>
-        </div>
-        <div class="text-xs text-gray-400 space-y-1">
-            <p>Model: {{ analysisResult.model }}</p>
-            <p>Case: {{ analysisResult.case_id }}</p>
-        </div>
-        <div class="mt-4">
-            <button
-                @click="$emit('go-to-closure-from-analysis')"
-                class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded text-xs font-semibold transition">
-                Move to Closure Notes for this Case
-            </button>
-        </div>
-    </div>
 
-    <div
-        v-if="analysisResult && analysisResult.phase2_queries && analysisResult.phase2_queries.length"
-        class="bg-gray-800 border border-gray-700 rounded-lg p-6 mt-4"
-    >
-        <details>
-            <summary class="flex items-center justify-between mb-3 cursor-pointer">
+        <!-- Evidence Timeline / Ledger -->
+        <div v-if="evidenceTimelineItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
+            <div class="flex items-center justify-between">
                 <div>
-                    <h3 class="text-sm font-semibold text-blue-300">Phase 2 Evidence & Follow-up</h3>
-                    <p class="text-[11px] text-gray-400">
-                        Run these queries in Splunk, paste results, and save them as durable evidence before Phase 2 analysis.
-                    </p>
+                    <h4 class="text-xs font-bold text-gray-300 uppercase tracking-wider">Evidence Timeline Ledger ({{ evidenceTimelineItems.length }} Saved Items)</h4>
+                    <p class="text-[11px] text-gray-400">Durable findings driving confidence scoring and closure gating.</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <div class="flex items-center gap-1 text-[11px] text-gray-400">
-                        <span>Phase 2 Model:</span>
-                        <select
-                            :value="phase2Model" @input="$emit('update:phase2-model', $event.target.value)"
-                            class="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option v-for="model in ollamaHealth.models" :key="model" :value="model">
-                                {{ model }}
-                            </option>
-                        </select>
-                    </div>
+                    <button
+                        v-if="someEvidenceSelected"
+                        type="button"
+                        class="text-[11px] px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100 font-semibold"
+                        @click="emitDeleteSelectedEvidence"
+                    >
+                        Delete Selected ({{ selectedEvidenceCount }})
+                    </button>
                     <button
                         type="button"
-                        class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
-                        @click="$emit('open-placeholder-alias-editor')"
+                        class="text-[11px] px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200 font-semibold"
+                        @click="emitDeleteAllEvidence"
                     >
-                        Manage Placeholder Aliases
+                        Delete All
                     </button>
                 </div>
-            </summary>
+            </div>
 
-            <div
-            v-for="q in analysisResult.phase2_queries"
-            :key="getPhase2Key(q)"
-            class="bg-gray-900 border border-gray-700 rounded p-3 space-y-2 mb-2"
-        >
-            <div class="flex items-start justify-between gap-2">
-                <div>
-                    <p class="text-xs font-semibold text-blue-300 mb-0.5">{{ q.title }}</p>
-                    <p class="text-xs text-gray-400" v-if="q.description">{{ q.description }}</p>
-                </div>
-                <div class="flex gap-1 ml-2 flex-shrink-0">
-                    <button
-                        type="button"
-                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[10px] text-gray-200"
-                        @click="$emit('copy-phase2-spl', q)"
-                    >
-                        Copy SPL
-                    </button>
-                    <button
-                        type="button"
-                        class="px-2 py-1 bg-gray-800 hover:bg-gray-700 border border-purple-500 rounded text-[10px] text-purple-200"
-                        @click="$emit('promote-phase2-query', q)"
-                    >
-                        Save as Supportive
-                    </button>
-                </div>
-            </div>
-            <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap mt-1">
-                {{ renderPhase2Query(getPhase2Template(q)) }}
-            </pre>
-            <p
-                v-if="hasUnresolvedPlaceholders(renderPhase2Query(getPhase2Template(q)))"
-                class="text-[11px] text-amber-300"
-            >
-                This suggested Phase 2 query still has unresolved placeholders. Use enrichment data first or edit the SPL before copying it into Splunk.
-            </p>
-            <div class="mt-1">
-                <label class="text-[11px] text-gray-400">SPL Query (editable)</label>
-                <textarea
-                    :value="getPhase2Template(q)"
-                    @input="$emit('on-phase2-template-input', q, $event.target.value, $event.target.value)"
-                    rows="4"
-                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
-                    placeholder="Edit the suggested SPL here before running or saving..."
-                ></textarea>
-            </div>
-            <div class="mt-1">
-                <label class="text-[11px] text-gray-400">Results / notes for this query</label>
-                <textarea
-                    :value="phase2ManualResults[getPhase2Key(q)] || ''" @input="emitPhase2Manual(q, $event.target.value)"
-                    rows="3"
-                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
-                    placeholder="Paste key rows or a short summary from this query's results. This will be saved as investigation evidence for the case."
-                ></textarea>
-            </div>
-            <div class="mt-1">
-                <label class="text-[11px] text-gray-400">Finding</label>
-                <select
-                    :value="phase2FindingTypes[getPhase2Key(q)] || ''" @change="emitPhase2Finding(q, $event.target.value)"
-                    class="w-full mt-1 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-[11px] text-gray-100 focus:outline-none focus:border-blue-400"
+            <div class="space-y-2 mt-2">
+                <div
+                    v-for="item in evidenceTimelineItems"
+                    :key="'timeline:' + evidenceItemKey(item)"
+                    class="bg-gray-800 border border-gray-700 rounded p-3"
+                    :class="{ 'border-blue-600': isEvidenceSelected(item) }"
                 >
-                    <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
-                </select>
+                    <div class="flex items-start gap-3">
+                        <input
+                            type="checkbox"
+                            class="mt-1 rounded border-gray-600 bg-gray-900 text-blue-500 focus:ring-blue-500 cursor-pointer"
+                            :checked="isEvidenceSelected(item)"
+                            @change="toggleEvidenceSelection(item, $event.target.checked)"
+                        />
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-start justify-between gap-3">
+                                <div>
+                                    <p class="text-xs font-bold text-gray-100">{{ item.title }}</p>
+                                    <div class="flex flex-wrap items-center gap-1.5 mt-1">
+                                        <span class="text-[11px] text-gray-400 font-mono">{{ item.source_system }}</span>
+                                        <span
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold"
+                                            :class="{
+                                                'bg-red-950 text-red-200 border-red-800': item.finding_type === 'supports',
+                                                'bg-emerald-950 text-emerald-200 border-emerald-800': item.finding_type === 'refutes',
+                                                'bg-gray-800 text-gray-300 border-gray-700': item.finding_type === 'neutral'
+                                            }"
+                                        >{{ formatFindingLabel(item.finding_type) }}</span>
+                                        <span
+                                            v-if="item.result_status"
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold"
+                                            :class="{
+                                                'bg-blue-950 text-blue-200 border-blue-800': item.result_status === 'success',
+                                                'bg-purple-950 text-purple-200 border-purple-800': item.result_status === 'no_results',
+                                                'bg-red-950 text-red-200 border-red-800': item.result_status === 'query_failed' || item.result_status === 'data_source_unavailable',
+                                                'bg-emerald-950 text-emerald-200 border-emerald-800': item.result_status === 'benign_result'
+                                            }"
+                                        >{{ item.result_status.replace('_', ' ').toUpperCase() }}</span>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold"
+                                    title="Delete this evidence item"
+                                    @click.stop="$emit('delete-evidence', item)"
+                                >
+                                    ×
+                                </button>
+                            </div>
+                            <p v-if="item.summary" class="text-xs text-gray-300 mt-2 font-mono whitespace-pre-wrap">{{ item.summary }}</p>
+                        </div>
+                    </div>
+                </div>
             </div>
+        </div>
+
+        <div class="flex justify-between pt-4 border-t border-gray-700">
+            <button
+                type="button"
+                @click="currentStage = 2"
+                class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
+            >
+                &larr; Back to Initial Assessment
+            </button>
+            <button
+                type="button"
+                @click="currentStage = 4"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
+            >
+                <span>Proceed to Phase 2 Follow-Up</span>
+                <span>&rarr;</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- ============================================================= -->
+    <!-- STAGE 4: PHASE 2 FOLLOW-UP & DEEP INVESTIGATION -->
+    <!-- ============================================================= -->
+    <div v-show="currentStage === 4" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+        <div>
+            <h3 class="text-lg font-bold text-blue-300">Stage 4: Phase 2 Follow-Up</h3>
+            <p class="text-xs text-gray-400 mt-1">Specialized post-compromise follow-up queries generated from Phase 1 findings to address remaining questions.</p>
+        </div>
+
+        <!-- Inherited Context Card from Phase 1 -->
+        <div class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-3">
+            <div class="flex items-center justify-between">
+                <div>
+                    <p class="text-[11px] font-bold uppercase tracking-wider text-blue-400">Context Inherited from Phase 1</p>
+                    <p class="text-xs text-gray-200 mt-0.5">Hypothesis: <span class="text-white font-medium">{{ investigationState?.current_hypothesis || 'Active threat investigation in progress' }}</span></p>
+                </div>
+                <span class="px-2.5 py-1 rounded bg-blue-950 border border-blue-700 text-blue-200 text-xs font-semibold">
+                    {{ investigationState?.evidence_summary?.substantive_items || 0 }} Substantive Items Verified
+                </span>
             </div>
-            <div class="mt-3 flex items-center justify-end gap-2">
+            <div v-if="investigationState?.unresolved_questions && investigationState.unresolved_questions.length" class="pt-1 border-t border-gray-800">
+                <p class="text-[11px] font-semibold text-amber-300">Open Inquiries Being Targeted in Phase 2:</p>
+                <ul class="list-disc list-inside text-xs text-gray-300 space-y-1 mt-1">
+                    <li v-for="item in investigationState.unresolved_questions" :key="'p2-q:' + item">{{ item }}</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- Phase 2 Specialized Grounded Query Cards -->
+        <div v-if="analysisResult && analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="space-y-4">
+            <div class="flex items-center justify-between">
+                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Specialized Phase 2 Investigative Queries</p>
                 <button
                     type="button"
-                    class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100"
+                    class="text-[11px] text-blue-300 hover:text-blue-200"
+                    @click="$emit('open-placeholder-alias-editor')"
+                >
+                    Manage Aliases
+                </button>
+            </div>
+
+            <div
+                v-for="q in analysisResult.phase2_queries"
+                :key="getPhase2Key(q)"
+                class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3"
+            >
+                <div class="flex items-start justify-between gap-2">
+                    <div>
+                        <p class="text-xs font-bold text-purple-300">{{ q.title }}</p>
+                        <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button
+                            type="button"
+                            class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200"
+                            @click="$emit('copy-phase2-spl', q)"
+                        >
+                            Copy SPL
+                        </button>
+                    </div>
+                </div>
+
+                <pre class="text-xs text-gray-200 bg-black/60 rounded p-2.5 whitespace-pre-wrap font-mono">{{ renderPhase2Query(getPhase2Template(q)) }}</pre>
+
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Notes for this Follow-Up Check</label>
+                    <textarea
+                        :value="phase2ManualResults[getPhase2Key(q)] || ''"
+                        @input="emitPhase2Manual(q, $event.target.value)"
+                        rows="3"
+                        class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+                        placeholder="Paste findings from this specialized follow-up query..."
+                    ></textarea>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Result Status</label>
+                        <select
+                            v-model="evidenceResultStatuses[getPhase2Key(q)]"
+                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                        >
+                            <option value="success">Success (Events Found)</option>
+                            <option value="no_results">No Results (0 Events)</option>
+                            <option value="data_source_unavailable">Data Source Unavailable</option>
+                            <option value="query_failed">Query Failed</option>
+                            <option value="benign_result">Benign / Authorized Activity</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Finding Direction</label>
+                        <select
+                            :value="phase2FindingTypes[getPhase2Key(q)] || ''"
+                            @change="emitPhase2Finding(q, $event.target.value)"
+                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                        >
+                            <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex items-center justify-end gap-3 pt-2">
+                <button
+                    type="button"
+                    class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-100 transition shadow"
                     :disabled="analysisRunning"
                     @click="$emit('save-phase2-evidence')"
                 >
@@ -772,36 +937,166 @@ window.AnalysisTab = {
                 </button>
                 <button
                     type="button"
-                    class="px-3 py-2 bg-purple-600 hover:bg-purple-700 rounded text-xs font-semibold text-white"
+                    class="px-5 py-2 bg-purple-600 hover:bg-purple-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
                     :disabled="analysisRunning"
                     @click="$emit('run-phase2-analysis')"
                 >
-                    {{ analysisRunning ? 'Saving evidence and re-analyzing...' : 'Save evidence & re-analyze' }}
+                    <span v-if="analysisRunning" class="animate-spin">⟳</span>
+                    <span>{{ analysisRunning ? 'Re-analyzing case...' : 'Save Evidence & Re-Analyze Case' }}</span>
                 </button>
             </div>
-        </details>
+        </div>
+
+        <div class="flex justify-between pt-4 border-t border-gray-700">
+            <button
+                type="button"
+                @click="currentStage = 3"
+                class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
+            >
+                &larr; Back to Evidence Collection
+            </button>
+            <button
+                type="button"
+                @click="currentStage = 5"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
+            >
+                <span>Proceed to Verdict & Closure</span>
+                <span>&rarr;</span>
+            </button>
+        </div>
     </div>
 
-    <div v-if="phase2Result" class="bg-gray-800 border border-purple-700 rounded-lg p-6 mt-6">
-        <div class="flex items-center justify-between mb-4">
-            <h3 class="text-xl font-bold text-purple-300">Phase 2 Analysis Result</h3>
+    <!-- ============================================================= -->
+    <!-- STAGE 5: FINAL VERDICT & CLOSURE GATING -->
+    <!-- ============================================================= -->
+    <div v-show="currentStage === 5" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+        <div>
+            <h3 class="text-lg font-bold text-blue-300">Stage 5: Final Verdict & Closure</h3>
+            <p class="text-xs text-gray-400 mt-1">Review investigation loop confidence, verify active blockers, and transition to structured closure note compilation.</p>
         </div>
-        <p class="text-xs text-gray-400 mb-2" v-if="phase2Result.baseline_notables_count || phase2Result.supportive_results_count">
-            Included
-            <span class="font-semibold">{{ phase2Result.baseline_notables_count || 0 }}</span>
-            closed baseline notables and
-            <span class="font-semibold">{{ phase2Result.supportive_results_count || 0 }}</span>
-            supportive query result{{ (phase2Result.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
-        </p>
-        <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
-            <p class="text-gray-300 whitespace-pre-wrap">{{ phase2Result.analysis }}</p>
+
+        <!-- Investigation Loop State Dashboard -->
+        <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-5 space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <span
+                        class="px-3 py-1 rounded text-xs font-bold uppercase tracking-wider"
+                        :class="stage5Ready ? 'bg-emerald-950 text-emerald-300 border border-emerald-700' : 'bg-amber-950 text-amber-300 border border-amber-700'"
+                    >
+                        {{ formatLoopStatus(investigationState.loop_status) }}
+                    </span>
+                    <span class="text-sm font-semibold text-white capitalize">
+                        Disposition: {{ formatDispositionLabel(investigationState.provisional_disposition) }}
+                    </span>
+                </div>
+                <div class="text-right">
+                    <span class="text-xs text-gray-400 font-semibold uppercase">Confidence</span>
+                    <span class="ml-2 text-xl font-bold text-emerald-400">{{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%</span>
+                </div>
+            </div>
+
+            <!-- Closure Gating Checklist -->
+            <div class="p-4 bg-gray-800/80 rounded border border-gray-700 space-y-2">
+                <p class="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-2">Closure Gating Checklist</p>
+                <div class="space-y-1.5 text-xs">
+                    <div class="flex items-center gap-2">
+                        <span :class="((investigationState.disposition_confidence || 0) >= 0.8) ? 'text-emerald-400 font-bold' : 'text-red-400'">
+                            {{ ((investigationState.disposition_confidence || 0) >= 0.8) ? '✓' : '✗' }}
+                        </span>
+                        <span class="text-gray-200">High Confidence (&ge; 80%): {{ ((investigationState.disposition_confidence || 0) * 100).toFixed(0) }}%</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span :class="(investigationState.evidence_summary?.substantive_items >= 2) ? 'text-emerald-400 font-bold' : 'text-red-400'">
+                            {{ (investigationState.evidence_summary?.substantive_items >= 2) ? '✓' : '✗' }}
+                        </span>
+                        <span class="text-gray-200">Substantive Corroborating Findings (&ge; 2): {{ investigationState.evidence_summary?.substantive_items || 0 }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span :class="(!investigationState.closure_blockers || !investigationState.closure_blockers.length) ? 'text-emerald-400 font-bold' : 'text-red-400'">
+                            {{ (!investigationState.closure_blockers || !investigationState.closure_blockers.length) ? '✓' : '✗' }}
+                        </span>
+                        <span class="text-gray-200">Active Investigation Blockers: {{ investigationState.closure_blockers?.length || 0 }}</span>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span :class="(!investigationState.unresolved_questions || !investigationState.unresolved_questions.length) ? 'text-emerald-400 font-bold' : 'text-amber-400'">
+                            {{ (!investigationState.unresolved_questions || !investigationState.unresolved_questions.length) ? '✓' : '•' }}
+                        </span>
+                        <span class="text-gray-200">Unresolved Open Questions: {{ investigationState.unresolved_questions?.length || 0 }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Active Blockers if any -->
+            <div v-if="investigationState.closure_blockers && investigationState.closure_blockers.length" class="space-y-2">
+                <p class="text-xs font-bold uppercase tracking-wider text-red-400">Current Closure Blockers</p>
+                <div class="flex flex-wrap gap-2">
+                    <span v-for="b in investigationState.closure_blockers" :key="'c-block:' + b" class="bg-red-950/80 border border-red-700 text-red-200 px-3 py-1 rounded text-xs">
+                        {{ b }}
+                    </span>
+                </div>
+            </div>
+
+            <!-- Evidence Ledger Table Overview -->
+            <div v-if="evidenceTimelineItems.length" class="space-y-2 pt-2">
+                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Evidence Ledger Summary</p>
+                <div class="overflow-x-auto">
+                    <table class="min-w-full text-xs text-left border border-gray-700">
+                        <thead class="bg-gray-800 text-gray-400 uppercase tracking-wider font-semibold text-[10px]">
+                            <tr>
+                                <th class="p-2 border-b border-gray-700">Query Title</th>
+                                <th class="p-2 border-b border-gray-700">Source</th>
+                                <th class="p-2 border-b border-gray-700">Status</th>
+                                <th class="p-2 border-b border-gray-700">Direction</th>
+                                <th class="p-2 border-b border-gray-700">Observation</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-800 text-gray-200 font-mono">
+                            <tr v-for="item in evidenceTimelineItems" :key="'table:' + evidenceItemKey(item)">
+                                <td class="p-2 font-sans font-medium text-gray-100">{{ item.title }}</td>
+                                <td class="p-2 text-gray-400">{{ item.source_system }}</td>
+                                <td class="p-2">
+                                    <span class="px-1.5 py-0.5 rounded text-[10px] uppercase font-sans font-bold"
+                                        :class="{
+                                            'bg-blue-950 text-blue-200 border border-blue-800': item.result_status === 'success',
+                                            'bg-purple-950 text-purple-200 border border-purple-800': item.result_status === 'no_results',
+                                            'bg-red-950 text-red-200 border border-red-800': item.result_status === 'query_failed' || item.result_status === 'data_source_unavailable',
+                                            'bg-emerald-950 text-emerald-200 border border-emerald-800': item.result_status === 'benign_result'
+                                        }"
+                                    >{{ item.result_status || 'SUCCESS' }}</span>
+                                </td>
+                                <td class="p-2 font-sans font-bold capitalize" :class="{
+                                    'text-red-400': item.finding_type === 'supports',
+                                    'text-emerald-400': item.finding_type === 'refutes',
+                                    'text-gray-400': item.finding_type === 'neutral'
+                                }">{{ item.finding_type }}</td>
+                                <td class="p-2 truncate max-w-xs font-sans text-xs text-gray-300" :title="item.summary">{{ item.summary || 'No observation recorded' }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
         </div>
-        <div class="text-xs text-gray-400 space-y-1">
-            <p>Model: {{ phase2Result.model }}</p>
-            <p>Case: {{ phase2Result.case_id }}</p>
+
+        <div class="flex items-center justify-between pt-4 border-t border-gray-700">
+            <button
+                type="button"
+                @click="currentStage = 4"
+                class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
+            >
+                &larr; Back to Phase 2 Follow-Up
+            </button>
+            <button
+                type="button"
+                @click="$emit('go-to-closure-from-analysis', analysisCaseId)"
+                class="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-bold text-white transition shadow-xl flex items-center gap-2"
+            >
+                <span>Move to Closure Notes for this Case</span>
+                <span>&rarr;</span>
+            </button>
         </div>
     </div>
 
+    <!-- Supportive Editor Modal -->
     <div v-if="supportiveEditorOpen" class="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
         <div class="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-5">
             <div class="flex items-center justify-between mb-4">
@@ -833,6 +1128,7 @@ window.AnalysisTab = {
         </div>
     </div>
 
+    <!-- Placeholder Alias Editor Modal -->
     <div v-if="placeholderAliasEditorOpen" class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4">
         <div class="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5">
             <div class="flex items-center justify-between mb-4">
@@ -854,18 +1150,26 @@ window.AnalysisTab = {
             </div>
             <div v-if="placeholderAliasSuggestions && placeholderAliasSuggestions.length" class="mb-4 p-3 bg-gray-900 rounded border border-gray-700">
                 <p class="text-xs text-gray-400 mb-2">Suggested fields from current notable data:</p>
-                <div class="flex flex-wrap gap-2"><button v-for="candidate in placeholderAliasSuggestions" :key="candidate.field || candidate" type="button" class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600" @click="$emit('toggle-alias-field-candidate', candidate.field || candidate)">{{ candidate.field || candidate }}</button></div>
+                <div class="flex flex-wrap gap-2">
+                    <button v-for="candidate in placeholderAliasSuggestions" :key="candidate.field || candidate" type="button" class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600" @click="$emit('toggle-alias-field-candidate', candidate.field || candidate)">{{ candidate.field || candidate }}</button>
+                </div>
             </div>
             <div class="space-y-2">
                 <div v-for="alias in placeholderAliasList" :key="alias.id" class="flex items-center justify-between border border-gray-700 rounded p-3">
-                    <div><code class="text-blue-300 text-sm">&dollar;{{ alias.alias }}&dollar;</code><span class="text-xs text-gray-400 ml-2">{{ (alias.fields || []).join(', ') }}</span><p v-if="alias.description" class="text-xs text-gray-500">{{ alias.description }}</p></div>
-                    <div class="flex gap-2"><button type="button" class="text-xs text-blue-300" @click="$emit('edit-placeholder-alias', alias)">Edit</button><button type="button" class="text-xs text-red-300" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button></div>
+                    <div>
+                        <code class="text-blue-300 text-sm">&dollar;{{ alias.alias }}&dollar;</code>
+                        <span class="text-xs text-gray-400 ml-2">{{ (alias.fields || []).join(', ') }}</span>
+                        <p v-if="alias.description" class="text-xs text-gray-500">{{ alias.description }}</p>
+                    </div>
+                    <div class="flex gap-2">
+                        <button type="button" class="text-xs text-blue-300" @click="$emit('edit-placeholder-alias', alias)">Edit</button>
+                        <button type="button" class="text-xs text-red-300" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button>
+                    </div>
                 </div>
                 <p v-if="!placeholderAliasList || !placeholderAliasList.length" class="text-xs text-gray-500">No aliases saved yet.</p>
             </div>
         </div>
     </div>
 </div>
-        </div>
     `
 };
