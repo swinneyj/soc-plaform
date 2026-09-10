@@ -24,13 +24,15 @@
 
 param(
     [string]$RepoRoot = "",
-    [string]$DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform",
+    [string]$DatabaseUrl = "",
     [int]$ApiPort = 8000,
     [switch]$SkipSupportive,
     [switch]$SkipVerify
 )
 
 $ErrorActionPreference = "Stop"
+$PSNativeCommandUseErrorActionPreference = $false
+$env:PYTHONWARNINGS = "ignore"
 
 function Write-Step {
     param([string]$Message)
@@ -67,6 +69,36 @@ if (-not $RepoRoot) {
         $RepoRoot = $scriptDir
     } else {
         $RepoRoot = $scriptDir
+    }
+}
+
+# Resolve DATABASE_URL from .env when not passed explicitly, so
+# callers that rely on the Downloads\SOC_Platform\.env password do not fail auth.
+if (-not $DatabaseUrl) {
+    $envFile = Join-Path $RepoRoot ".env"
+    if (Test-Path $envFile) {
+        $envContent = Get-Content $envFile -Raw -ErrorAction SilentlyContinue
+        if ($envContent -match '(?m)^DATABASE_URL\s*=\s*(.+?)\s*$') {
+            $DatabaseUrl = $Matches[1].Trim().Trim('"').Trim("'")
+            Write-Host ("[env] Resolved DATABASE_URL from .env") -ForegroundColor DarkGray
+        }
+    }
+}
+# Fallback to env or default host port
+if (-not $DatabaseUrl) {
+    if ($env:DATABASE_URL) {
+        $DatabaseUrl = $env:DATABASE_URL
+    }
+}
+if (-not $DatabaseUrl) {
+    $DatabaseUrl = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+    Write-Host ("[env] Using default DATABASE_URL (no password from .env)") -ForegroundColor Yellow
+}
+# Also honor API_HOST_PORT from .env for verification step
+if (Test-Path (Join-Path $RepoRoot ".env")) {
+    $envContent2 = Get-Content (Join-Path $RepoRoot ".env") -Raw -ErrorAction SilentlyContinue
+    if ($PSBoundParameters.ContainsKey('ApiPort') -eq $false -and $envContent2 -match '(?m)^API_HOST_PORT\s*=\s*(\d+)') {
+        $ApiPort = [int]$Matches[1]
     }
 }
 

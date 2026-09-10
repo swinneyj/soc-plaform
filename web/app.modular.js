@@ -40,6 +40,7 @@ const { createApp } = Vue;
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
                     dbSearch: '',
                     dbVerdictFilter: '',
+                    triageFromPastedOnly: false,
                     deleteAnalysisWithCase: false,
                     triageNotableDetails: {},
                     selectedTriageCaseIds: [],
@@ -406,6 +407,18 @@ const { createApp } = Vue;
                 ...(window.ClosureMethods || {}),
                 ...(window.CodeReviewMethods || {}),
             },
+            watch: {
+                dbStats: {
+                    handler(newVal) {
+                        if (newVal && typeof newVal.triage_cases === 'number' && newVal.triage_cases !== this.triageData.length) {
+                            this.loadTriageData();
+                            this.loadRecentNotables();
+                            this.loadAnalysisCases();
+                        }
+                    },
+                    deep: true
+                }
+            },
             mounted() {
                 this.loadTools();
                 this.loadJobs();
@@ -426,5 +439,7 @@ const { createApp } = Vue;
                 setInterval(() => this.checkOllama(), 30000);
                 setInterval(() => this.loadDbStats(), 30000);
                 setInterval(() => this.loadRules(), 30000);
+                setInterval(() => this.loadTriageData(), 30000);
+                setInterval(() => this.loadRecentNotables(), 30000);
             }
         }).mount('#app');
