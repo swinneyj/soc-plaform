@@ -3884,11 +3884,13 @@ def list_recent_notables(
     """List recently pasted sanitized Splunk notables (optionally deleting one first)."""
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent
+        from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
 
-        # Optional delete/hide step using the same session
+        # Optional delete/hide step using the same session. Historical
+        # notables or those backing an existing triage case are retained
+        # and hidden from the recent list instead of being deleted.
         if delete_event_id is not None:
             event = db.query(SplunkEvent).filter(
                 SplunkEvent.id == delete_event_id,
@@ -3900,7 +3902,22 @@ def list_recent_notables(
                 except Exception:
                     payload = {}
 
-                if payload.get("historical"):
+                is_historical = bool(payload.get("historical"))
+
+                promoted_case_id = payload.get("promoted_case_id")
+                has_triage_case = False
+                try:
+                    if promoted_case_id:
+                        existing_case = db.query(TriageResult).filter(TriageResult.case_id == promoted_case_id).first()
+                        has_triage_case = existing_case is not None
+                    else:
+                        canonical_case_id = f"NOTABLE-{event.id}"
+                        existing_case = db.query(TriageResult).filter(TriageResult.case_id == canonical_case_id).first()
+                        has_triage_case = existing_case is not None
+                except Exception:
+                    has_triage_case = False
+
+                if is_historical or has_triage_case:
                     payload["hidden_from_recent"] = True
                     event.raw = json.dumps(payload)
                 else:
@@ -3985,7 +4002,7 @@ def delete_pasted_notable(event_id: int):
     """
     try:
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent
+        from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
         event = db.query(SplunkEvent).filter(
@@ -3996,15 +4013,35 @@ def delete_pasted_notable(event_id: int):
         if not event:
             raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
 
-        # For historical (closed) pasted notables, retain the underlying
-        # record in the database and simply hide it from the recent list so
-        # stats and closed-notables summaries remain accurate.
+        # For historical (closed) pasted notables, or events that already
+        # back an existing triage case, retain the underlying record in the
+        # database and simply hide it from the recent list so stats and
+        # triage-source lookups remain valid.
         try:
             payload = json.loads(event.raw) if event.raw else {}
         except Exception:
             payload = {}
 
-        if payload.get("historical"):
+        is_historical = bool(payload.get("historical"))
+
+        promoted_case_id = payload.get("promoted_case_id")
+        has_triage_case = False
+        try:
+            if promoted_case_id:
+                existing_case = db.query(TriageResult).filter(TriageResult.case_id == promoted_case_id).first()
+                has_triage_case = existing_case is not None
+            else:
+                # Fallback to the canonical NOTABLE-<id> pattern used when
+                # promoting notables into triage.
+                canonical_case_id = f"NOTABLE-{event.id}"
+                existing_case = db.query(TriageResult).filter(TriageResult.case_id == canonical_case_id).first()
+                has_triage_case = existing_case is not None
+        except Exception:
+            # If the triage lookup fails for any reason, fall back to the
+            # historical flag alone to decide whether to delete.
+            has_triage_case = False
+
+        if is_historical or has_triage_case:
             payload["hidden_from_recent"] = True
             event.raw = json.dumps(payload)
         else:
@@ -4054,7 +4091,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
             raise HTTPException(status_code=400, detail="event_ids list is required")
 
         sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent
+        from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
         deleted: List[int] = []
@@ -4079,7 +4116,22 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                 except Exception:
                     payload_raw = {}
 
-                if payload_raw.get("historical"):
+                is_historical = bool(payload_raw.get("historical"))
+
+                promoted_case_id = payload_raw.get("promoted_case_id")
+                has_triage_case = False
+                try:
+                    if promoted_case_id:
+                        existing_case = db.query(TriageResult).filter(TriageResult.case_id == promoted_case_id).first()
+                        has_triage_case = existing_case is not None
+                    else:
+                        canonical_case_id = f"NOTABLE-{event.id}"
+                        existing_case = db.query(TriageResult).filter(TriageResult.case_id == canonical_case_id).first()
+                        has_triage_case = existing_case is not None
+                except Exception:
+                    has_triage_case = False
+
+                if is_historical or has_triage_case:
                     payload_raw["hidden_from_recent"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
