@@ -245,6 +245,24 @@ function Show-Compare {
     git branch -r | Select-String "origin/staging-"
 }
 
+function Invoke-GitQuiet {
+    # git writes progress to stderr; with $ErrorActionPreference=Stop that becomes a terminating error in PS.
+    param([Parameter(ValueFromRemainingArguments = $true)]$GitArgs)
+    $old = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & git @GitArgs 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) {
+            Write-Host $_.Exception.Message
+        }
+        else {
+            Write-Host $_
+        }
+    }
+    $script:LastGitExit = $LASTEXITCODE
+    $ErrorActionPreference = $old
+    return $script:LastGitExit
+}
+
 function Update-SharedStaging-FromMain {
     Write-Header "Refresh origin/${SharedStaging} from ${MainBranch}"
     if (-not (Ensure-CleanForBranchSwitch)) {
@@ -252,27 +270,46 @@ function Update-SharedStaging-FromMain {
     }
     $startBranch = Get-CurrentBranch
     try {
-        git fetch origin
-        git checkout ${MainBranch}
-        if ($LASTEXITCODE -ne 0) {
+        Invoke-GitQuiet fetch origin
+
+        # 1) Update local main from origin
+        $rc = Invoke-GitQuiet checkout ${MainBranch}
+        if ($rc -ne 0) {
             Write-Host "Could not checkout ${MainBranch}." -ForegroundColor Red
             return
         }
-        git pull origin ${MainBranch}
+        Invoke-GitQuiet pull origin ${MainBranch}
 
-        Ensure-Branch-FromMain -Name ${SharedStaging}
-        git merge ${MainBranch} -m "Sync ${SharedStaging} with ${MainBranch}"
-        if ($LASTEXITCODE -ne 0) {
-            Write-Host "Conflicts - resolve, commit, then push ${SharedStaging}" -ForegroundColor Red
+        # 2) Catch up local staging to origin/staging FIRST
+        $rc = Invoke-GitQuiet checkout ${SharedStaging}
+        if ($rc -ne 0) {
+            $remoteStaging = git branch -r --list "origin/${SharedStaging}"
+            if ($remoteStaging) {
+                Invoke-GitQuiet checkout -b ${SharedStaging} "origin/${SharedStaging}"
+            }
+            else {
+                Invoke-GitQuiet checkout -b ${SharedStaging} ${MainBranch}
+            }
+        }
+        Invoke-GitQuiet pull origin ${SharedStaging}
+
+        # 3) Merge main into staging
+        $rc = Invoke-GitQuiet merge ${MainBranch} -m "Sync ${SharedStaging} with ${MainBranch}"
+        if ($rc -ne 0) {
+            Write-Host "Conflicts - resolve on ${SharedStaging}, commit, then: git push origin ${SharedStaging}" -ForegroundColor Red
             return
         }
-        git push -u origin ${SharedStaging}
+
+        $rc = Invoke-GitQuiet push origin ${SharedStaging}
+        if ($rc -ne 0) {
+            Write-Host "Push rejected. Try: git pull origin ${SharedStaging} then push again." -ForegroundColor Red
+            return
+        }
         Write-Host "origin/${SharedStaging} is up to date with main." -ForegroundColor Green
     }
     finally {
-        # Return to the branch you started on when possible
         if ($startBranch -and ((Get-CurrentBranch) -ne $startBranch)) {
-            git checkout $startBranch 2>$null
+            Invoke-GitQuiet checkout $startBranch | Out-Null
         }
         Restore-StashIfNeeded
     }
