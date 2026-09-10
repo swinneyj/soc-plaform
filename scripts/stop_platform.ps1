@@ -1,6 +1,7 @@
 param(
     [string]$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [string]$SharedDumpDir = "Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff",
+    [int]$PostgresHostPort = 5433,
     [switch]$StopOllama,
     [switch]$SkipSharedDumpExport,
     [switch]$IgnoreExistingLock
@@ -79,6 +80,10 @@ function Release-ShareLock {
 }
 
 Set-Location $RepoRoot
+
+if (-not $env:DATABASE_URL) {
+    $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:$PostgresHostPort/soc_platform"
+}
 
 Write-Host "============================================"
 Write-Host "  Stopping SOC Platform"

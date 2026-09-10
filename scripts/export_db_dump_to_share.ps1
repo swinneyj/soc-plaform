@@ -6,14 +6,28 @@ param(
 
 $outputPath = Join-Path $ShareDir $FileName
 $metadataPath = Join-Path $ShareDir "current_soc_platform_dump.metadata.json"
+$tempOutputPath = "$outputPath.tmp"
 
 if (-not (Test-Path $ShareDir)) {
     New-Item -ItemType Directory -Path $ShareDir -Force | Out-Null
 }
 
-& (Join-Path $PSScriptRoot "export_postgres_dump.ps1") -DatabaseUrl $DatabaseUrl -OutputPath $outputPath
+if (Test-Path $tempOutputPath) {
+    Remove-Item $tempOutputPath -Force
+}
+
+& (Join-Path $PSScriptRoot "export_postgres_dump.ps1") -DatabaseUrl $DatabaseUrl -OutputPath $tempOutputPath
 
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+$tempDumpFile = Get-Item $tempOutputPath
+if ($tempDumpFile.Length -le 0) {
+    Remove-Item $tempOutputPath -Force -ErrorAction SilentlyContinue
+    Write-Error "Exported dump is empty. Shared dump was not updated."
+    exit 1
+}
+
+Move-Item -Path $tempOutputPath -Destination $outputPath -Force
 
 $dumpFile = Get-Item $outputPath
 $metadata = @{

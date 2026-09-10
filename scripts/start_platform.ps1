@@ -237,16 +237,21 @@ if (-not (Wait-ForPostgres -MaxAttempts 60 -DelaySeconds 2)) {
 if (-not $SkipSharedDumpRestore) {
     $sharedDumpPath = Join-Path $SharedDumpDir "current_soc_platform_dump.sql"
     if (Test-Path $sharedDumpPath) {
-        if (-not (Acquire-ShareLock)) {
-            exit 1
-        }
+        $sharedDumpFile = Get-Item $sharedDumpPath
+        if ($sharedDumpFile.Length -le 0) {
+            Write-Warning "Shared dump exists but is empty. Skipping restore and keeping local database state."
+        } else {
+            if (-not (Acquire-ShareLock)) {
+                exit 1
+            }
 
-        Write-Host "[*] Restoring shared dump from $sharedDumpPath"
-        & (Join-Path $PSScriptRoot "restore_db_dump_from_share.ps1") -ShareDir $SharedDumpDir -DatabaseUrl $env:DATABASE_URL
-        $restoreExitCode = $LASTEXITCODE
-        Release-ShareLock
-        if ($restoreExitCode -ne 0) {
-            exit $restoreExitCode
+            Write-Host "[*] Restoring shared dump from $sharedDumpPath"
+            & (Join-Path $PSScriptRoot "restore_db_dump_from_share.ps1") -ShareDir $SharedDumpDir -DatabaseUrl $env:DATABASE_URL
+            $restoreExitCode = $LASTEXITCODE
+            Release-ShareLock
+            if ($restoreExitCode -ne 0) {
+                exit $restoreExitCode
+            }
         }
     } else {
         Write-Host "[*] No shared dump found. Skipping restore."

@@ -46,7 +46,13 @@ class OllamaClient:
             pass
         return []
     
-    def generate(self, prompt: str, model: Optional[str] = None, temperature: float = 0.7) -> Dict[str, Any]:
+    def generate(
+        self,
+        prompt: str,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        options: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         Generate text using Ollama.
         
@@ -71,9 +77,12 @@ class OllamaClient:
             payload = {
                 "model": model,
                 "prompt": prompt,
-                "temperature": temperature,
                 "stream": False
             }
+            merged_options = dict(options or {})
+            merged_options.setdefault("temperature", temperature)
+            if merged_options:
+                payload["options"] = merged_options
             
             r = requests.post(
                 f"{self.base_url}/api/generate",
@@ -88,6 +97,7 @@ class OllamaClient:
                     "response": data.get('response', ''),
                     "model": data.get('model', model),
                     "tokens": data.get('eval_count', 0),
+                    "prompt_eval_count": data.get('prompt_eval_count', 0),
                     "error": None
                 }
             else:

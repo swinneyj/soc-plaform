@@ -16,6 +16,7 @@ import json
 import uuid
 import subprocess
 import datetime
+import time
 import re
 import io
 import zipfile
@@ -28,6 +29,7 @@ tools_dir = os.path.join(os.path.dirname(__file__), '..', 'Tools')
 sys.path.insert(0, tools_dir)
 
 from core_lib.utils import get_platform_root, get_reports_dir, get_archive_dir, get_logs_dir
+from services.artifact_guard import validate_artifact_value
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -141,9 +143,397 @@ def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
         except Exception:
             phase2_queries = []
 
+            # Smaller local models sometimes emit multiple adjacent one-item
+            # arrays like `[ {...} ] [ {...} ]`. Recover those arrays one by
+            # one so the Phase 2 UI still gets usable queries instead of none.
+            for match in re.findall(r"\[[\s\S]*?\]", raw_block):
+                try:
+                    parsed_match = json.loads(match)
+                except Exception:
+                    continue
+
+                if not isinstance(parsed_match, list):
+                    continue
+
+                for idx, item in enumerate(parsed_match, 1):
+                    title = ""
+                    spl_value = ""
+                    desc = ""
+
+                    if isinstance(item, dict):
+                        title_keys = ["title", "name", "query_name"]
+                        spl_keys = ["spl", "query", "sql", "code"]
+                        desc_keys = ["description", "desc", "notes"]
+
+                        for k in title_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                title = str(item.get(k)).strip()
+                                break
+
+                        for k in spl_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                spl_value = str(item.get(k)).strip()
+                                break
+
+                        for k in desc_keys:
+                            if k in item and (item.get(k) or "").strip():
+                                desc = str(item.get(k)).strip()
+                                break
+                    elif isinstance(item, str):
+                        spl_value = item.strip()
+                        title = f"Phase 2 Query {idx}"
+
+                    title = title or f"Phase 2 Query {idx}"
+                    if spl_value:
+                        phase2_queries.append({
+                            "title": title,
+                            "spl": spl_value,
+                            "description": desc,
+                        })
+
     return phase2_queries
 
 
+<<<<<<< HEAD
+def _looks_like_spl_query(query_text: str) -> bool:
+    query_text = (query_text or "").strip()
+    if not query_text:
+        return False
+
+    lower_text = query_text.lower()
+    rejected_prefixes = (
+        "correlation search:",
+        "detection fields:",
+        "neutral tokens:",
+        "rule name:",
+        "security domain:",
+        "description:",
+    )
+    if lower_text.startswith(rejected_prefixes):
+        return False
+
+    valid_prefixes = (
+        "search ",
+        "index=",
+        "sourcetype=",
+        "source=",
+        "host=",
+        "eventtype=",
+        "tag=",
+        "| tstats",
+        "| from",
+        "| datamodel",
+    )
+    if lower_text.startswith(valid_prefixes):
+        return True
+
+    # Permit common Splunk base searches that begin with a macro or parentheses.
+    if query_text.startswith("`") or query_text.startswith("("):
+        return True
+
+    return False
+
+
+def _safe_analysis_display(response_text: str) -> str:
+    """Hide raw model-written SPL; executable SPL is displayed only in validated cards."""
+
+    response_text = response_text or ""
+
+    section_start = re.search(
+        r"(?im)^#{1,6}\s*Supportive Query Recommendations(?:\s*\(Phase 2 SPL\))?\s*$",
+        response_text,
+    )
+
+    if not section_start:
+        return response_text
+
+    section_end = re.search(
+        r"(?im)^#{1,6}\s*Triage Verdict\s*$",
+        response_text[section_start.end():],
+    )
+
+    safe_section = (
+        "### Supportive Query Recommendations (Phase 2 SPL)\n\n"
+        "Use only the validated Phase 2 query cards below. "
+        "Raw model-generated SPL is intentionally not displayed here.\n\n"
+    )
+
+    if not section_end:
+        return response_text[:section_start.start()] + safe_section
+
+    end_index = section_start.end() + section_end.start()
+
+    return (
+        response_text[:section_start.start()]
+        + safe_section
+        + response_text[end_index:]
+    )
+
+def _strip_machine_control_blocks(display_text: str) -> str:
+    """Remove incomplete or complete model-only JSON blocks from analyst display."""
+    display_text = display_text or ""
+
+    # These blocks are parsed from the original response before display text is built.
+    # Small local models may be cut off before emitting an END marker, so remove from
+    # the start marker through the end of displayed content.
+    for marker in ("PHASE2_QUERIES_JSON_START", "DECISION_GATE_JSON_START"):
+        marker_index = display_text.find(marker)
+        if marker_index != -1:
+            display_text = display_text[:marker_index].rstrip()
+
+    return display_text
+
+def _filter_valid_phase2_queries(queries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    valid_queries: List[Dict[str, Any]] = []
+    seen_signatures = set()
+    for item in queries or []:
+        spl_value = (item.get("spl") or "").strip()
+        if not _looks_like_spl_query(spl_value):
+            continue
+        if _query_contains_unusable_entity_values(spl_value):
+            continue
+
+        normalized_signature = re.sub(r"\s+", " ", spl_value).strip().lower()
+        if normalized_signature in seen_signatures:
+            continue
+
+        seen_signatures.add(normalized_signature)
+        valid_queries.append(item)
+    return valid_queries
+
+
+def _query_contains_unusable_entity_values(query_text: str) -> bool:
+    # Reject model templates that look syntactically like SPL but require an
+    # analyst to replace invented values before the query can run.
+    placeholder_pattern = re.compile(
+        r"(?i)(?:"
+        r"\byour_[a-z0-9_]+\b|"
+        r"<\s*(?:index|sourcetype|host|user|username|process|eventtype)[^>]*>|"
+        r"\[\s*(?:index|sourcetype|host|user|username|process|eventtype)[^\]]*\]|"
+        r"\b(?:index|sourcetype|source|host|user|username|eventtype)\s*=\s*(?:your_[a-z0-9_]+|<[^>]+>|\[[^\]]+\])"
+        r")"
+    )
+    if placeholder_pattern.search(query_text or ""):
+        return True
+
+    entity_field_map = {
+        "host": "host",
+        "destination": "destination",
+        "user": "user",
+        "username": "username",
+        "Account_Name": "user",
+        "src_ip": "source_ip",
+        "source_ip": "source_ip",
+        "dest_ip": "destination_ip",
+        "destination_ip": "destination_ip",
+    }
+    for field_name, entity_key in entity_field_map.items():
+        pattern = re.compile(rf'\b{re.escape(field_name)}\s*=\s*"([^"]+)"', flags=re.IGNORECASE)
+        for match in pattern.finditer(query_text or ""):
+            candidate = (match.group(1) or "").strip()
+            if candidate and not is_usable_primary_entity(entity_key, candidate):
+                return True
+    return False
+
+
+def _build_no_results_replacement_queries(
+    fields: Dict[str, str],
+    rule_name: str = "",
+    rule_description: str = "",
+) -> List[Dict[str, Any]]:
+    """
+    Build deterministic replacement pivots after a saved query returns no
+    results. These intentionally change investigation scope rather than asking
+    the model to restate a failed host, user, or rule-history query.
+    """
+    fields = fields or {}
+
+    user = (fields.get("user") or fields.get("username") or "").strip()
+    detection_text = " ".join([
+        rule_name or "",
+        rule_description or "",
+        fields.get("process") or "",
+        fields.get("parent_process") or "",
+        fields.get("description") or "",
+    ]).lower()
+
+    linux_ssh_key_case = any(
+        token in detection_text
+        for token in ("linux", "ssh key", "ssh-key", "ssh-keygen", "authorized_keys")
+    )
+
+    queries: List[Dict[str, Any]] = []
+
+    if linux_ssh_key_case:
+        queries.append({
+            "title": "Broad Linux SSH-key activity",
+            "spl": (
+                'search index=* earliest=-24h latest=now '
+                '("ssh-keygen" OR "authorized_keys" OR "ssh-rsa" OR "ssh-ed25519") '
+                '| table _time host user sourcetype source process Image ParentImage CommandLine '
+                '| sort 0 _time'
+            ),
+            "description": (
+                "The prior pivot returned no results. Broaden to Linux SSH-key "
+                "indicators across available telemetry before narrowing again."
+            ),
+        })
+
+    if user and is_usable_primary_entity("user", user):
+        queries.append({
+            "title": "Account prevalence across hosts",
+            "spl": (
+                f'search index=* earliest=-7d latest=now '
+                f'(user="{user}" OR username="{user}" OR Account_Name="{user}") '
+                '| stats count values(host) as hosts values(sourcetype) as sourcetypes by user '
+                '| sort - count'
+            ),
+            "description": (
+                "Compare the account across hosts and data sources. This is a "
+                "prevalence pivot, not a repeat of the failed narrow time-window search."
+            ),
+        })
+
+    queries.append({
+        "title": "Recent endpoint activity by security signal",
+        "spl": (
+            'search index=* earliest=-24h latest=now '
+            '("ssh-keygen" OR "authorized_keys" OR "ssh-rsa" OR "ssh-ed25519") '
+            '| stats count values(host) as hosts values(user) as users '
+            'values(sourcetype) as sourcetypes'
+        ),
+        "description": (
+            "Establish whether the SSH-key indicators appear anywhere in recent "
+            "telemetry when the initial rule-history or entity pivot was not productive."
+        ),
+    })
+
+    seen = set()
+    deduplicated: List[Dict[str, Any]] = []
+    for query in queries:
+        signature = re.sub(r"\s+", " ", (query.get("spl") or "")).strip().lower()
+        if not signature or signature in seen:
+            continue
+        seen.add(signature)
+        deduplicated.append(query)
+
+    return deduplicated[:3]
+
+def _build_generic_phase2_queries_from_fields(
+    fields: Dict[str, str],
+    rule_name: str = "",
+    rule_description: str = "",
+    parse_assessment: Optional[Dict[str, Any]] = None,
+) -> List[Dict[str, Any]]:
+    generic_queries = list((parse_assessment or {}).get("generic_queries") or [])
+    if generic_queries:
+        return generic_queries[:3]
+
+    host = (fields.get("host") or fields.get("destination") or "").strip()
+    user = (fields.get("user") or fields.get("username") or "").strip()
+    process_candidate = (fields.get("process") or "").strip()
+    parent_process_candidate = (fields.get("parent_process") or "").strip()
+
+    process_check = validate_artifact_value("process", process_candidate)
+    parent_process_check = validate_artifact_value("parent_process", parent_process_candidate)
+
+    process = process_check["value"] if process_check["valid"] else ""
+    parent_process = parent_process_check["value"] if parent_process_check["valid"] else ""
+
+    correlation_search = (fields.get("correlation_search") or rule_name or "").strip()
+
+    platform_text = " ".join([
+        correlation_search,
+        fields.get("title") or "",
+        fields.get("description") or "",
+        fields.get("security_domain") or "",
+        process,
+        parent_process,
+    ]).lower()
+
+    is_linux_case = any(token in platform_text for token in (
+        "linux",
+        "bash",
+        "ssh-keygen",
+        "authorized_keys",
+        "/home/",
+        "/etc/",
+    ))
+    correlation_search = (fields.get("correlation_search") or rule_name or "").strip()
+    notable_time = (fields.get("time") or "").strip()
+
+    queries: List[Dict[str, str]] = []
+    timeline_clauses = []
+
+    if host:
+        host_escaped = host.replace('"', '\\"')
+        timeline_clauses.append(f'host="{host_escaped}"')
+    if user:
+        user_escaped = user.replace('"', '\\"')
+        timeline_clauses.append(f'(user="{user_escaped}" OR username="{user_escaped}" OR Account_Name="{user_escaped}")')
+
+    if timeline_clauses:
+        time_hint = " earliest=-30m latest=+30m" if notable_time else ""
+        queries.append({
+            "title": "Timeline around the notable",
+            "spl": f"search index=* {' OR '.join(timeline_clauses)}{time_hint} | sort 0 _time | table _time host user sourcetype source process parent_process CommandLine",
+            "description": "Start broad and establish what else happened around the same host, user, and alert window before narrowing further.",
+        })
+
+    if host and user:
+        host_escaped = host.replace('"', '\\"')
+        user_escaped = user.replace('"', '\\"')
+        queries.append({
+            "title": "Host and user pivot",
+            "spl": f"search index=* host=\"{host_escaped}\" (user=\"{user_escaped}\" OR username=\"{user_escaped}\") earliest=-24h latest=now | stats count values(sourcetype) as sourcetypes values(process) as processes by host user",
+            "description": "Narrow on the strongest artifacts together to see whether this pairing is isolated, routine, or part of broader suspicious activity.",
+        })
+    elif host:
+        host_escaped = host.replace('"', '\\"')
+        queries.append({
+            "title": "Host pivot",
+            "spl": f"search index=* host=\"{host_escaped}\" earliest=-24h latest=now | stats count values(user) as users values(process) as processes values(sourcetype) as sourcetypes by host",
+            "description": "Narrow on the host to determine whether the activity looks isolated or part of a wider pattern on the endpoint.",
+        })
+    elif user:
+        user_escaped = user.replace('"', '\\"')
+        queries.append({
+            "title": "User pivot",
+            "spl": f"search index=* earliest=-24h latest=now (user=\"{user_escaped}\" OR username=\"{user_escaped}\" OR Account_Name=\"{user_escaped}\") | stats count values(host) as hosts values(process) as processes values(sourcetype) as sourcetypes by user",
+            "description": "Narrow on the user to decide whether this behavior is common administration or something anomalous across systems.",
+        })
+
+    if (process or parent_process) and not is_linux_case:
+        clauses = []
+        if parent_process:
+            parent_escaped = parent_process.replace('"', '\\"')
+            clauses.append(f'ParentImage="*\\\\{parent_escaped}"')
+        if process:
+            process_escaped = process.replace('"', '\\"')
+            clauses.append(f'Image="*\\\\{process_escaped}"')
+        queries.append({
+            "title": "Process lineage disposition check",
+            "spl": "search index=* source=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" EventCode=1 " + " ".join(clauses) + " | table _time ComputerName User ParentImage Image CommandLine ParentCommandLine | sort - _time",
+            "description": "Use process lineage to confirm whether the alert aligns with expected administration or suspicious execution flow.",
+        })
+    elif correlation_search:
+        corr_escaped = correlation_search.replace('"', '\\"')
+        queries.append({
+            "title": "Recent outcomes for this rule",
+            "spl": f'| `incident_review` | search correlation_search="{corr_escaped}" | table _time rule_name urgency status owner disposition host user | sort - _time | head 20',
+            "description": "Use similar recent notables to calibrate whether this alert usually closes benignly or needs escalation.",
+        })
+
+    if not queries:
+        hypothesis = (rule_description or rule_name or "this alert").strip()
+        queries.append({
+            "title": "Recent related notables",
+            "spl": '| `incident_review` | table _time rule_name correlation_search urgency status owner disposition | sort - _time | head 25',
+            "description": f"Start broad with recent triage context and compare it to {hypothesis} before choosing a narrower pivot.",
+        })
+
+    return queries[:3]
+=======
 def _normalize_phase2_text(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
     return re.sub(r"\s+", " ", normalized).strip()
@@ -752,6 +1142,7 @@ def _upsert_investigation_state(db, model_cls, state_payload: Dict[str, Any]):
     record.evidence_summary = json.dumps(state_payload.get("evidence_summary") or {}, ensure_ascii=False)
     record.last_analysis_stage = state_payload.get("last_analysis_stage") or "initial"
     return record
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 
 
 def _load_supportive_results_for_case(db, case_id: str) -> List[Dict[str, Any]]:
@@ -950,11 +1341,202 @@ def _build_supportive_phase2_fallback(
     return [item[1] for item in scored_queries[:max_queries]]
 
 
+def _is_small_ollama_model(model_name: str) -> bool:
+    normalized = (model_name or "").strip().lower()
+    return any(token in normalized for token in ["1b", "1.2b", "1.3b", "mini", "small"])
+
+
+def _truncate_for_prompt(value: Any, max_chars: int) -> str:
+    text = str(value or "").strip()
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
+
+
+def _round_timing_seconds(value: float) -> float:
+    return round(max(value, 0.0), 3)
+
+
+ALLOWED_EVIDENCE_STATUSES = ("supports", "refutes", "neutral", "no_results", "error")
+
+
+def _normalize_evidence_status(status: str) -> str:
+    normalized = (status or "").strip().lower()
+    if normalized in ALLOWED_EVIDENCE_STATUSES:
+        return normalized
+    return "neutral"
+
+
+def _derive_finding_type_from_status(status: str) -> str:
+    normalized = _normalize_evidence_status(status)
+    if normalized in {"supports", "refutes", "neutral"}:
+        return normalized
+    return "neutral"
+
+
+def _extract_evidence_artifact_fields(supportive_results: List[Dict[str, Any]]) -> Dict[str, str]:
+    extracted: Dict[str, str] = {}
+    patterns = [
+        ("host", r'host\s*=\s*"([^"]+)"'),
+        ("host", r'ComputerName\s*=\s*"([^"]+)"'),
+        ("destination", r'destination\s*=\s*"([^"]+)"'),
+        ("user", r'user\s*=\s*"([^"]+)"'),
+        ("username", r'username\s*=\s*"([^"]+)"'),
+        ("user", r'Account_Name\s*=\s*"([^"]+)"'),
+        ("process", r'Image\s*=\s*"[^"\\]*\\([^"\\]+)"'),
+        ("parent_process", r'ParentImage\s*=\s*"[^"\\]*\\([^"\\]+)"'),
+    ]
+
+    for item in supportive_results:
+        raw = item.get("raw_result") or {}
+        if not isinstance(raw, dict):
+            continue
+
+        status = _normalize_evidence_status(raw.get("evidence_status") or raw.get("finding_type") or "neutral")
+        if status == "error":
+            continue
+
+        search_space = "\n".join([
+            str(raw.get("query_text") or ""),
+            str(raw.get("result_text") or ""),
+            str(raw.get("analyst_summary") or ""),
+        ])
+
+        for key, pattern in patterns:
+            if extracted.get(key):
+                continue
+            match = re.search(pattern, search_space, flags=re.IGNORECASE)
+            if match:
+                candidate = match.group(1).strip()
+                entity_key = "user" if key == "username" else key
+                if not is_usable_primary_entity(entity_key, candidate):
+                    continue
+                extracted[key] = candidate
+
+    return extracted
+
+
+def _build_evidence_summary(supportive_results: List[Dict[str, Any]]) -> Dict[str, Any]:
+    counts = {status: 0 for status in ALLOWED_EVIDENCE_STATUSES}
+    highlights: List[str] = []
+
+    for item in supportive_results:
+        raw = item.get("raw_result") or {}
+        if not isinstance(raw, dict):
+            continue
+
+        status = _normalize_evidence_status(raw.get("evidence_status") or raw.get("finding_type") or "neutral")
+        counts[status] += 1
+
+        result_text = _truncate_for_prompt(raw.get("result_text") or "", 160)
+        analyst_summary = _truncate_for_prompt(raw.get("analyst_summary") or "", 160)
+        highlight_body = analyst_summary or result_text
+        if highlight_body:
+            highlights.append(f"[{status}] {item.get('query_title')}: {highlight_body}")
+
+    return {
+        "counts": counts,
+        "highlights": highlights[:5],
+        "artifacts": _extract_evidence_artifact_fields(supportive_results),
+    }
+
+
+def _extract_decision_gate(response_text: str) -> Optional[Dict[str, Any]]:
+    response_text = response_text or ""
+    start_marker = "DECISION_GATE_JSON_START"
+    end_marker = "DECISION_GATE_JSON_END"
+    start_idx = response_text.find(start_marker)
+    end_idx = response_text.find(end_marker)
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return None
+
+    raw_block = response_text[start_idx + len(start_marker):end_idx].strip()
+    try:
+        parsed = json.loads(raw_block)
+    except Exception:
+        return None
+
+    if not isinstance(parsed, dict):
+        return None
+
+    still_missing = parsed.get("still_missing") or []
+    if not isinstance(still_missing, list):
+        still_missing = [str(still_missing)]
+
+    return {
+        "enough_to_decide": bool(parsed.get("enough_to_decide")),
+        "current_disposition": str(parsed.get("current_disposition") or "Undetermined").strip() or "Undetermined",
+        "confidence_summary": str(parsed.get("confidence_summary") or "").strip(),
+        "still_missing": [str(item).strip() for item in still_missing if str(item).strip()],
+        "next_best_action": str(parsed.get("next_best_action") or "").strip(),
+    }
+
+
+def _build_decision_gate_fallback(
+    supportive_results: List[Dict[str, Any]],
+    analysis_stage: str,
+    response_text: str,
+) -> Dict[str, Any]:
+    summary = _build_evidence_summary(supportive_results)
+    counts = summary["counts"]
+    enough_to_decide = False
+    disposition = "Undetermined"
+    still_missing: List[str] = []
+    next_best_action = "Run one more targeted follow-up query and reassess the disposition."
+
+    if counts["supports"] >= 2 and counts["refutes"] == 0:
+        enough_to_decide = True
+        disposition = "Likely True Positive"
+        next_best_action = "Document the supporting evidence and move toward closure unless policy requires one final validation step."
+    elif counts["refutes"] >= 2 and counts["supports"] == 0:
+        enough_to_decide = True
+        disposition = "Likely False Positive or Benign Positive"
+        next_best_action = "Document why the alert was expected or unsupported and move toward closure."
+    elif counts["supports"] and counts["refutes"]:
+        still_missing.append("Resolve the conflict between supporting and refuting evidence before deciding disposition.")
+
+    if counts["error"]:
+        still_missing.append("At least one prior SPL attempt failed with an error and needs correction or replacement.")
+    if counts["no_results"] and not enough_to_decide:
+        still_missing.append("At least one prior query returned no results; widen scope or pivot to a different artifact.")
+    if not supportive_results and analysis_stage != "initial":
+        still_missing.append("No saved follow-up evidence is available yet for this case.")
+    if not still_missing and not enough_to_decide:
+        still_missing.append("A disposition-driving fact is still missing from the current evidence set.")
+
+    confidence_bits = []
+    if counts["supports"]:
+        confidence_bits.append(f"{counts['supports']} supporting evidence item(s)")
+    if counts["refutes"]:
+        confidence_bits.append(f"{counts['refutes']} refuting evidence item(s)")
+    if counts["neutral"]:
+        confidence_bits.append(f"{counts['neutral']} neutral evidence item(s)")
+    if counts["no_results"]:
+        confidence_bits.append(f"{counts['no_results']} no-result check(s)")
+    if counts["error"]:
+        confidence_bits.append(f"{counts['error']} errored query attempt(s)")
+    if not confidence_bits:
+        confidence_bits.append("no saved follow-up evidence yet")
+
+    confidence_summary = ", ".join(confidence_bits)
+    if response_text:
+        confidence_summary = _truncate_for_prompt(confidence_summary, 220)
+
+    return {
+        "enough_to_decide": enough_to_decide,
+        "current_disposition": disposition,
+        "confidence_summary": confidence_summary,
+        "still_missing": still_missing,
+        "next_best_action": next_best_action,
+    }
+
+
 class InvestigationEvidenceEntryPayload(BaseModel):
     query_title: str = Field(..., description="Short title for the investigative query or evidence item")
     query_text: Optional[str] = Field("", description="SPL or other query text used to gather the evidence")
     result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
     analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
+    evidence_status: Optional[str] = Field("neutral", description="Structured evidence status: error, no_results, supports, refutes, or neutral")
     finding_type: Optional[str] = Field("neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis")
 
 
@@ -2112,6 +2694,20 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
         if win_path_match:
             fields["process"] = win_path_match.group(0)
 
+    # If the parsed host or destination still looks like a whole sentence,
+    # recover a tighter host anchor from the description text when possible.
+    description = (fields.get("description") or "").strip()
+    if description:
+        description_host_match = re.search(r"\bon\s+([A-Za-z0-9_.:-]+)", description, flags=re.IGNORECASE)
+        description_host = description_host_match.group(1).strip().rstrip(".,:;") if description_host_match else ""
+        if description_host and is_usable_primary_entity("host", description_host):
+            host_val = (fields.get("host") or "").strip()
+            if not is_usable_primary_entity("host", host_val):
+                fields["host"] = description_host
+            dest_val = (fields.get("destination") or "").strip()
+            if not dest_val:
+                fields["destination"] = description_host
+
     return fields
 
 
@@ -2119,10 +2715,44 @@ def build_generic_enrichment_queries(fields: Dict[str, str]) -> List[Dict[str, s
     """Build a small, safe set of generic SPL queries with concrete values only."""
     queries: List[Dict[str, str]] = []
     correlation_search = (fields.get("correlation_search") or "").strip()
-    host = (fields.get("host") or "").strip()
-    user = (fields.get("user") or fields.get("username") or "").strip()
-    process = (fields.get("process") or "").strip()
-    parent_process = (fields.get("parent_process") or "").strip()
+
+    host_candidate = (fields.get("host") or "").strip()
+    user_candidate = (fields.get("user") or fields.get("username") or "").strip()
+
+    host_check = validate_artifact_value("host", host_candidate)
+    user_check = validate_artifact_value("user", user_candidate)
+
+    host = host_check["value"] if host_check["valid"] else ""
+    user = user_check["value"] if user_check["valid"] else ""
+
+    process_candidate = (fields.get("process") or "").strip()
+    parent_process_candidate = (fields.get("parent_process") or "").strip()
+
+    process_check = validate_artifact_value("process", process_candidate)
+    parent_process_check = validate_artifact_value("parent_process", parent_process_candidate)
+
+    process = process_check["value"] if process_check["valid"] else ""
+    parent_process = parent_process_check["value"] if parent_process_check["valid"] else ""
+
+    correlation_search = (fields.get("correlation_search") or "").strip()
+
+    platform_text = " ".join([
+        correlation_search,
+        fields.get("title") or "",
+        fields.get("description") or "",
+        fields.get("security_domain") or "",
+        process,
+        parent_process,
+    ]).lower()
+
+    is_linux_case = any(token in platform_text for token in (
+        "linux",
+        "bash",
+        "ssh-keygen",
+        "authorized_keys",
+        "/home/",
+        "/etc/",
+    ))
 
     if correlation_search:
         corr_escaped = correlation_search.replace('"', '\\"')
@@ -2148,7 +2778,7 @@ def build_generic_enrichment_queries(fields: Dict[str, str]) -> List[Dict[str, s
             "description": "Check what else the same user was doing around the alert window.",
         })
 
-    if process or parent_process:
+    if (process or parent_process) and not is_linux_case:
         clauses = []
         if parent_process:
             clauses.append(f'ParentImage="*\\\\{parent_process}"')
@@ -2556,9 +3186,9 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
     except Exception:
         payload = {"sanitized_text": event.raw}
 
-    fields = payload.get("fields", {})
-    raw_fields = payload.get("raw_fields") or fields
-    parse_assessment = payload.get("parse_assessment") or build_parse_assessment(
+    fields = normalize_notable_fields(dict(payload.get("fields", {}) or {}))
+    raw_fields = normalize_notable_fields(dict(payload.get("raw_fields") or fields or {}))
+    parse_assessment = build_parse_assessment(
         raw_fields,
         payload.get("sanitized_text", ""),
         payload.get("history") or "",
@@ -3320,8 +3950,12 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             result_text = (entry.result_text or "").strip()
             analyst_summary = (entry.analyst_summary or "").strip()
             query_text = (entry.query_text or "").strip()
+            evidence_status = _normalize_evidence_status(entry.evidence_status or entry.finding_type or "neutral")
 
-            if not title or not (result_text or analyst_summary or query_text):
+            if not title or not (result_text or analyst_summary):
+                continue
+
+            if source_system == "phase2_manual" and query_text and not _looks_like_spl_query(query_text):
                 continue
 
             raw_result = json.dumps(
@@ -3329,7 +3963,8 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                     "query_text": query_text,
                     "result_text": result_text,
                     "analyst_summary": analyst_summary,
-                    "finding_type": (entry.finding_type or "neutral").strip() or "neutral",
+                    "evidence_status": evidence_status,
+                    "finding_type": _derive_finding_type_from_status(evidence_status),
                 },
                 ensure_ascii=False,
             )
@@ -3533,6 +4168,7 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+<<<<<<< HEAD
 
 
 @app.post("/api/db/notables/generate-fetch-spl", tags=["Database"])
@@ -3589,6 +4225,117 @@ def generate_notable_fetch_spl_get(
     )
     return generate_notable_fetch_spl(req)
 
+=======
+def build_event_details_context(event_details_text: str) -> Dict[str, Any]:
+    """
+    Convert a full Incident Review Event Details / detection SPL block into a
+    compact, deterministic detection-context summary for local-model prompts.
+
+    The original full Event Details text remains available to the operator;
+    this helper extracts only high-value investigation characteristics.
+    """
+    text = (event_details_text or "").strip()
+    if not text:
+        return {
+            "present": False,
+            "indexes": [],
+            "sourcetypes": [],
+            "direction": "",
+            "trigger_processes": [],
+            "excluded_processes": [],
+            "network_fields": [],
+            "sysmon_enrichment": False,
+            "allowlist_logic_present": False,
+            "decision_question": "",
+        }
+
+    def unique(values: List[str], limit: int = 12) -> List[str]:
+        seen = set()
+        result: List[str] = []
+        for value in values:
+            cleaned = (value or "").strip().strip('"').strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(cleaned)
+            if len(result) >= limit:
+                break
+        return result
+
+    indexes = unique(re.findall(r'\bindex\s*=\s*"?([A-Za-z0-9_.*-]+)"?', text, re.IGNORECASE))
+    sourcetypes = unique(re.findall(r'\bsourcetype\s*=\s*"?([A-Za-z0-9_:.*-]+)"?', text, re.IGNORECASE))
+
+    direction_match = re.search(r'\bDirection\s*=\s*"([^"]+)"', text, re.IGNORECASE)
+    direction = direction_match.group(1).strip() if direction_match else ""
+
+    # Keep positive trigger executables separate from NOT ProcessName clauses.
+    process_blocks = re.findall(
+        r'^\s*(?!NOT\s+)ProcessName\s+IN\s*\((.*?)\)',
+        text,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+    excluded_blocks = re.findall(
+        r'^\s*NOT\s+ProcessName\s+IN\s*\((.*?)\)',
+        text,
+        re.IGNORECASE | re.MULTILINE | re.DOTALL,
+    )
+
+    def extract_executables(blocks: List[str]) -> List[str]:
+        values: List[str] = []
+        for block in blocks:
+            values.extend(
+                re.findall(
+                    r"""["']\*?([A-Za-z0-9_.-]+\.exe)\*?["']""",
+                    block,
+                    re.IGNORECASE,
+                )
+            )
+        return unique(values)
+
+    trigger_processes = extract_executables(process_blocks)
+    excluded_processes = extract_executables(excluded_blocks)
+
+    network_fields = []
+    for field_name in (
+        "RemoteAddress",
+        "RemotePort",
+        "RemoteHostName",
+        "remoteURL",
+        "LocalAddress",
+        "LocalPort",
+    ):
+        if re.search(rf'\b{re.escape(field_name)}\b', text, re.IGNORECASE):
+            network_fields.append(field_name)
+
+    sysmon_enrichment = bool(
+        re.search(r'\bSysmon\b|Microsoft-Windows-Sysmon|sysmon_cmdline|ParentImage', text, re.IGNORECASE)
+    )
+
+    allowlist_logic_present = bool(
+        re.search(r'\bNOT\s+(?:RemoteAddress|RemotePort|ProcessName)\b|\bcidrmatch\b|\ballowlist\b', text, re.IGNORECASE)
+    )
+
+    decision_question = (
+        "Determine whether the observed process-to-destination network activity "
+        "is authorized, expected, and consistent with normal endpoint behavior."
+    )
+
+    return {
+        "present": True,
+        "indexes": indexes,
+        "sourcetypes": sourcetypes,
+        "direction": direction,
+        "trigger_processes": trigger_processes,
+        "excluded_processes": excluded_processes,
+        "network_fields": network_fields,
+        "sysmon_enrichment": sysmon_enrichment,
+        "allowlist_logic_present": allowlist_logic_present,
+        "decision_question": decision_question,
+    }
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
 
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
@@ -4267,9 +5014,9 @@ def get_triage_source_notable(case_id: str):
                 continue
 
             if payload.get("promoted_case_id") == case_id:
-                fields = payload.get("fields", {})
-                raw_fields = payload.get("raw_fields") or fields
-                parse_assessment = payload.get("parse_assessment") or build_parse_assessment(
+                fields = normalize_notable_fields(dict(payload.get("fields", {}) or {}))
+                raw_fields = normalize_notable_fields(dict(payload.get("raw_fields") or fields or {}))
+                parse_assessment = build_parse_assessment(
                     raw_fields,
                     payload.get("sanitized_text", ""),
                     payload.get("history") or "",
@@ -4304,6 +5051,7 @@ def get_triage_source_notable(case_id: str):
 @app.post("/api/db/analyze", tags=["Database"])
 def analyze_case(request: AnalyzeRequest):
     try:
+        request_started_at = time.perf_counter()
         case_id = request.case_id
         model = request.model
         context = request.context
@@ -4345,19 +5093,28 @@ def analyze_case(request: AnalyzeRequest):
         ).order_by(SplunkEvent.ingested_at.desc()).all()
 
         source_notable_payload = None
+        source_notable_fields: Dict[str, str] = {}
+        source_notable_parse_assessment: Dict[str, Any] = {}
         for event in pasted_events:
             try:
                 payload = json.loads(event.raw) if event.raw else {}
             except Exception:
                 continue
             if payload.get("promoted_case_id") == case_id:
+                normalized_fields = normalize_notable_fields(dict(payload.get("fields", {}) or {}))
+                source_notable_parse_assessment = build_parse_assessment(
+                    normalized_fields.copy(),
+                    payload.get("sanitized_text", ""),
+                    payload.get("history") or "",
+                )
                 source_notable_payload = {
                     "event_id": event.id,
-                    "fields": payload.get("fields", {}),
+                    "fields": normalized_fields,
                     "sanitized_text": payload.get("sanitized_text", ""),
                     "history": payload.get("history"),
                     "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
                 }
+                source_notable_fields = source_notable_payload.get("fields") or {}
                 break
 
         historical_baselines = []
@@ -4452,6 +5209,7 @@ def analyze_case(request: AnalyzeRequest):
                         supportive_query_defs.append(q)
 
         db.close()
+        context_loaded_at = time.perf_counter()
 
         prior_analysis = (request.prior_analysis or "").strip()
         analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
@@ -4466,6 +5224,11 @@ def analyze_case(request: AnalyzeRequest):
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 
+        compact_model = _is_small_ollama_model(model)
+        has_saved_evidence = bool(supportive_results)
+        evidence_summary = _build_evidence_summary(supportive_results)
+        evidence_artifact_fields = evidence_summary["artifacts"]
+
         # 3. Assemble Prompt with Detection Science and explicit response structure
         prompt_intro = (
             "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
@@ -4475,19 +5238,44 @@ def analyze_case(request: AnalyzeRequest):
             "3. Investigative Analysis\n"
             "4. Supportive Query Recommendations (Phase 2 SPL)\n"
             "5. Triage Verdict\n"
+<<<<<<< HEAD
             "6. Structured Closure Notes\n\n"
             "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 follow-up checks an analyst should run AFTER this analysis. "
             "If supportive SPL templates are provided below, you MUST only recommend from that list (match by title). "
             "Do not invent indexes, sourcetypes, field names, SQL, or SPL that is not in the provided templates or data-source catalog. "
             "Prefer templates that are not already covered by saved investigation evidence. "
             "In the narrative Phase 2 section, summarize recommended query titles and purpose only; put full query text only in the machine-readable JSON block.\n\n"
+=======
+            "6. Decision Gate\n"
+            "7. Structured Closure Notes\n\n"
+            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 specific SPL queries that an analyst can run AFTER this initial analysis to further validate or refute your hypothesis. "
+<<<<<<< HEAD
+            "For each query, include a short title, the SPL snippet, and one sentence explaining what evidence it is intended to surface. "
+            "The SPL must be valid runnable Splunk SPL, not prose, not field labels, and not copied metadata. "
+            "Every SPL snippet must start like a real search, for example with 'search', 'index=', 'sourcetype=', 'eventtype=', or a pipe command such as '| tstats'. "
+            "Use actual fields from the case evidence and supportive templates when available.\n\n"
+=======
+            "For each query, include a short title, the SPL snippet (using the rule's detection fields and neutral tokens derived from the provided evidence), and one sentence explaining what evidence it is intended to surface. "
+            "If supportive SPL templates are provided, only use those templates and adapt placeholders conservatively; do not invent SQL, table names, or unrelated SPL. "
+            "In the narrative Phase 2 section, summarize the recommended query titles and purpose only; the machine-readable JSON block is the only place where full query text should appear.\n\n"
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
         )
+        if compact_model:
+            prompt_intro += (
+                "Keep the narrative concise for a small local model: 1-3 short bullets per section, no long prose, and no more than about 350 words before the JSON block. "
+                "Prefer concrete fields and direct analyst actions over explanation.\n\n"
+            )
         if prior_analysis:
             prompt_intro += (
                 "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
                 "Reassess that hypothesis against the newest evidence, call out what still remains unresolved, and tighten the likely disposition. "
-                "Your follow-up queries must be the smallest set of high-value checks most likely to change the disposition decision between true positive, benign positive, false positive, or undetermined. "
-                "Prefer confirmatory or falsifying queries over broad exploratory searches.\n\n"
+                "Your follow-up queries should progress from broad to narrow: start with one general scoping query that establishes surrounding activity and timeline, then one narrower pivot query on the strongest artifact, then one disposition-driving confirm/refute query if still needed. "
+                "Do not jump straight to a conclusion-specific search unless the prior evidence already narrowed the hypothesis enough to justify it.\n\n"
+            )
+        else:
+            prompt_intro += (
+                "For a first-pass analysis, start broad and then narrow: begin with one general scoping query around the entity, host, user, process, or time window from the notable, then add narrower follow-up queries only if they meaningfully improve disposition confidence.\n\n"
             )
         prompt_intro += (
             "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
@@ -4495,7 +5283,15 @@ def analyze_case(request: AnalyzeRequest):
             "PHASE2_QUERIES_JSON_START\n"
             "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
             "PHASE2_QUERIES_JSON_END\n"
+            "DECISION_GATE_JSON_START\n"
+            "{\"enough_to_decide\": false, \"current_disposition\": \"Undetermined\", \"confidence_summary\": \"<short rationale>\", \"still_missing\": [\"<missing fact 1>\"], \"next_best_action\": \"<what the analyst should do next>\"}\n"
+            "DECISION_GATE_JSON_END\n"
         )
+        if has_saved_evidence:
+            prompt_intro += (
+                "Saved investigation evidence is more trustworthy than the original notable fields. If the original notable conflicts with saved evidence, prefer the saved evidence and explicitly say so. "
+                "On a follow-up run, only propose more SPL when a specific missing fact still blocks disposition. If the saved evidence already supports a likely true positive or false positive, you may return an empty JSON array for PHASE2_QUERIES_JSON and explain why no further query is required.\n\n"
+            )
 
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
@@ -4506,14 +5302,14 @@ def analyze_case(request: AnalyzeRequest):
             prompt_parts.append("\n\n=== DETECTION SCIENCE & CORRELATION LOGIC ===")
             prompt_parts.append(f"Rule ID: {detection_rule.rule_id}")
             prompt_parts.append(f"Rule Name: {detection_rule.rule_name}")
-            prompt_parts.append(f"Description / Hypothesis: {detection_rule.description}")
+            prompt_parts.append(f"Description / Hypothesis: {_truncate_for_prompt(detection_rule.description, 500 if compact_model else 1500)}")
             prompt_parts.append(f"Category / Domain: {detection_rule.category}")
             prompt_parts.append(f"Severity: {detection_rule.severity}")
             if detection_rule.drilldown_fields:
-                prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
+                prompt_parts.append(f"Key Drilldown Fields: {_truncate_for_prompt(detection_rule.drilldown_fields, 250 if compact_model else 800)}")
             if detection_rule.required_closure_fields:
-                prompt_parts.append(f"Mandatory Closure Fields: {detection_rule.required_closure_fields}")
-            if detection_rule.closure_template:
+                prompt_parts.append(f"Mandatory Closure Fields: {_truncate_for_prompt(detection_rule.required_closure_fields, 250 if compact_model else 800)}")
+            if detection_rule.closure_template and not compact_model:
                 prompt_parts.append(f"Standard Closure Format:\n{detection_rule.closure_template}")
 
         prompt_parts.append("\n\n=== CURRENT CASE ===")
@@ -4546,19 +5342,49 @@ def analyze_case(request: AnalyzeRequest):
         if source_notable_payload:
             prompt_parts.append("\n\n=== SOURCE NOTABLE EVIDENCE ===")
             if source_notable_payload.get("fields"):
-                for k, v in source_notable_payload["fields"].items():
-                    prompt_parts.append(f"- {k}: {v}")
+                field_items = list(source_notable_payload["fields"].items())
+                if compact_model:
+                    preferred_order = ["title", "correlation_search", "time", "host", "destination", "user", "process", "parent_process", "description", "severity", "urgency", "status"]
+                    ranked = []
+                    field_map = dict(field_items)
+                    for key in preferred_order:
+                        if key in field_map:
+                            ranked.append((key, field_map[key]))
+                    for item in field_items:
+                        if item not in ranked:
+                            ranked.append(item)
+                    field_items = ranked[:12]
+                for k, v in field_items:
+                    prompt_parts.append(f"- {k}: {_truncate_for_prompt(v, 180 if compact_model else 800)}")
             if source_notable_payload.get("sanitized_text"):
-                prompt_parts.append(f"\nRaw Sanitized Notable:\n{source_notable_payload['sanitized_text']}")
+                prompt_parts.append(
+                    f"\nRaw Sanitized Notable:\n{_truncate_for_prompt(source_notable_payload['sanitized_text'], 600 if compact_model else 2500)}"
+                )
 
-        if historical_baselines:
+        if has_saved_evidence:
+            prompt_parts.append("\n\n=== SAVED EVIDENCE SUMMARY ===")
+            counts = evidence_summary["counts"]
+            prompt_parts.append(
+                "Evidence status counts: "
+                f"supports={counts['supports']}, refutes={counts['refutes']}, neutral={counts['neutral']}, "
+                f"no_results={counts['no_results']}, error={counts['error']}"
+            )
+            if evidence_artifact_fields:
+                prompt_parts.append("Evidence-derived artifacts:")
+                for key, value in evidence_artifact_fields.items():
+                    prompt_parts.append(f"- {key}: {_truncate_for_prompt(value, 180)}")
+            for line in evidence_summary["highlights"]:
+                prompt_parts.append(f"- {line}")
+
+        if historical_baselines and not compact_model:
             prompt_parts.append("\n\n=== HISTORICAL BASELINE EXAMPLES ===")
             for idx, b in enumerate(historical_baselines[:3], 1):
-                prompt_parts.append(f"[Baseline {idx}] History/Closure Notes: {b.get('history')}")
+                prompt_parts.append(f"[Baseline {idx}] History/Closure Notes: {_truncate_for_prompt(b.get('history'), 1200)}")
 
         if supportive_results:
             prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")
-            for idx, res in enumerate(supportive_results, 1):
+            evidence_limit = 2 if compact_model else len(supportive_results)
+            for idx, res in enumerate(supportive_results[:evidence_limit], 1):
                 raw_result = res.get("raw_result")
                 if isinstance(raw_result, dict):
                     query_text = (raw_result.get("query_text") or "").strip()
@@ -4566,30 +5392,36 @@ def analyze_case(request: AnalyzeRequest):
                     analyst_summary = (raw_result.get("analyst_summary") or "").strip()
                     finding_type = (raw_result.get("finding_type") or "neutral").strip()
                     block = [f"[{idx}] {res['query_title']} ({res['source_system']})"]
-                    if finding_type:
-                        block.append(f"Evidence Direction: {finding_type}")
+                    evidence_status = _normalize_evidence_status(raw_result.get("evidence_status") or finding_type or "neutral")
+                    block.append(f"Evidence Status: {evidence_status}")
                     if query_text:
-                        block.append(f"Query Used:\n{query_text}")
+                        block.append(f"Query Used:\n{_truncate_for_prompt(query_text, 250 if compact_model else 1200)}")
                     if result_text:
-                        block.append(f"Observed Result:\n{result_text}")
+                        block.append(f"Observed Result:\n{_truncate_for_prompt(result_text, 250 if compact_model else 1200)}")
                     if analyst_summary:
-                        block.append(f"Analyst Takeaway:\n{analyst_summary}")
+                        block.append(f"Analyst Takeaway:\n{_truncate_for_prompt(analyst_summary, 180 if compact_model else 800)}")
                     prompt_parts.append("\n".join(block))
                 else:
-                    prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(raw_result)}")
+                    prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {_truncate_for_prompt(json.dumps(raw_result), 300 if compact_model else 1200)}")
 
         if supportive_query_defs:
             prompt_parts.append("\n\n=== RECOMMENDED SUPPORTIVE SPL QUERIES TO VALIDATE HYPOTHESIS ===")
+<<<<<<< HEAD
             prompt_parts.append(
                 "Phase 2 recommendations MUST use titles from this list only. "
                 "The UI will ground suggestions to these exact SPL templates."
             )
             for idx, q in enumerate(supportive_query_defs, 1):
+=======
+            query_limit = 3 if compact_model else len(supportive_query_defs)
+            for idx, q in enumerate(supportive_query_defs[:query_limit], 1):
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
                 desc = q.description or ""
                 prompt_parts.append(
-                    f"[{idx}] {q.title}: {desc}\nSPL: {q.spl_query}"
+                    f"[{idx}] {q.title}: {_truncate_for_prompt(desc, 180 if compact_model else 600)}\nSPL: {_truncate_for_prompt(q.spl_query, 250 if compact_model else 1200)}"
                 )
 
+<<<<<<< HEAD
         catalog_payload = _load_data_source_catalog()
         rule_id_for_catalog = ""
         if detection_rule and getattr(detection_rule, "rule_id", None):
@@ -4599,6 +5431,9 @@ def analyze_case(request: AnalyzeRequest):
             prompt_parts.append("\n\n" + catalog_text)
 
         if prior_closures:
+=======
+        if prior_closures and not compact_model:
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
             prompt_parts.append("\n\n=== PRIOR CLOSURE NOTE EXAMPLES FOR THIS RULE ===")
             for idx, note in enumerate(prior_closures, 1):
                 header = (
@@ -4608,29 +5443,60 @@ def analyze_case(request: AnalyzeRequest):
                 )
                 prompt_parts.append(header)
                 if note["analyst_notes"]:
-                    prompt_parts.append(f"Analyst Notes:\n{note['analyst_notes']}")
+                    prompt_parts.append(f"Analyst Notes:\n{_truncate_for_prompt(note['analyst_notes'], 800)}")
                 if note["generated_note"]:
-                    prompt_parts.append(f"Structured Closure Note:\n{note['generated_note']}")
+                    prompt_parts.append(f"Structured Closure Note:\n{_truncate_for_prompt(note['generated_note'], 1200)}")
 
         if context:
-            prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context}")
+            prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{_truncate_for_prompt(context, 300 if compact_model else 1500)}")
 
         composite_prompt = "\n".join(prompt_parts)
-        result = client.generate(composite_prompt, model=model)
+        prompt_assembled_at = time.perf_counter()
+        generation_options = {
+            "num_predict": 500 if compact_model else 900,
+        }
+        primary_inference_started_at = time.perf_counter()
+        result = client.generate(composite_prompt, model=model, temperature=0.2, options=generation_options)
+        primary_inference_completed_at = time.perf_counter()
 
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
 
         response_text = result["response"] or ""
+        fallback_inference_seconds = 0.0
+        postprocess_started_at = time.perf_counter()
+        decision_gate = _extract_decision_gate(response_text) or _build_decision_gate_fallback(
+            supportive_results,
+            analysis_stage,
+            response_text,
+        )
+        needs_more_queries = not bool(decision_gate.get("enough_to_decide"))
         phase2_queries = _extract_phase2_queries(response_text)
+        phase2_queries = _filter_valid_phase2_queries(phase2_queries)
 
-        if not phase2_queries:
+        # A saved no-result is a deterministic signal to change query purpose.
+        # On follow-up analysis, do not let the model repeat a narrow failed
+        # pivot or spend time on a fallback model call.
+        no_results_replacements: List[Dict[str, Any]] = []
+        if analysis_stage != "initial" and evidence_summary["counts"]["no_results"]:
+            replacement_fields = evidence_artifact_fields or source_notable_fields
+            no_results_replacements = _build_no_results_replacement_queries(
+                replacement_fields,
+                rule_name=case.rule_name,
+                rule_description=detection_rule.description if detection_rule else "",
+            )
+            if no_results_replacements:
+                phase2_queries = no_results_replacements
+
+        if not phase2_queries and needs_more_queries:
             fallback_prompt_parts = [
                 "You are generating follow-up SOC investigation queries from an existing analysis.",
                 "Return ONLY a JSON array. Do not include markdown fences, prose, headings, or commentary.",
                 "Each JSON item must have keys: title, spl, description.",
-                "Generate 1-3 high-value SPL queries that would most directly change the disposition decision between true positive, benign positive, false positive, or undetermined.",
-                "Prefer confirmatory or falsifying checks over broad exploratory searches.",
+                "Generate 1-3 valid runnable Splunk SPL queries.",
+                "The first query should usually be broad and scoping, the next should narrow on the strongest artifact, and the last should directly help decide disposition if still needed.",
+                "Every spl value must start like real SPL, for example 'search', 'index=', 'sourcetype=', 'eventtype=', or '| tstats'.",
+                "Do not output prose fragments such as 'Correlation Search:' or 'Detection Fields:' as the spl value.",
                 f"Case ID: {case.case_id}",
                 f"Rule: {case.rule_name}",
             ]
@@ -4656,7 +5522,9 @@ def analyze_case(request: AnalyzeRequest):
                 "Return valid JSON like: [{\"title\":\"...\",\"spl\":\"search ...\",\"description\":\"...\"}]"
             )
 
+            fallback_inference_started_at = time.perf_counter()
             fallback_result = client.generate("\n".join(fallback_prompt_parts), model=model)
+            fallback_inference_seconds += time.perf_counter() - fallback_inference_started_at
             if fallback_result.get("success"):
                 fallback_response_text = (fallback_result.get("response") or "").strip()
                 try:
@@ -4669,10 +5537,15 @@ def analyze_case(request: AnalyzeRequest):
                         )
                 except Exception:
                     phase2_queries = _extract_phase2_queries(fallback_response_text)
+                phase2_queries = _filter_valid_phase2_queries(phase2_queries)
 
+<<<<<<< HEAD
         already_run_titles = _already_run_supportive_titles(supportive_results)
 
         if not phase2_queries:
+=======
+        if not phase2_queries and needs_more_queries:
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
             phase2_queries = _build_supportive_phase2_fallback(
                 supportive_query_defs,
                 prior_analysis,
@@ -4680,11 +5553,58 @@ def analyze_case(request: AnalyzeRequest):
                 already_run_titles=already_run_titles,
             )
 
+<<<<<<< HEAD
         phase2_queries = _ground_phase2_queries(
             phase2_queries,
             supportive_query_defs,
             already_run_titles=already_run_titles,
         )
+=======
+<<<<<<< HEAD
+        if len(phase2_queries) < 2 and needs_more_queries:
+            fallback_fields = evidence_artifact_fields or source_notable_fields
+            generic_phase2_queries = _build_generic_phase2_queries_from_fields(
+                fallback_fields,
+                rule_name=case.rule_name,
+                rule_description=detection_rule.description if detection_rule else "",
+                parse_assessment=source_notable_parse_assessment,
+            )
+            existing_signatures = {
+                re.sub(r"\s+", " ", (item.get("spl") or "").strip()).lower()
+                for item in phase2_queries
+                if (item.get("spl") or "").strip()
+            }
+            for query in generic_phase2_queries:
+                signature = re.sub(r"\s+", " ", (query.get("spl") or "").strip()).lower()
+                if not signature or signature in existing_signatures:
+                    continue
+                phase2_queries.append(query)
+                existing_signatures.add(signature)
+                if len(phase2_queries) >= 3:
+                    break
+
+        display_analysis = _safe_analysis_display(response_text)
+        display_analysis = _strip_machine_control_blocks(display_analysis)
+
+        response_completed_at = time.perf_counter()
+        timing = {
+            "total_seconds": _round_timing_seconds(response_completed_at - request_started_at),
+            "stage_seconds": {
+                "load_case_context_seconds": _round_timing_seconds(context_loaded_at - request_started_at),
+                "prompt_assembly_seconds": _round_timing_seconds(prompt_assembled_at - context_loaded_at),
+                "primary_inference_seconds": _round_timing_seconds(primary_inference_completed_at - primary_inference_started_at),
+                "fallback_inference_seconds": _round_timing_seconds(fallback_inference_seconds),
+                "response_postprocess_seconds": _round_timing_seconds(response_completed_at - postprocess_started_at),
+            },
+            "prompt_chars": len(composite_prompt),
+            "response_chars": len(response_text),
+            "prompt_eval_count": result.get("prompt_eval_count", 0),
+            "eval_count": result.get("tokens", 0),
+            "compact_model": compact_model,
+        }
+=======
+        phase2_queries = _ground_phase2_queries(phase2_queries, supportive_query_defs)
+>>>>>>> 820a4483140ba8442346fa38cb70783555d52687
         display_analysis = _sanitize_analysis_text(response_text, phase2_queries)
         investigation_state = _build_investigation_state(
             case,
@@ -4697,6 +5617,7 @@ def analyze_case(request: AnalyzeRequest):
         display_analysis = _apply_investigation_state_to_analysis_text(display_analysis, investigation_state)
         _upsert_investigation_state(db, InvestigationState, investigation_state)
         db.commit()
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
 
         return {
             "case_id": case_id,
@@ -4718,8 +5639,13 @@ def analyze_case(request: AnalyzeRequest):
                 for q in supportive_query_defs
             ],
             "prior_closures": prior_closures,
+            "decision_gate": decision_gate,
             "phase2_queries": phase2_queries,
+<<<<<<< HEAD
+            "timing": timing,
+=======
             "investigation_state": investigation_state,
+>>>>>>> 709b54ab936e8211c8884e1b8bdd2af21c0d6e54
         }
     except HTTPException:
         raise
