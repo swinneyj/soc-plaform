@@ -162,6 +162,17 @@ window.AnalysisTab = {
                 this.investigationState &&
                 this.investigationState.loop_status === 'ready_for_closure'
             );
+        },
+        displayPhase2Queries() {
+            if (this.analysisResult && this.analysisResult.phase2_queries && this.analysisResult.phase2_queries.length) {
+                return this.analysisResult.phase2_queries;
+            }
+            if (this.analysisRule && this.analysisRule.supportive_queries) {
+                const runTitles = new Set((this.evidenceTimelineItems || []).map(i => (i.title || '').toLowerCase().trim()));
+                const unrun = this.analysisRule.supportive_queries.filter(q => !runTitles.has((q.title || '').toLowerCase().trim()));
+                if (unrun.length) return unrun.slice(0, 3);
+            }
+            return [];
         }
     },
     methods: {
@@ -853,7 +864,7 @@ window.AnalysisTab = {
         </div>
 
         <!-- Phase 2 Specialized Grounded Query Cards -->
-        <div v-if="analysisResult && analysisResult.phase2_queries && analysisResult.phase2_queries.length" class="space-y-4">
+        <div v-if="displayPhase2Queries.length" class="space-y-4">
             <div class="flex items-center justify-between">
                 <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Specialized Phase 2 Investigative Queries</p>
                 <button
@@ -866,7 +877,7 @@ window.AnalysisTab = {
             </div>
 
             <div
-                v-for="q in analysisResult.phase2_queries"
+                v-for="q in displayPhase2Queries"
                 :key="getPhase2Key(q)"
                 class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3"
             >
@@ -945,6 +956,22 @@ window.AnalysisTab = {
                     <span>{{ analysisRunning ? 'Re-analyzing case...' : 'Save Evidence & Re-Analyze Case' }}</span>
                 </button>
             </div>
+        </div>
+
+        <div v-else class="bg-gray-900 border border-gray-700 rounded-lg p-6 text-center space-y-3">
+            <p class="text-sm font-semibold text-gray-300">No Phase 2 recommendations loaded yet.</p>
+            <p class="text-xs text-gray-400 max-w-md mx-auto">
+                Run Phase 1 analysis first in Stage 2, or click below to generate specialized follow-up queries grounded in this rule's detection playbook.
+            </p>
+            <button
+                type="button"
+                class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow inline-flex items-center gap-2"
+                :disabled="analysisRunning || !analysisCaseId"
+                @click="$emit('run-analysis')"
+            >
+                <span v-if="analysisRunning" class="animate-spin">⟳</span>
+                <span>{{ analysisRunning ? 'Running Analysis...' : 'Generate Follow-Up Recommendations' }}</span>
+            </button>
         </div>
 
         <div class="flex justify-between pt-4 border-t border-gray-700">
