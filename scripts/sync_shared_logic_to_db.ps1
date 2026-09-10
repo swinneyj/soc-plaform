@@ -16,23 +16,25 @@ Write-Host "[*] DATABASE_URL=$DatabaseUrl"
 
 $sampleRules = Join-Path $RepoRoot "sample_rules.json"
 $supportiveRules = Join-Path $RepoRoot "supportive_rules.json"
-$exportedSupportiveRules = Join-Path $RepoRoot "local-backups\shared-logic-export\supportive_rules.exported.json"
+$exportedSupportiveRules = Join-Path $RepoRoot (Join-Path "local-backups" (Join-Path "shared-logic-export" "supportive_rules.exported.json"))
 $aliasFile = Join-Path $RepoRoot "placeholder_aliases.json"
-$exportedAliasFile = Join-Path $RepoRoot "local-backups\shared-logic-export\placeholder_aliases.exported.json"
+$exportedAliasFile = Join-Path $RepoRoot (Join-Path "local-backups" (Join-Path "shared-logic-export" "placeholder_aliases.exported.json"))
+
+$importer = Join-Path $RepoRoot (Join-Path "Tools" (Join-Path "es_rules_importer" "es_rules_importer.py"))
 
 if (Test-Path $sampleRules) {
-    python .\Tools\es_rules_importer\es_rules_importer.py --import $sampleRules
+    python $importer --import $sampleRules
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if (Test-Path $supportiveRules) {
-    python .\Tools\es_rules_importer\es_rules_importer.py --import $supportiveRules
+    python $importer --import $supportiveRules
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if (Test-Path $exportedSupportiveRules) {
     Write-Host "[*] Importing exported supportive queries snapshot from $exportedSupportiveRules"
-    python .\Tools\es_rules_importer\es_rules_importer.py --import $exportedSupportiveRules
+    python $importer --import $exportedSupportiveRules
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 

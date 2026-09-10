@@ -179,7 +179,7 @@
                 return;
             }
 
-            if (!confirm('Remove this closed notable from the summary list? The underlying record is retained for stats but will be hidden from the Closed Notables view.')) {
+            if (!confirm('Permanently delete this closed notable from the database? It can be re-added later by pasting it again.')) {
                 return;
             }
 

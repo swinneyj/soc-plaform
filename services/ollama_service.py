@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any
 import os
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-DEFAULT_MODEL = 'llama2'  # Can be overridden
+DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:8b')
 
 # Allow the request timeout to be tuned via environment; default to a
 # generous window so larger models (e.g., 8B variants) can complete.
@@ -22,10 +22,16 @@ except ValueError:
 class OllamaClient:
     """Simple Ollama client for local LLM inference."""
     
-    def __init__(self, base_url: str = OLLAMA_BASE_URL, model: str = DEFAULT_MODEL):
-        self.base_url = base_url
-        self.model = model
+    def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None):
+        self.base_url = (base_url or os.environ.get('OLLAMA_URL') or OLLAMA_BASE_URL).rstrip('/')
+        self.model = model or os.environ.get('OLLAMA_MODEL') or DEFAULT_MODEL
+        self.available = False
+        self.refresh()
+
+    def refresh(self) -> bool:
+        """Refresh connectivity instead of retaining a stale startup result."""
         self.available = self._check_connection()
+        return self.available
     
     def _check_connection(self) -> bool:
         """Check if Ollama is running and accessible."""
@@ -37,6 +43,7 @@ class OllamaClient:
     
     def list_models(self) -> list:
         """List available models on Ollama."""
+        self.refresh()
         try:
             r = requests.get(f"{self.base_url}/api/tags", timeout=5)
             if r.status_code == 200:
@@ -160,6 +167,7 @@ def get_ollama_client() -> OllamaClient:
 def check_ollama_health() -> Dict[str, Any]:
     """Check Ollama service health."""
     client = get_ollama_client()
+    client.refresh()
     models = client.list_models()
     return {
         "available": client.available,

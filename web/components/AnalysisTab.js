@@ -28,6 +28,19 @@ window.AnalysisTab = {
         'phase2ManualResults',
         'phase2FindingTypes',
         'phase2EditedQueries',
+        'supportiveEditorOpen',
+        'supportiveEditorBusy',
+        'supportiveEditorQueries',
+        'supportiveEditorRuleId',
+        'supportiveEditorError',
+        'placeholderAliasEditorOpen',
+        'placeholderAliasEditorBusy',
+        'placeholderAliasList',
+        'placeholderAliasEditorError',
+        'placeholderAliasSuggestions',
+        'placeholderAliasSuggestionsBusy',
+        'newAliasForm',
+        'editingAliasId',
         // pure helpers passed from parent (or component methods below fall back to window utils)
         'renderSupportiveQueryFn',
         'renderPhase2QueryFn',
@@ -56,6 +69,16 @@ window.AnalysisTab = {
         'go-to-closure-from-analysis',
         'open-placeholder-alias-editor',
         'open-supportive-editor',
+        'close-supportive-editor',
+        'add-supportive-query',
+        'remove-supportive-query',
+        'save-supportive-queries',
+        'close-placeholder-alias-editor',
+        'save-placeholder-alias',
+        'edit-placeholder-alias',
+        'delete-placeholder-alias',
+        'load-placeholder-alias-suggestions',
+        'toggle-alias-field-candidate',
         'save-supportive-evidence',
         'copy-supportive-spl',
         'copy-enrichment-spl',
@@ -776,6 +799,70 @@ window.AnalysisTab = {
         <div class="text-xs text-gray-400 space-y-1">
             <p>Model: {{ phase2Result.model }}</p>
             <p>Case: {{ phase2Result.case_id }}</p>
+        </div>
+    </div>
+
+    <div v-if="supportiveEditorOpen" class="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+        <div class="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto p-5">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h3 class="text-lg font-bold text-white">Manage Supportive SPL</h3>
+                    <p class="text-xs text-gray-400">Rule: {{ supportiveEditorRuleId }}</p>
+                </div>
+                <div class="flex items-center gap-3">
+                    <button type="button" class="text-xs text-blue-300 hover:text-blue-200" @click="$emit('open-placeholder-alias-editor')">Manage placeholder aliases</button>
+                    <button type="button" class="text-gray-400 hover:text-white text-xl" @click="$emit('close-supportive-editor')">×</button>
+                </div>
+            </div>
+            <p v-if="supportiveEditorError" class="mb-3 text-sm text-red-300">{{ supportiveEditorError }}</p>
+            <div v-for="(q, index) in supportiveEditorQueries" :key="q.localKey || q.id || index" class="border border-gray-700 rounded p-3 mb-3 space-y-2">
+                <div class="flex gap-2">
+                    <input v-model="q.title" class="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm" placeholder="Query title">
+                    <button type="button" class="text-xs text-red-300 hover:text-red-200 px-2" :disabled="supportiveEditorBusy" @click="$emit('remove-supportive-query', index, q)">Remove</button>
+                </div>
+                <input v-model="q.description" class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs" placeholder="Why this query matters">
+                <textarea v-model="q.spl_query" rows="3" class="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs font-mono" placeholder="index=... | ..."></textarea>
+            </div>
+            <div class="flex justify-between items-center mt-4">
+                <button type="button" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs" :disabled="supportiveEditorBusy" @click="$emit('add-supportive-query')">+ Add query</button>
+                <div class="flex gap-2">
+                    <button type="button" class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs" :disabled="supportiveEditorBusy" @click="$emit('close-supportive-editor')">Cancel</button>
+                    <button type="button" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold" :disabled="supportiveEditorBusy" @click="$emit('save-supportive-queries')">{{ supportiveEditorBusy ? 'Saving...' : 'Save queries' }}</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div v-if="placeholderAliasEditorOpen" class="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4">
+        <div class="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-5">
+            <div class="flex items-center justify-between mb-4">
+                <div>
+                    <h3 class="text-lg font-bold text-white">Placeholder Aliases</h3>
+                    <p class="text-xs text-gray-400">Map tokens like <code>$host$</code> to fields found in triaged notables.</p>
+                </div>
+                <button type="button" class="text-gray-400 hover:text-white text-xl" @click="$emit('close-placeholder-alias-editor')">×</button>
+            </div>
+            <p v-if="placeholderAliasEditorError" class="mb-3 text-sm text-red-300">{{ placeholderAliasEditorError }}</p>
+            <div class="grid md:grid-cols-3 gap-2 mb-4">
+                <input v-model="newAliasForm.alias" class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm" placeholder="Alias (host)">
+                <input v-model="newAliasForm.fields" class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm" placeholder="Fields: dest, host">
+                <input v-model="newAliasForm.description" class="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm" placeholder="Description">
+            </div>
+            <div class="flex items-center justify-between mb-3">
+                <button type="button" class="text-xs text-blue-300 hover:text-blue-200" :disabled="placeholderAliasSuggestionsBusy" @click="$emit('load-placeholder-alias-suggestions')">{{ placeholderAliasSuggestionsBusy ? 'Loading…' : 'Suggest fields from triaged notables' }}</button>
+                <button type="button" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold" :disabled="placeholderAliasEditorBusy" @click="$emit('save-placeholder-alias')">{{ editingAliasId ? 'Update alias' : 'Save alias' }}</button>
+            </div>
+            <div v-if="placeholderAliasSuggestions && placeholderAliasSuggestions.length" class="mb-4 p-3 bg-gray-900 rounded border border-gray-700">
+                <p class="text-xs text-gray-400 mb-2">Suggested fields from current notable data:</p>
+                <div class="flex flex-wrap gap-2"><button v-for="candidate in placeholderAliasSuggestions" :key="candidate.field || candidate" type="button" class="text-xs px-2 py-1 rounded bg-gray-700 hover:bg-gray-600" @click="$emit('toggle-alias-field-candidate', candidate.field || candidate)">{{ candidate.field || candidate }}</button></div>
+            </div>
+            <div class="space-y-2">
+                <div v-for="alias in placeholderAliasList" :key="alias.id" class="flex items-center justify-between border border-gray-700 rounded p-3">
+                    <div><code class="text-blue-300 text-sm">&dollar;{{ alias.alias }}&dollar;</code><span class="text-xs text-gray-400 ml-2">{{ (alias.fields || []).join(', ') }}</span><p v-if="alias.description" class="text-xs text-gray-500">{{ alias.description }}</p></div>
+                    <div class="flex gap-2"><button type="button" class="text-xs text-blue-300" @click="$emit('edit-placeholder-alias', alias)">Edit</button><button type="button" class="text-xs text-red-300" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button></div>
+                </div>
+                <p v-if="!placeholderAliasList || !placeholderAliasList.length" class="text-xs text-gray-500">No aliases saved yet.</p>
+            </div>
         </div>
     </div>
 </div>
