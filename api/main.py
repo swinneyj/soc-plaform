@@ -806,66 +806,99 @@ def _rebuild_investigation_state_from_evidence(db, case, analysis_stage: str = "
     return investigation_state
 
 
-def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Attach SupportiveQueryResult ids onto timeline items so the UI can delete them.
+def _purge_case_related_records(
+    db,
+    case_id: str,
+    delete_analysis: bool = True,
+    unlink_source_notable: bool = True,
+) -> Dict[str, Any]:
+    """Remove investigation evidence/state (and optionally analysis + source notable links).
 
-    Older investigation_state rows were saved before timeline items included
-    ``id``. Without this enrichment, the delete control stays hidden for those
-    cases until evidence is re-saved or state is rebuilt.
+    Used when deleting a triage case so re-paste / re-promote is not blocked by
+    leftover rows, and so evidence does not orphan against a missing case.
     """
-    if not state_payload:
-        return state_payload
+    from db.models import (  # type: ignore
+        AnalysisResult,
+        SupportiveQueryResult,
+        InvestigationState,
+        ClosureNote,
+        SplunkEvent,
+    )
 
-    evidence_summary = state_payload.get("evidence_summary") or {}
-    timeline = evidence_summary.get("timeline") or []
-    if not timeline:
-        return state_payload
+    stats = {
+        "evidence_deleted": 0,
+        "analysis_deleted": 0,
+        "closure_notes_deleted": 0,
+        "investigation_state_deleted": 0,
+        "source_notables_unlinked": 0,
+        "source_notables_deleted": 0,
+    }
 
-    def _missing_id(item: Any) -> bool:
-        if not isinstance(item, dict):
-            return False
-        value = item.get("id")
-        return value is None or value == ""
+    stats["evidence_deleted"] = db.query(SupportiveQueryResult).filter(
+        SupportiveQueryResult.case_id == case_id
+    ).delete(synchronize_session=False)
 
-    needs_ids = any(_missing_id(item) for item in timeline)
-    if not needs_ids:
-        return state_payload
+    stats["investigation_state_deleted"] = db.query(InvestigationState).filter(
+        InvestigationState.case_id == case_id
+    ).delete(synchronize_session=False)
+
+    if delete_analysis:
+        stats["analysis_deleted"] = db.query(AnalysisResult).filter(
+            AnalysisResult.case_id == case_id
+        ).delete(synchronize_session=False)
 
     try:
-        from db.models import SupportiveQueryResult  # type: ignore
-
-        rows = (
-            db.query(SupportiveQueryResult)
-            .filter(SupportiveQueryResult.case_id == case_id)
-            .order_by(SupportiveQueryResult.created_at.desc())
-            .all()
-        )
+        stats["closure_notes_deleted"] = db.query(ClosureNote).filter(
+            ClosureNote.case_id == case_id
+        ).delete(synchronize_session=False)
     except Exception:
-        return state_payload
+        pass
 
-    # Map (title, source_system) -> list of ids (newest first)
-    by_key: Dict[tuple, list] = {}
-    by_title: Dict[str, list] = {}
-    for r in rows:
-        title_key = (r.query_title or "").strip().lower()
-        source_key = (r.source_system or "").strip().lower()
-        by_key.setdefault((title_key, source_key), []).append(r.id)
-        by_title.setdefault(title_key, []).append(r.id)
+    if unlink_source_notable:
+        candidate_events = []
+        if case_id.startswith("NOTABLE-"):
+            try:
+                eid = int(case_id.split("-", 1)[1])
+                event = db.query(SplunkEvent).filter(
+                    SplunkEvent.id == eid,
+                    SplunkEvent.sourcetype == "splunk:notable:pasted",
+                ).first()
+                if event:
+                    candidate_events.append(event)
+            except (TypeError, ValueError):
+                pass
 
-    for item in timeline:
-        if not _missing_id(item):
-            continue
-        title_key = (item.get("title") or "").strip().lower()
-        source_key = (item.get("source_system") or "").strip().lower()
-        ids = by_key.get((title_key, source_key)) or []
-        if not ids:
-            ids = by_title.get(title_key) or []
-        if ids:
-            item["id"] = ids.pop(0)
+        if not candidate_events:
+            pasted = db.query(SplunkEvent).filter(
+                SplunkEvent.sourcetype == "splunk:notable:pasted"
+            ).all()
+            for event in pasted:
+                try:
+                    payload = json.loads(event.raw) if event.raw else {}
+                except Exception:
+                    continue
+                if payload.get("promoted_case_id") == case_id:
+                    candidate_events.append(event)
 
-    evidence_summary["timeline"] = timeline
-    state_payload["evidence_summary"] = evidence_summary
-    return state_payload
+        for event in candidate_events:
+            try:
+                payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                payload = {}
+
+            is_historical = bool(payload.get("historical"))
+            if is_historical:
+                if payload.get("promoted_case_id") == case_id:
+                    payload.pop("promoted_case_id", None)
+                    payload.pop("promoted_at", None)
+                    event.raw = json.dumps(payload)
+                    stats["source_notables_unlinked"] += 1
+            else:
+                # Open working notable: remove so the same paste can be re-added cleanly.
+                db.delete(event)
+                stats["source_notables_deleted"] += 1
+
+    return stats
 
 
 def _build_supportive_phase2_fallback(
@@ -931,11 +964,6 @@ class InvestigationEvidenceBatchPayload(BaseModel):
     replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
 
 
-class InvestigationEvidenceIdsPayload(BaseModel):
-    """Payload for deleting one or more evidence rows by id."""
-    ids: List[int] = Field(default_factory=list, description="SupportiveQueryResult ids to delete for this case")
-
-
 class SupportiveQueryPayload(BaseModel):
     """Payload for creating/updating supportive SPL queries.
 
@@ -990,6 +1018,172 @@ class PastedNotableRequest(BaseModel):
         False,
         description="Whether this pasted notable represents a closed/historical case",
     )
+
+
+class NotableFetchSplRequest(BaseModel):
+    """Optional filters used to build a clean notable-fetch SPL query.
+
+    Provide whatever you know (rule name / search_name, host/dest, time
+    window). The returned SPL is meant to be run in Splunk, then the
+    Statistics table row(s) copied back into the paste box as Label: value
+    lines — far more reliable than copying the Incident Review detail pane
+    (which glues UI badges into field values).
+
+    Primary path uses the notable index (works when `incident_review` is
+    empty for the analyst role). A secondary incident_review variant is
+    also returned for environments where that macro is available.
+    """
+
+    correlation_search: Optional[str] = Field(
+        None, description="ES correlation search / search_name / rule title"
+    )
+    rule_name: Optional[str] = Field(None, description="Notable rule_name / title")
+    dest: Optional[str] = Field(None, description="Destination / host (supports trailing * wildcard)")
+    host: Optional[str] = Field(None, description="Host field if different from dest")
+    user: Optional[str] = Field(None, description="User / account name")
+    event_id: Optional[str] = Field(None, description="Splunk/ES event_id if known")
+    rule_id: Optional[str] = Field(None, description="ES rule_id (...@@notable@@...) if known")
+    earliest: str = Field("-7d", description="SPL earliest (e.g. -24h, -7d, 09/10/2026:00:00:00)")
+    latest: str = Field("now", description="SPL latest")
+    max_rows: int = Field(20, ge=1, le=200, description="head N rows")
+    notable_index: str = Field(
+        "notable",
+        description="Index that holds notable events (default: notable). Some sites use risk or a custom index.",
+    )
+
+
+def build_notable_fetch_spl(req: "NotableFetchSplRequest") -> Dict[str, Any]:
+    """Build production SPL for open notables with a flawless paste_block.
+
+    Strategy (validated against this ES deployment):
+      1. incident_review -> current New/Unassigned/In Progress only
+         (dedup rule_id; exclude Resolved/Closed)
+      2. Left-join index=notable technical fields by normalized rule name
+         + nearest time (rule_id is empty on notable events here)
+      3. Emit paste_block = Label: value lines for non-empty fields only
+         -> copy one cell into the app paste box (parse_structured_notable)
+    """
+    earliest = (req.earliest or "-30d").strip() or "-30d"
+    latest = (req.latest or "now").strip() or "now"
+    max_rows = int(req.max_rows or 50)
+    notable_index = (req.notable_index or "notable").strip() or "notable"
+
+    extra_review: List[str] = []
+    extra_notable: List[str] = []
+    if req.rule_name and str(req.rule_name).strip():
+        rn = str(req.rule_name).strip().replace('"', '\\"')
+        extra_review.append(f'rule_name="*{rn}*"')
+        extra_notable.append(f'search_name="*{rn}*"')
+    if req.correlation_search and str(req.correlation_search).strip():
+        cs = str(req.correlation_search).strip().replace('"', '\\"')
+        extra_review.append(f'rule_name="*{cs}*"')
+        extra_notable.append(f'search_name="*{cs}*"')
+    if req.dest and str(req.dest).strip():
+        d = str(req.dest).strip().replace('"', '\\"')
+        if not d.endswith("*"):
+            d = d + "*"
+        extra_notable.append(f'dest="{d}"')
+    if req.host and str(req.host).strip():
+        h = str(req.host).strip().replace('"', '\\"')
+        if not h.endswith("*"):
+            h = h + "*"
+        extra_notable.append(f'(host="{h}" OR dest="{h}")')
+
+    review_extra = (" ".join(extra_review)).strip()
+    notable_extra = (" ".join(extra_notable)).strip()
+    review_extra_clause = f" {review_extra}" if review_extra else ""
+    notable_extra_clause = f" {notable_extra}" if notable_extra else ""
+
+    # Note: paste_block uses a real newline inside mvjoin so the cell is multi-line Label: value text.
+    nl = "\n"
+    spl_parts = [
+        "| `incident_review`",
+        "| sort 0 - _time",
+        "| dedup rule_id",
+        "| where (status_label=\"New\" OR status_label=\"Unassigned\" OR status_label=\"In Progress\" OR status=0 OR status=1 OR status=2)",
+        "    AND status_label!=\"Resolved\"",
+        "    AND status_label!=\"Closed\"",
+        "    AND status!=4",
+        "    AND status!=5",
+        f"| search earliest=\"{earliest}\" latest=\"{latest}\"{review_extra_clause}",
+        "| rename _time AS review_time",
+        "| eval join_rule=lower(trim(rule_name))",
+        "| eval key=1",
+        "| join type=left max=0 key",
+        f"    [ search (index={notable_index}) earliest=\"{earliest}\" latest=\"{latest}\"{notable_extra_clause}",
+        "      | eval join_rule=lower(trim(search_name))",
+        r"      | eval join_rule=replace(join_rule, \"^endpoint\\s*-\\s*\", \"\")",
+        r"      | eval join_rule=replace(join_rule, \"\\s*-\\s*rule$\", \"\")",
+        "      | eval notable_time=_time",
+        "      | eval key=1",
+        "      | table key, join_rule, notable_time, dest, dest_ip, dest_port, src_ip, src_port,",
+        "              user, process, count, first_seen, last_seen, search_name, category, host, description",
+        "    ]",
+        "| where isnull(search_name) OR lower(trim(rule_name))=join_rule",
+        "| eval time_diff=if(isnotnull(notable_time), abs(review_time - notable_time), null())",
+        "| eventstats min(time_diff) AS min_diff BY rule_id",
+        "| where isnull(time_diff) OR time_diff=min_diff",
+        "| sort 0 - review_time",
+        f"| head {max_rows}",
+        "| eval title_val=if(isnotnull(rule_name) AND rule_name!=\"\", rule_name, search_name)",
+        "| eval status_val=if(isnotnull(status_label) AND status_label!=\"\", status_label, \"\")",
+        "| eval paste_lines=mvappend(",
+        "    if(title_val!=\"\", \"Title: \".title_val, null()),",
+        "    if(isnotnull(search_name) AND search_name!=\"\", \"Correlation Search: \".search_name, if(isnotnull(rule_name) AND rule_name!=\"\", \"Correlation Search: \".rule_name, null())),",
+        "    if(isnotnull(description) AND description!=\"\", \"Description: \".description, null()),",
+        "    if(isnotnull(dest) AND dest!=\"\", \"Destination: \".dest, null()),",
+        "    if(isnotnull(dest_ip) AND dest_ip!=\"\", \"Destination IP Address: \".dest_ip, null()),",
+        "    if(isnotnull(dest_port) AND dest_port!=\"\", \"Destination Port: \".dest_port, null()),",
+        "    if(isnotnull(src_ip) AND src_ip!=\"\", \"Source IP Address: \".src_ip, null()),",
+        "    if(isnotnull(src_port) AND src_port!=\"\", \"Source Port: \".src_port, null()),",
+        "    if(isnotnull(user) AND user!=\"\", \"User: \".user, null()),",
+        "    if(isnotnull(process) AND process!=\"\", \"Process: \".process, null()),",
+        "    if(isnotnull(count) AND count!=\"\", \"Count: \".count, null()),",
+        "    if(isnotnull(first_seen) AND first_seen!=\"\", \"First Seen: \".first_seen, null()),",
+        "    if(isnotnull(last_seen) AND last_seen!=\"\", \"Last Seen: \".last_seen, null()),",
+        "    if(isnotnull(category) AND category!=\"\", \"Category: \".mvjoin(category, \" \"), null()),",
+        "    if(isnotnull(notable_time), \"Time: \".strftime(notable_time, \"%Y-%m-%dT%H:%M:%S\"), null()),",
+        "    if(isnotnull(owner) AND owner!=\"\", \"Owner: \".owner, null()),",
+        "    if(status_val!=\"\", \"Status: \".status_val, null()),",
+        "    if(isnotnull(urgency) AND urgency!=\"\", \"Urgency: \".urgency, null()),",
+        "    if(isnotnull(disposition) AND disposition!=\"\" AND NOT match(disposition, \"^disposition:\\d+$\"), \"Disposition: \".disposition, null()),",
+        "    if(isnotnull(rule_id) AND rule_id!=\"\", \"Rule ID: \".rule_id, null()),",
+        "    \"Type: notable\"",
+        "  )",
+        "| eval paste_block=mvjoin(paste_lines, \"\n\")",
+        "| table",
+        "    review_time, status_label, owner, rule_name, dest, dest_ip, dest_port,",
+        "    src_ip, src_port, user, process, count, first_seen, last_seen,",
+        "    search_name, category, notable_time, time_diff, paste_block",
+    ]
+    spl = "\n".join(spl_parts)
+
+    paste_hint_lines = [
+        "Flawless paste workflow:",
+        "1. Run the SPL in Splunk (Statistics view).",
+        "2. Click the paste_block cell for the row you want.",
+        "3. Copy (Ctrl+C) — already Label: value lines with blanks omitted.",
+        "4. Paste into the app Notable paste box and Save.",
+        "5. Do NOT copy from the Incident Review detail pane (UI badges corrupt hostnames).",
+        "",
+        "Status filter: New / Unassigned / In Progress only (Resolved & Closed excluded).",
+        "Owner from incident_review; dest/process/IPs from index=notable.",
+    ]
+
+    return {
+        "spl": spl,
+        "earliest": earliest,
+        "latest": latest,
+        "max_rows": max_rows,
+        "notable_index": notable_index,
+        "instructions": paste_hint_lines,
+        "why": (
+            "IR detail-pane copy glues UI badges into fields (NDC36-81 + badge 0 -> NDC36-810). "
+            "This query merges open review state with notable-index technical fields and "
+            "emits paste_block (Label: value, non-empty only) for one-click paste into the app."
+        ),
+    }
+
 
 
 def _rebuild_placeholder_aliases_file() -> None:
@@ -1356,17 +1550,23 @@ NOTABLE_FIELD_ALIASES = [
     ("Actor", "actor"),
     ("Coorelation Search", "correlation_search"),
     ("Correlation Search", "correlation_search"),
+    ("Search Name", "correlation_search"),
+    ("search_name", "correlation_search"),
     ("Security Domain", "security_domain"),
     ("SSL Errors", "ssl_errors"),
     ("Destination", "destination"),
+    ("dest", "destination"),
     ("Destination Business Unit", "destination_business_unit"),
     ("Destination Category", "destination_category"),
     ("Destination DNS", "destination_dns"),
     ("Destination Expected", "destination_expected"),
     ("Destination IP Address", "destination_ip"),
+    ("dest_ip", "destination_ip"),
     ("Destination NT Hostname", "destination_nt_hostname"),
+    ("dest_nt_host", "destination_nt_hostname"),
     ("Destination PCI Domain", "destination_pci_domain"),
     ("Destination Port", "destination_port"),
+    ("dest_port", "destination_port"),
     ("Disposition", "disposition"),
     ("Username", "username"),
     ("SSH File Path", "ssh_file_path"),
@@ -1388,7 +1588,9 @@ NOTABLE_FIELD_ALIASES = [
     ("Host", "host"),
     ("Source", "source_ip"),
     ("Source IP Address", "source_ip"),
+    ("src_ip", "source_ip"),
     ("Source Port", "source_port"),
+    ("src_port", "source_port"),
     ("User Email", "user_email"),
     ("User First Name", "user_first_name"),
     ("User Last Name", "user_last_name"),
@@ -1404,6 +1606,40 @@ NOTABLE_FIELD_ALIASES = [
     ("Rule Name", "rule_name"),
     ("rule_name", "rule_name"),
     ("Value", "value"),
+    # Process / command (CIM + Sysmon-style)
+    ("Command Line", "command_line"),
+    ("command_line", "command_line"),
+    ("CommandLine", "command_line"),
+    ("Parent Image", "parent_image"),
+    ("parent_image", "parent_image"),
+    ("ParentImage", "parent_image"),
+    ("Image", "process"),
+    ("Process Name", "process"),
+    ("process_name", "process"),
+    ("Process Path", "process"),
+    ("process_path", "process"),
+    # Remote / web
+    ("Remote URL", "remote_url"),
+    ("remoteURL", "remote_url"),
+    ("remote_url", "remote_url"),
+    ("URL", "remote_url"),
+    ("url", "remote_url"),
+    # Aggregation / risk extras
+    ("Count", "count"),
+    ("count", "count"),
+    ("First Seen", "first_seen"),
+    ("first_seen", "first_seen"),
+    ("Last Seen", "last_seen"),
+    ("last_seen", "last_seen"),
+    ("VPR Score", "vpr_score"),
+    ("vpr_score", "vpr_score"),
+    ("Risk Tier", "risk_tier"),
+    ("risk_tier", "risk_tier"),
+    ("Vuln Count", "vuln_count"),
+    ("vuln_count", "vuln_count"),
+    ("Category", "category"),
+    ("category", "category"),
+    ("Zero Trust", "zero_trust"),
 ]
 
 NOTABLE_FIELD_LABELS = {
@@ -1446,6 +1682,17 @@ NOTABLE_FIELD_LABELS = {
     "file_name": "File Name",
     "process": "Process",
     "parent_process": "Parent Process",
+    "parent_image": "Parent Image",
+    "command_line": "Command Line",
+    "remote_url": "Remote URL",
+    "count": "Count",
+    "first_seen": "First Seen",
+    "last_seen": "Last Seen",
+    "vpr_score": "VPR Score",
+    "risk_tier": "Risk Tier",
+    "vuln_count": "Vuln Count",
+    "category": "Category",
+    "zero_trust": "Zero Trust",
     "risk_score": "Risk Score",
     "security_domain": "Security Domain",
     "ssl_errors": "SSL Errors",
@@ -1830,20 +2077,24 @@ def normalize_notable_fields(fields: Dict[str, str]) -> Dict[str, str]:
     if rs_idx != -1:
         fields["destination"] = dest_val[:rs_idx].strip()
 
-    # Defensive fallback: if Destination looks like a hostname followed by a
-    # bare integer (e.g., "NDC45-790 80" where 80 is actually a risk score
-    # or some other numeric suffix), drop the trailing number and keep just
-    # the host portion. This helps when the "Risk Score" label itself was
-    # not captured but its numeric value was appended into the same cell.
-    dest_val = fields.get("destination") or ""
-    stripped = dest_val.strip()
-    host_num_match = re.match(r"^([A-Za-z0-9._-]+)\s+\d{1,3}$", stripped)
-    if host_num_match:
-        fields["destination"] = host_num_match.group(1)
+    # Defensive fallback: if Destination/Host looks like a hostname followed by a
+    # bare integer (e.g., "NDC45-790 80" or "NDC36-81 0" where the trailing
+    # number is a risk score / UI badge), drop the trailing number and keep
+    # just the host portion. Applies to space-separated cases only — glued
+    # no-space badges (NDC36-810) cannot be disambiguated from legitimate
+    # hostnames that end in 0 (NDC45-790) without external inventory, so
+    # prefer the | incident_review SPL fetch path for those pastes.
+    for host_key in ("destination", "host", "destination_nt_hostname"):
+        val = (fields.get(host_key) or "").strip()
+        if not val:
+            continue
+        host_num_match = re.match(r"^([A-Za-z0-9._-]+)\s+\d{1,3}$", val)
+        if host_num_match:
+            fields[host_key] = host_num_match.group(1)
 
     # If host/source/destination IP values were masked, keep them if they are
     # still single-token placeholders, but reject obviously merged artifacts.
-    for key in ["host", "source_ip", "destination_ip"]:
+    for key in ["host", "source_ip", "destination_ip", "destination"]:
         value = (fields.get(key) or "").strip()
         if not value:
             continue
@@ -2771,9 +3022,13 @@ def get_triage(
         if delete_case_id:
             case = db.query(TriageResult).filter(TriageResult.case_id == delete_case_id).first()
             if case:
+                _purge_case_related_records(
+                    db,
+                    delete_case_id,
+                    delete_analysis=delete_analysis,
+                    unlink_source_notable=True,
+                )
                 db.delete(case)
-                if delete_analysis:
-                    db.query(AnalysisResult).filter(AnalysisResult.case_id == delete_case_id).delete()
                 db.commit()
 
         query = db.query(TriageResult)
@@ -2879,6 +3134,59 @@ def get_triage_case(case_id: str):
 
 
 @app.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
+def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach SupportiveQueryResult ids onto timeline items so the UI can delete them.
+
+    Older investigation_state rows were saved before timeline items included
+    ``id``. Without this enrichment, the Delete button stays hidden forever
+    for those cases until evidence is re-saved.
+    """
+    if not state_payload:
+        return state_payload
+
+    evidence_summary = state_payload.get("evidence_summary") or {}
+    timeline = evidence_summary.get("timeline") or []
+    if not timeline:
+        return state_payload
+
+    needs_ids = any(not item.get("id") for item in timeline if isinstance(item, dict))
+    if not needs_ids:
+        return state_payload
+
+    try:
+        from db.models import SupportiveQueryResult  # type: ignore
+
+        rows = (
+            db.query(SupportiveQueryResult)
+            .filter(SupportiveQueryResult.case_id == case_id)
+            .order_by(SupportiveQueryResult.created_at.desc())
+            .all()
+        )
+    except Exception:
+        return state_payload
+
+    # Map (title, source_system) -> list of ids (newest first)
+    by_key: Dict[tuple, list] = {}
+    for r in rows:
+        key = ((r.query_title or "").strip().lower(), (r.source_system or "").strip().lower())
+        by_key.setdefault(key, []).append(r.id)
+
+    for item in timeline:
+        if not isinstance(item, dict) or item.get("id"):
+            continue
+        key = (
+            (item.get("title") or "").strip().lower(),
+            (item.get("source_system") or "").strip().lower(),
+        )
+        ids = by_key.get(key) or []
+        if ids:
+            item["id"] = ids.pop(0)
+
+    evidence_summary["timeline"] = timeline
+    state_payload["evidence_summary"] = evidence_summary
+    return state_payload
+
+
 def get_investigation_state(case_id: str):
     """Return the latest persisted investigation loop state for a case."""
     db = None
@@ -3048,8 +3356,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
 
         # Rebuild investigation loop state from the latest evidence so the
         # Investigation Loop view reflects saved entries even when the
-        # analyst has not rerun AI analysis yet. Timeline items include row
-        # ids so the UI can delete individual evidence entries.
+        # analyst has not rerun AI analysis yet.
         investigation_state = _rebuild_investigation_state_from_evidence(
             db, case, analysis_stage="evidence_only"
         )
@@ -3075,108 +3382,10 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             pass
 
 
-# Static evidence delete paths MUST be registered before the parameterized
-# /evidence/{evidence_id} routes so "batch-delete" / "delete-all" are not
-# captured as evidence_id values.
-@app.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
-def batch_delete_case_evidence(case_id: str, payload: InvestigationEvidenceIdsPayload):
-    """Delete one or more saved investigation evidence items and rebuild loop state."""
-    db = None
-    try:
-        sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
 
-        ids = [int(i) for i in (payload.ids or []) if i is not None]
-        if not ids:
-            raise HTTPException(status_code=400, detail="No evidence ids provided")
-
-        db = SessionLocal()
-        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-
-        rows = (
-            db.query(SupportiveQueryResult)
-            .filter(
-                SupportiveQueryResult.case_id == case_id,
-                SupportiveQueryResult.id.in_(ids),
-            )
-            .all()
-        )
-        deleted_ids = [r.id for r in rows]
-        for row in rows:
-            db.delete(row)
-        db.flush()
-
-        investigation_state = _rebuild_investigation_state_from_evidence(
-            db, case, analysis_stage="evidence_only"
-        )
-        db.commit()
-        return {
-            "success": True,
-            "deleted_ids": deleted_ids,
-            "deleted_count": len(deleted_ids),
-            "investigation_state": investigation_state,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        if db is not None:
-            db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            if db is not None:
-                db.close()
-        except Exception:
-            pass
-
-
-@app.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
-def delete_all_case_evidence(case_id: str):
-    """Delete all saved investigation evidence for a case and rebuild loop state."""
-    db = None
-    try:
-        sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, TriageResult, SupportiveQueryResult
-
-        db = SessionLocal()
-        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
-        if not case:
-            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
-
-        deleted_count = (
-            db.query(SupportiveQueryResult)
-            .filter(SupportiveQueryResult.case_id == case_id)
-            .delete(synchronize_session=False)
-        )
-        db.flush()
-
-        investigation_state = _rebuild_investigation_state_from_evidence(
-            db, case, analysis_stage="evidence_only"
-        )
-        db.commit()
-        return {
-            "success": True,
-            "deleted_count": int(deleted_count or 0),
-            "investigation_state": investigation_state,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        if db is not None:
-            db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        try:
-            if db is not None:
-                db.close()
-        except Exception:
-            pass
-
-
-def _delete_one_case_evidence(case_id: str, evidence_id: int):
-    """Shared implementation for single-evidence delete (DELETE or POST)."""
+@app.delete("/api/db/triage/{case_id}/evidence/{evidence_id}", tags=["Database"])
+def delete_case_evidence(case_id: str, evidence_id: int):
+    """Delete a single saved investigation evidence item and rebuild loop state."""
     db = None
     try:
         sys.path.insert(0, get_platform_root())
@@ -3227,24 +3436,10 @@ def _delete_one_case_evidence(case_id: str, evidence_id: int):
             pass
 
 
-@app.api_route(
-    "/api/db/triage/{case_id}/evidence/{evidence_id}",
-    methods=["DELETE", "POST"],
-    tags=["Database"],
-)
-def delete_case_evidence(case_id: str, evidence_id: int):
-    """Delete a single saved investigation evidence item and rebuild loop state.
-
-    Accepts DELETE and POST so proxies or clients that block DELETE still work.
-    Prefer POST /evidence/batch-delete from the UI.
-    """
-    return _delete_one_case_evidence(case_id=case_id, evidence_id=evidence_id)
-
-
 @app.post("/api/db/triage/{case_id}/evidence/{evidence_id}/delete", tags=["Database"])
 def delete_case_evidence_post(case_id: str, evidence_id: int):
-    """POST alias: /evidence/{id}/delete."""
-    return _delete_one_case_evidence(case_id=case_id, evidence_id=evidence_id)
+    """POST wrapper for environments that disallow DELETE from the browser UI."""
+    return delete_case_evidence(case_id=case_id, evidence_id=evidence_id)
 
 
 @app.post("/api/db/triage/{case_id}/delete", tags=["Database"])
@@ -3263,14 +3458,16 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
         if not case:
             raise HTTPException(status_code=404, detail=f"Triage case {case_id} not found")
 
+        purge_stats = _purge_case_related_records(
+            db,
+            case_id,
+            delete_analysis=delete_analysis,
+            unlink_source_notable=True,
+        )
         db.delete(case)
-
-        if delete_analysis:
-            db.query(AnalysisResult).filter(AnalysisResult.case_id == case_id).delete()
-
         db.commit()
 
-        return {"success": True}
+        return {"success": True, "purged": purge_stats}
     except HTTPException:
         raise
     except Exception as e:
@@ -3318,9 +3515,13 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
                 if not case:
                     missing.append(cid)
                     continue
+                _purge_case_related_records(
+                    db,
+                    cid,
+                    delete_analysis=delete_analysis,
+                    unlink_source_notable=True,
+                )
                 db.delete(case)
-                if delete_analysis:
-                    db.query(AnalysisResult).filter(AnalysisResult.case_id == cid).delete()
                 deleted.append(cid)
 
             db.commit()
@@ -3332,6 +3533,63 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/notables/generate-fetch-spl", tags=["Database"])
+def generate_notable_fetch_spl(request: NotableFetchSplRequest):
+    """Generate SPL to pull clean notable fields from Splunk.
+
+    Primary query uses the notable index (works when `incident_review` is
+    empty for the analyst role). Response also includes spl_incident_review
+    as a secondary option.
+
+    Prefer this over copying the Incident Review detail pane — UI badges
+    (red count chips, risk scores) frequently get glued into hostnames
+    (e.g. NDC36-81 + badge 0 → NDC36-810).
+
+    Workflow:
+      1. Call this endpoint with whatever identifiers you know.
+      2. Run the returned `spl` in Splunk.
+      3. Copy the Statistics row as Label: value lines.
+      4. Paste into the normal notable paste box.
+    """
+    try:
+        return build_notable_fetch_spl(request)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/db/notables/generate-fetch-spl", tags=["Database"])
+def generate_notable_fetch_spl_get(
+    correlation_search: Optional[str] = Query(None),
+    rule_name: Optional[str] = Query(None),
+    dest: Optional[str] = Query(None),
+    host: Optional[str] = Query(None),
+    user: Optional[str] = Query(None),
+    event_id: Optional[str] = Query(None),
+    rule_id: Optional[str] = Query(None),
+    earliest: str = Query("-7d"),
+    latest: str = Query("now"),
+    max_rows: int = Query(20, ge=1, le=200),
+    notable_index: str = Query("notable"),
+):
+    """GET convenience wrapper for generate_notable_fetch_spl."""
+    req = NotableFetchSplRequest(
+        correlation_search=correlation_search,
+        rule_name=rule_name,
+        dest=dest,
+        host=host,
+        user=user,
+        event_id=event_id,
+        rule_id=rule_id,
+        earliest=earliest,
+        latest=latest,
+        max_rows=max_rows,
+        notable_index=notable_index,
+    )
+    return generate_notable_fetch_spl(req)
+
+
 @app.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
@@ -3363,10 +3621,21 @@ def paste_notable(request: PastedNotableRequest):
             SplunkEvent.sourcetype == "splunk:notable:pasted"
         ).order_by(SplunkEvent.ingested_at.desc()).all()
 
+        # Preload existing triage case ids so orphaned promotions do not block re-paste.
+        from db.models import TriageResult as _TriageResultForDedup  # type: ignore
+        live_case_ids = {
+            row.case_id
+            for row in db.query(_TriageResultForDedup.case_id).all()
+        }
+
         for event in existing_events:
             try:
                 payload = json.loads(event.raw) if event.raw else {}
             except Exception:
+                continue
+
+            # Soft-deleted / hidden notables should not block a fresh paste.
+            if payload.get("hidden_from_recent"):
                 continue
 
             fields = payload.get("raw_fields") or payload.get("fields", {}) or {}
@@ -3377,6 +3646,7 @@ def paste_notable(request: PastedNotableRequest):
                     "payload": payload,
                     "fields": fields,
                     "artifact_paths": payload.get("artifact_paths") or {},
+                    "promoted_case_id": payload.get("promoted_case_id"),
                 }
 
         for index, segment_text in enumerate(segments):
@@ -3446,15 +3716,38 @@ def paste_notable(request: PastedNotableRequest):
             skip_reason = None
 
             if existing:
-                event = existing["event"]
-                artifact_paths = existing.get("artifact_paths") or {}
-                was_deduplicated = True
-                skipped_count += 1
-                seg_num = index + 1
-                existing_id = event.id if event else None
-                key_preview = (dedup_key or "")[:48]
-                skip_reason = f"already exists as event {existing_id} ({key_preview})"
-                skipped_segments.append(f"#{seg_num}")
+                promoted_case_id = existing.get("promoted_case_id")
+                # If the prior paste was promoted but that triage case was deleted,
+                # treat this as free to re-add (update the existing event in place).
+                orphaned_promotion = bool(
+                    promoted_case_id and promoted_case_id not in live_case_ids
+                )
+                if not orphaned_promotion:
+                    event = existing["event"]
+                    artifact_paths = existing.get("artifact_paths") or {}
+                    was_deduplicated = True
+                    skipped_count += 1
+                    seg_num = index + 1
+                    existing_id = event.id if event else None
+                    key_preview = (dedup_key or "")[:48]
+                    skip_reason = f"already exists as event {existing_id} ({key_preview})"
+                    skipped_segments.append(f"#{seg_num}")
+                else:
+                    # Reclaim the orphaned event: fall through to update path below
+                    # by removing it from the dedup map and deleting the stale row.
+                    stale_event = existing.get("event")
+                    if stale_event is not None:
+                        try:
+                            db.delete(stale_event)
+                            db.flush()
+                        except Exception:
+                            pass
+                    if dedup_key in existing_by_key:
+                        del existing_by_key[dedup_key]
+                    existing = None
+
+            if existing:
+                pass  # already handled as skip above
             else:
                 artifact_paths = save_notable_artifacts(
                     get_platform_root(), sanitized_text, mapping, sanitized_fields
@@ -3658,44 +3951,19 @@ def list_historical_notables(
             except Exception:
                 continue
 
-            # Only include historical notables that have not been explicitly hidden.
-            if not payload.get("historical") or payload.get("hidden_from_historical"):
+            if not payload.get("historical"):
                 continue
 
             fields = payload.get("fields", {}) or {}
-
-            # Prefer a well-formed parsed host value; if the parsed host
-            # looks malformed (e.g., long narrative closure text), fall
-            # back to the Splunk event host instead.
-            raw_host = (fields.get("host") or "").strip()
-            host_display = raw_host
-            if not raw_host or not is_usable_primary_entity("host", raw_host):
-                host_display = event.host
-
-            # Build a compact summary of the history/closure text so
-            # the frontend can show a one-line closure indicator while
-            # keeping the full text available on demand.
-            history_text = (payload.get("history") or "").strip()
-            history_summary = ""
-            if history_text:
-                # Use the first non-empty line and truncate to a
-                # reasonable length for table display.
-                first_line = next((ln.strip() for ln in history_text.split("\n") if ln.strip()), "")
-                if len(first_line) > 160:
-                    history_summary = first_line[:157].rstrip() + "..."
-                else:
-                    history_summary = first_line
-
             summaries.append({
                 "id": event.id,
                 "title": fields.get("title") or fields.get("correlation_search") or event.source,
                 "correlation_search": fields.get("correlation_search"),
-                "host": host_display,
+                "host": fields.get("host") or event.host,
                 "user": fields.get("user") or fields.get("username"),
                 "urgency": fields.get("urgency"),
                 "disposition": fields.get("disposition"),
                 "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
-                "history_summary": history_summary,
             })
 
         return summaries
@@ -3737,11 +4005,7 @@ def delete_pasted_notable(event_id: int):
             payload = {}
 
         if payload.get("historical"):
-            # Hide historical notables from both the recent list and the
-            # closed-notables summary while retaining the underlying record
-            # for any aggregate stats.
             payload["hidden_from_recent"] = True
-            payload["hidden_from_historical"] = True
             event.raw = json.dumps(payload)
         else:
             db.delete(event)
@@ -3816,11 +4080,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
                     payload_raw = {}
 
                 if payload_raw.get("historical"):
-                    # Hide historical notables from both the recent list
-                    # and the closed-notables summary while retaining the
-                    # underlying record for any aggregate stats.
                     payload_raw["hidden_from_recent"] = True
-                    payload_raw["hidden_from_historical"] = True
                     event.raw = json.dumps(payload_raw)
                 else:
                     db.delete(event)
@@ -3925,34 +4185,6 @@ def promote_notable_to_triage(event_id: int):
             "case_id": case_id,
             "verdict": verdict,
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/api/db/notables/{event_id}", tags=["Database"])
-def get_pasted_notable(event_id: int):
-    """Return full details for a single pasted notable by ID.
-
-    Reuses the same shape as recent-notables serialization so the
-    frontend can show sanitized text, fields, and history for a closed
-    notable selected from the summary table.
-    """
-    try:
-        sys.path.insert(0, get_platform_root())
-        from db.models import SessionLocal, SplunkEvent
-
-        db = SessionLocal()
-        event = db.query(SplunkEvent).filter(
-            SplunkEvent.id == event_id,
-            SplunkEvent.sourcetype == "splunk:notable:pasted",
-        ).first()
-
-        if not event:
-            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
-
-        return serialize_recent_notable(event)
     except HTTPException:
         raise
     except Exception as e:
@@ -4108,11 +4340,9 @@ def analyze_case(request: AnalyzeRequest):
             except Exception:
                 raw = r.raw_result
             supportive_results.append({
-                "id": r.id,
                 "query_title": r.query_title,
                 "source_system": r.source_system,
                 "raw_result": raw,
-                "created_at": r.created_at.isoformat() if getattr(r, "created_at", None) else None,
             })
 
         # Load prior structured closure notes for this rule to give the model
