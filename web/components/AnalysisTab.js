@@ -262,10 +262,13 @@ window.AnalysisTab = {
             const sec = this.analysisResult.analysis_sections || {};
             if (sec[sectionKey]) return sec[sectionKey].trim();
             const text = this.analysisResult.analysis || '';
-            const pattern = new RegExp('(?:\*\*|###\s+)?' + sectionKey.replace(/\s+/g, '\s+') + '[\s\S]*?(?=(?:\*\*|###\s+)|$)', 'i');
+            const escapedKey = sectionKey
+                .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+                .replace(/\s+/g, '\\s+');
+            const pattern = new RegExp('(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?(?=(?:\\*\\*|###\\s+)|$)', 'i');
             const match = text.match(pattern);
             if (match) {
-                const headerPattern = new RegExp('^(?:\*\*|###\s+)?' + sectionKey.replace(/\s+/g, '\s+') + '[\s\S]*?\n', 'i');
+                const headerPattern = new RegExp('^(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?\\n', 'i');
                 return match[0].replace(headerPattern, '').trim();
             }
             return '';
