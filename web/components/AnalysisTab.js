@@ -1108,12 +1108,12 @@ window.AnalysisTab = {
                             <option value="resolved">Resolves Inquiry</option>
                         </select>
                         <select
-                            v-if="q.target_questions && q.target_questions.length > 1"
-                            :value="phase2ResolutionQuestions[getPhase2Key(q)] || q.target_questions[0]"
+                            v-if="investigationState?.unresolved_questions && investigationState.unresolved_questions.length"
+                            :value="phase2ResolutionQuestions[getPhase2Key(q)] || (q.target_questions && q.target_questions[0]) || investigationState.unresolved_questions[0]"
                             @change="$emit('update-phase2-resolution-question', {key: getPhase2Key(q), value: $event.target.value})"
                             class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                         >
-                            <option v-for="question in q.target_questions" :key="'resolution-question:' + question" :value="question">Resolve: {{ question }}</option>
+                            <option v-for="question in investigationState.unresolved_questions" :key="'resolution-question:' + question" :value="question">Resolve: {{ question }}</option>
                         </select>
                     </div>
                 </div>
