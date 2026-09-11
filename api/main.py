@@ -6,6 +6,7 @@ Serves web UI at root path. Includes database and AI analysis endpoints.
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Query
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -59,6 +60,23 @@ app = FastAPI(
     description="REST API for SOC Orchestration Platform tools and workflows with local AI analysis",
     version="1.0.0",
 )
+
+# The hosted branch preview can call a locally running API through a secure
+# HTTPS tunnel. Keep the allowlist explicit; do not enable wildcard CORS for
+# the SOC data and analysis endpoints.
+cors_origins = [
+    origin.strip()
+    for origin in os.environ.get("CORS_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=cors_origins,
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 from api.routes.system import router as system_router
 app.include_router(system_router)

@@ -9,6 +9,9 @@
  */
 const { createApp } = Vue;
 
+const apiOverride = new URLSearchParams(window.location.search).get('api');
+const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
+
         createApp({
 
     components: {
@@ -30,7 +33,7 @@ const { createApp } = Vue;
                     toolSearch: '',
                     selectedCategory: '',
                     toolArgs: {},
-                    apiUrl: '/api',
+                    apiUrl: configuredApiUrl.replace(/\/$/, ''),
                     apiHealthy: false,
                     
                     // Database
