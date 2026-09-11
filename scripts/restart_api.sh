@@ -23,6 +23,7 @@ fi
 export OLLAMA_URL="${OLLAMA_URL:-http://127.0.0.1:11434}"
 export OLLAMA_NUM_PREDICT="${OLLAMA_NUM_PREDICT:-500}"
 export OLLAMA_TIMEOUT="${OLLAMA_TIMEOUT:-90}"
+export CORS_ORIGINS="${CORS_ORIGINS:-https://soc-plaform-git-justin-swinneyjs-projects.vercel.app}"
 
 echo "[*] Restarting SOC Platform API on ${API_HOST}:${API_PORT}..."
 
