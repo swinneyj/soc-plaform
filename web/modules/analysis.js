@@ -29,6 +29,10 @@
                 return;
             }
 
+            // Resume the last local browser snapshot before refreshing the
+            // durable evidence/state from the API.
+            this.loadAnalysisState(caseId);
+
             axios
                 .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
                 .then(res => {
@@ -919,6 +923,7 @@
                     this.analysisResult = newResult;
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
+                    this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
                     const metrics = res.data && res.data.ollama_metrics;
@@ -1051,6 +1056,7 @@
                     this.phase2Result = newResult;
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
+                    this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
                     const metrics = res.data && res.data.ollama_metrics;
@@ -1292,9 +1298,8 @@
                 });
         },
 
-        saveAnalysisState() {
+        _storeAnalysisStateSnapshot() {
             if (!this.analysisCaseId) {
-                alert('Select a case before saving analysis state');
                 return;
             }
 
@@ -1315,8 +1320,17 @@
                 investigationState: this.investigationState,
             };
 
+            window.localStorage.setItem(key, JSON.stringify(snapshot));
+        },
+
+        saveAnalysisState() {
+            if (!this.analysisCaseId) {
+                alert('Select a case before saving analysis state');
+                return;
+            }
+
             try {
-                window.localStorage.setItem(key, JSON.stringify(snapshot));
+                this._storeAnalysisStateSnapshot();
                 alert('Analysis state saved for case ' + this.analysisCaseId);
             } catch (err) {
                 console.error('Failed to save analysis state:', err);
