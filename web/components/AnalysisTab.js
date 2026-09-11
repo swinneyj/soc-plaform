@@ -126,6 +126,9 @@ window.AnalysisTab = {
         phase2EvidenceItems() {
             return this.evidenceTimelineItems.filter(item => item.source_system === 'phase2_manual');
         },
+        phase2SavedTitles() {
+            return new Set(this.phase2EvidenceItems.map(item => (item.title || '').toString().trim().toLowerCase()));
+        },
         selectableEvidenceKeys() {
             return this.evidenceTimelineItems
                 .map((item) => this.evidenceItemKey(item))
@@ -1000,20 +1003,26 @@ window.AnalysisTab = {
                 </button>
             </div>
 
+            <div class="bg-blue-950/30 border border-blue-800/70 rounded-lg px-3 py-2 text-xs text-gray-300">
+                <span class="font-semibold text-blue-200">Iterative follow-up:</span>
+                Run the checks that target the remaining questions, save each result, then re-analyze. A query marked <span class="text-emerald-300 font-semibold">Already saved</span> is retained for the audit trail and does not need to be collected again.
+            </div>
+
             <div
                 v-for="q in displayPhase2Queries"
                 :key="getPhase2Key(q)"
                 class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3"
             >
-                <div class="flex items-start justify-between gap-2">
-                    <div>
-                        <p class="text-xs font-bold text-purple-300">{{ q.title }}</p>
-                        <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
+                    <div class="flex items-start justify-between gap-2">
+                        <div>
+                            <p class="text-xs font-bold text-purple-300">{{ q.title }}</p>
+                            <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
                         <p class="text-[11px] text-amber-300 mt-1" v-if="q.target_questions && q.target_questions.length">
                             <span class="font-semibold uppercase tracking-wide">Targets:</span> {{ q.target_questions.join(' • ') }}
                         </p>
-                    </div>
-                    <div class="flex gap-2">
+                        </div>
+                    <div class="flex items-center gap-2">
+                        <span v-if="phase2SavedTitles.has((q.title || '').toString().trim().toLowerCase())" class="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 text-[10px] uppercase font-bold text-emerald-300">Already saved</span>
                         <button
                             type="button"
                             class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200"
@@ -1100,7 +1109,7 @@ window.AnalysisTab = {
                     @click="$emit('run-phase2-analysis')"
                 >
                     <span v-if="analysisRunning" class="animate-spin">⟳</span>
-                    <span>{{ analysisRunning ? 'Re-analyzing case...' : 'Save Evidence & Re-Analyze Case' }}</span>
+                    <span>{{ analysisRunning ? 'Re-analyzing case...' : phase2EvidenceItems.length ? 'Save New Evidence & Re-Analyze' : 'Save Evidence & Re-Analyze Case' }}</span>
                 </button>
             </div>
         </div>
