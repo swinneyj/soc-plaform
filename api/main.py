@@ -4205,7 +4205,9 @@ def analyze_case(request: AnalyzeRequest):
 
         if supportive_rule_id and case.rule_id != supportive_rule_id:
             case.rule_id = supportive_rule_id
-            db.commit()
+            # Persist the normalized family ID without expiring the ORM
+            # object before the prompt-building code finishes using it.
+            db.flush()
 
         if supportive_rule_id:
             rule_id = supportive_rule_id
