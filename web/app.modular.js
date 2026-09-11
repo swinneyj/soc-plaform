@@ -68,6 +68,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     analysisContext: '',
                     analysisRunning: false,
                     analysisRequestId: 0,
+                    analysisAbortController: null,
                     analysisStatus: {
                         phase: 'idle',
                         message: 'Ready',

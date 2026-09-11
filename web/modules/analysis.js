@@ -845,6 +845,7 @@
 
             const requestId = ++this.analysisRequestId;
             this.analysisRunning = true;
+            this.analysisAbortController = new AbortController();
             this._startAnalysisStatus('Saving collected evidence...');
             try {
                 await this.saveSupportiveEvidence({ silent: true });
@@ -864,7 +865,7 @@
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
-                });
+                }, { signal: this.analysisAbortController.signal });
                 // Ignore stale responses if a newer analysis has been started or cancelled.
                 if (requestId === this.analysisRequestId) {
                     const newResult = res.data;
@@ -897,6 +898,7 @@
             } finally {
                 if (requestId === this.analysisRequestId) {
                     this.analysisRunning = false;
+                    this.analysisAbortController = null;
                 }
                 this._stopAnalysisStatusTimer();
             }
@@ -1342,7 +1344,11 @@
         },
 
         cancelAnalysis() {
-            // Invalidate any in-flight analysis responses and clear the running flag.
+            // Abort the browser request as well as invalidating any late response.
+            if (this.analysisAbortController) {
+                this.analysisAbortController.abort();
+                this.analysisAbortController = null;
+            }
             this.analysisRequestId += 1;
             this.analysisRunning = false;
             this._setAnalysisStatus('cancelled', 'Assessment cancelled.', 'The in-flight response was ignored.');
