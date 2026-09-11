@@ -164,6 +164,17 @@ window.AnalysisTab = {
                 this.investigationState.loop_status === 'ready_for_closure'
             );
         },
+        assessmentVerdict() {
+            return (this.analysisResult && this.analysisResult.verdict) ||
+                (this.investigationState && this.investigationState.provisional_disposition) ||
+                'undetermined';
+        },
+        assessmentConfidence() {
+            const value = this.analysisResult && this.analysisResult.confidence !== undefined
+                ? this.analysisResult.confidence
+                : this.investigationState && this.investigationState.disposition_confidence;
+            return Number(value || 0);
+        },
         displayPhase2Queries() {
             if (this.analysisResult && this.analysisResult.phase2_queries && this.analysisResult.phase2_queries.length) {
                 return this.analysisResult.phase2_queries;
@@ -658,18 +669,18 @@ window.AnalysisTab = {
             <div
                 class="bg-gray-900 border rounded-lg p-4 flex items-center justify-between"
                 :class="{
-                    'border-red-600/80 bg-red-950/20': (analysisResult.verdict || '').toLowerCase() === 'malicious',
-                    'border-emerald-600/80 bg-emerald-950/20': (analysisResult.verdict || '').toLowerCase() === 'benign',
-                    'border-gray-700': !analysisResult.verdict
+                    'border-red-600/80 bg-red-950/20': assessmentVerdict.toLowerCase() === 'malicious',
+                    'border-emerald-600/80 bg-emerald-950/20': ['benign', 'false_positive'].includes(assessmentVerdict.toLowerCase()),
+                    'border-gray-700': !assessmentVerdict
                 }"
             >
                 <div>
                     <p class="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">Preliminary Verdict</p>
-                    <p class="text-lg font-bold text-white capitalize mt-0.5">{{ analysisResult.verdict || 'Undetermined' }}</p>
+                    <p class="text-lg font-bold text-white capitalize mt-0.5">{{ assessmentVerdict.replace('_', ' ') }}</p>
                 </div>
                 <div class="text-right">
                     <p class="text-[11px] uppercase tracking-wider text-gray-400 font-semibold">Confidence</p>
-                    <p class="text-lg font-bold text-emerald-400 mt-0.5">{{ ((analysisResult.confidence || 0) * 100).toFixed(0) }}%</p>
+                    <p class="text-lg font-bold text-emerald-400 mt-0.5">{{ (assessmentConfidence * 100).toFixed(0) }}%</p>
                 </div>
             </div>
         </div>

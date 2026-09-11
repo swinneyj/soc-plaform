@@ -4397,6 +4397,10 @@ def analyze_case(request: AnalyzeRequest):
             "case_id": case_id,
             "model": model,
             "analysis": display_analysis,
+            # Keep the summary fields available to the UI and API consumers;
+            # the authoritative values are calculated in investigation_state.
+            "verdict": investigation_state.get("provisional_disposition") or "undetermined",
+            "confidence": float(investigation_state.get("disposition_confidence") or 0.0),
             "analysis_sections": _extract_analysis_sections(response_text),
             "analysis_stage": analysis_stage,
             "used_prior_analysis": bool(prior_analysis),
