@@ -105,7 +105,8 @@ window.AnalysisTab = {
         return {
             selectedEvidenceKeys: [],
             currentStage: 1,
-            evidenceResultStatuses: {}
+            evidenceResultStatuses: {},
+            showResolvedFollowUp: false
         };
     },
     watch: {
@@ -198,6 +199,28 @@ window.AnalysisTab = {
                 if (unrun.length) return unrun.slice(0, 3);
             }
             return [];
+        },
+        resolvedFollowUpQuestions() {
+            return new Set((this.investigationState?.evidence_summary?.resolved_questions || []).map(question => String(question).trim().toLowerCase()));
+        },
+        activePhase2Queries() {
+            const resolved = this.resolvedFollowUpQuestions;
+            return this.displayPhase2Queries.filter(query => {
+                const targets = (query.target_questions || []).map(question => String(question).trim().toLowerCase());
+                return !targets.length || targets.some(target => !resolved.has(target));
+            });
+        },
+        resolvedPhase2Queries() {
+            const resolved = this.resolvedFollowUpQuestions;
+            return this.displayPhase2Queries.filter(query => {
+                const targets = (query.target_questions || []).map(question => String(question).trim().toLowerCase());
+                return targets.length && targets.every(target => resolved.has(target));
+            });
+        },
+        visiblePhase2Queries() {
+            return this.showResolvedFollowUp
+                ? this.displayPhase2Queries
+                : this.activePhase2Queries;
         }
     },
     methods: {
@@ -1010,13 +1033,12 @@ window.AnalysisTab = {
         <div v-if="displayPhase2Queries.length" class="space-y-4">
             <div class="flex items-center justify-between">
                 <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Specialized Phase {{ followUpPhase }} Investigative Queries</p>
-                <button
-                    type="button"
-                    class="text-[11px] text-blue-300 hover:text-blue-200"
-                    @click="$emit('open-placeholder-alias-editor')"
-                >
-                    Manage Aliases
-                </button>
+                <div class="flex items-center gap-3">
+                    <button v-if="resolvedPhase2Queries.length" type="button" class="text-[11px] text-emerald-300 hover:text-emerald-200" @click="showResolvedFollowUp = !showResolvedFollowUp">
+                        {{ showResolvedFollowUp ? 'Hide Resolved' : 'Show Resolved (' + resolvedPhase2Queries.length + ')' }}
+                    </button>
+                    <button type="button" class="text-[11px] text-blue-300 hover:text-blue-200" @click="$emit('open-placeholder-alias-editor')">Manage Aliases</button>
+                </div>
             </div>
 
             <div class="bg-blue-950/30 border border-blue-800/70 rounded-lg px-3 py-2 text-xs text-gray-300">
@@ -1024,8 +1046,12 @@ window.AnalysisTab = {
                 Run the checks that target the remaining questions, save each result, then re-analyze. A query marked <span class="text-emerald-300 font-semibold">Already saved</span> is retained for the audit trail and does not need to be collected again.
             </div>
 
+            <div v-if="!activePhase2Queries.length && resolvedPhase2Queries.length && !showResolvedFollowUp" class="bg-emerald-950/30 border border-emerald-800/70 rounded-lg px-3 py-2 text-xs text-emerald-200">
+                All current inquiries are resolved. Show the resolved queries above if you need to add another piece of evidence.
+            </div>
+
             <div
-                v-for="q in displayPhase2Queries"
+                v-for="q in visiblePhase2Queries"
                 :key="getPhase2Key(q)"
                 class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3"
             >

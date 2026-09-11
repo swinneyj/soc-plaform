@@ -570,6 +570,7 @@ def _build_investigation_state(
         "by_finding": evidence_by_finding,
         "by_status": evidence_by_status,
         "by_source_system": evidence_by_source,
+        "resolved_questions": sorted(explicitly_resolved_questions),
         "recent_titles": evidence_timeline[-5:],
         "timeline": evidence_timeline,
     }
