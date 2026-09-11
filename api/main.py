@@ -4143,43 +4143,30 @@ def analyze_case(request: AnalyzeRequest):
         prior_analysis_marker_idx = prior_analysis.find(prior_analysis_marker)
         if prior_analysis_marker_idx != -1:
             prior_analysis = prior_analysis[:prior_analysis_marker_idx].strip()
-        if len(prior_analysis) > 8000:
-            prior_analysis = prior_analysis[:8000].strip()
+        if len(prior_analysis) > 3000:
+            prior_analysis = prior_analysis[:3000].strip()
 
         client = get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 
-        # 3. Assemble Prompt with Detection Science and explicit response structure
+        # 3. Ask Ollama only for the reasoning that benefits from an LLM.
+        # Verdict/confidence, grounded Phase 2 cards, and closure gating are
+        # calculated by deterministic platform logic after this call.
         prompt_intro = (
-            "Analyze the case using the provided Detection Science, raw notable data, supportive query results, and supportive SPL templates.\n\n"
-            "Your response MUST be structured into the following sections (in order):\n"
+            "Analyze the case using the detection science, raw notable, and saved SPL evidence below.\n\n"
+            "Return exactly these three sections:\n"
             "1. Initial Thoughts\n"
             "2. Key Questions\n"
-            "3. Investigative Analysis\n"
-            "4. Supportive Query Recommendations (Phase 2 SPL)\n"
-            "5. Triage Verdict\n"
-            "6. Structured Closure Notes\n\n"
-            "Keep the response concise (target 350-500 tokens total). Use 1-2 short sentences per section. In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 follow-up checks an analyst should run AFTER this analysis. "
-            "If supportive SPL templates are provided below, you MUST only recommend from that list (match by title). "
-            "Do not invent indexes, sourcetypes, field names, SQL, or SPL that is not in the provided templates or data-source catalog. "
-            "Prefer templates that are not already covered by saved investigation evidence. "
-            "In the narrative Phase 2 section, summarize recommended query titles and purpose only; put full query text only in the machine-readable JSON block.\n\n"
+            "3. Investigative Analysis\n\n"
+            "Stay under 250 words. Use concise evidence-based language. List no more than three key questions. "
+            "Do not generate SPL, JSON, a verdict score, or closure notes. Distinguish observed facts from inference.\n"
         )
         if prior_analysis:
             prompt_intro += (
                 "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
-                "Reassess that hypothesis against the newest evidence, call out what still remains unresolved, and tighten the likely disposition. "
-                "Your follow-up queries must be the smallest set of high-value checks most likely to change the disposition decision between true positive, benign positive, false positive, or undetermined. "
-                "Prefer confirmatory or falsifying queries over broad exploratory searches.\n\n"
+                "Reassess it against the newest evidence and state what remains unresolved.\n"
             )
-        prompt_intro += (
-            "Additionally, you MUST emit a machine-readable JSON block containing the same phase-2 SPL recommendations so that the UI can surface them as interactive cards. "
-            "After your natural-language sections, append a block in the following format exactly (no extra commentary before or after):\n"
-            "PHASE2_QUERIES_JSON_START\n"
-            "[ {\"title\": \"<short title>\", \"spl\": \"<SPL snippet>\", \"description\": \"<one-line explanation>\"}, ... ]\n"
-            "PHASE2_QUERIES_JSON_END\n"
-        )
 
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
@@ -4195,10 +4182,6 @@ def analyze_case(request: AnalyzeRequest):
             prompt_parts.append(f"Severity: {detection_rule.severity}")
             if detection_rule.drilldown_fields:
                 prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
-            if detection_rule.required_closure_fields:
-                prompt_parts.append(f"Mandatory Closure Fields: {detection_rule.required_closure_fields}")
-            if detection_rule.closure_template:
-                prompt_parts.append(f"Standard Closure Format:\n{detection_rule.closure_template}")
 
         prompt_parts.append("\n\n=== CURRENT CASE ===")
         prompt_parts.append(f"Case ID: {case.case_id} | Rule: {case.rule_name} | Initial Verdict: {case.verdict}")
@@ -4230,15 +4213,11 @@ def analyze_case(request: AnalyzeRequest):
         if source_notable_payload:
             prompt_parts.append("\n\n=== SOURCE NOTABLE EVIDENCE ===")
             if source_notable_payload.get("fields"):
-                for k, v in source_notable_payload["fields"].items():
+                for k, v in list(source_notable_payload["fields"].items())[:25]:
                     prompt_parts.append(f"- {k}: {v}")
             if source_notable_payload.get("sanitized_text"):
-                prompt_parts.append(f"\nRaw Sanitized Notable:\n{source_notable_payload['sanitized_text']}")
-
-        if historical_baselines:
-            prompt_parts.append("\n\n=== HISTORICAL BASELINE EXAMPLES ===")
-            for idx, b in enumerate(historical_baselines[:3], 1):
-                prompt_parts.append(f"[Baseline {idx}] History/Closure Notes: {b.get('history')}")
+                sanitized_text = str(source_notable_payload["sanitized_text"])[:2500]
+                prompt_parts.append(f"\nRaw Sanitized Notable:\n{sanitized_text}")
 
         if supportive_results:
             prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")
@@ -4253,61 +4232,24 @@ def analyze_case(request: AnalyzeRequest):
                     if finding_type:
                         block.append(f"Evidence Direction: {finding_type}")
                     if query_text:
-                        block.append(f"Query Used:\n{query_text}")
+                        block.append(f"Query Used:\n{query_text[:1200]}")
                     if result_text:
-                        block.append(f"Observed Result:\n{result_text}")
+                        block.append(f"Observed Result:\n{result_text[:1800]}")
                     if analyst_summary:
-                        block.append(f"Analyst Takeaway:\n{analyst_summary}")
+                        block.append(f"Analyst Takeaway:\n{analyst_summary[:800]}")
                     prompt_parts.append("\n".join(block))
                 else:
                     prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(raw_result)}")
 
-        if supportive_query_defs:
-            prompt_parts.append("\n\n=== RECOMMENDED SUPPORTIVE SPL QUERIES TO VALIDATE HYPOTHESIS ===")
-            prompt_parts.append(
-                "Phase 2 recommendations MUST use titles from this list only. "
-                "The UI will ground suggestions to these exact SPL templates."
-            )
-            for idx, q in enumerate(supportive_query_defs, 1):
-                desc = q.description or ""
-                prompt_parts.append(
-                    f"[{idx}] {q.title}: {desc}\nSPL: {q.spl_query}"
-                )
-
-        catalog_payload = _load_data_source_catalog()
-        rule_id_for_catalog = ""
-        if detection_rule and getattr(detection_rule, "rule_id", None):
-            rule_id_for_catalog = detection_rule.rule_id
-        catalog_text = _format_catalog_for_prompt(catalog_payload, rule_id_for_catalog)
-        if catalog_text:
-            prompt_parts.append("\n\n" + catalog_text)
-
-        if prior_closures:
-            prompt_parts.append("\n\n=== PRIOR CLOSURE NOTE EXAMPLES FOR THIS RULE ===")
-            for idx, note in enumerate(prior_closures, 1):
-                header = (
-                    f"[Closure {idx}] Case {note['case_id']} | "
-                    f"Status: {note['status']} | Disposition: {note['disposition']} | "
-                    f"Created: {note['created_at']}"
-                )
-                prompt_parts.append(header)
-                if note["analyst_notes"]:
-                    prompt_parts.append(f"Analyst Notes:\n{note['analyst_notes']}")
-                if note["generated_note"]:
-                    prompt_parts.append(f"Structured Closure Note:\n{note['generated_note']}")
-
         if context:
-            prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context}")
+            prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context[:1000]}")
 
         composite_prompt = "\n".join(prompt_parts)
-        # Initial and follow-up assessments should be concise and bounded. A
-        # small deterministic output cap prevents a local model from spending
-        # minutes continuing prose after it has already reached a decision.
         result = client.generate(
             composite_prompt,
             model=model,
-            temperature=0.2,
-            options={"num_predict": 500},
+            temperature=0.1,
+            options={"num_predict": 320},
         )
 
         if not result["success"]:

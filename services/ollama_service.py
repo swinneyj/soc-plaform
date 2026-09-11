@@ -12,13 +12,13 @@ import os
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:8b')
 
-# Allow the request timeout to be tuned via environment; default to a
-# generous window so larger models (e.g., 8B variants) can complete.
+# Allow the request timeout to be tuned via environment while failing clearly
+# instead of leaving an analyst workflow spinning indefinitely.
 try:
     _timeout_env = os.environ.get('OLLAMA_TIMEOUT')
-    OLLAMA_REQUEST_TIMEOUT = int(_timeout_env) if _timeout_env else 300
+    OLLAMA_REQUEST_TIMEOUT = int(_timeout_env) if _timeout_env else 90
 except ValueError:
-    OLLAMA_REQUEST_TIMEOUT = 300
+    OLLAMA_REQUEST_TIMEOUT = 90
 
 try:
     _num_predict_env = os.environ.get('OLLAMA_NUM_PREDICT')
