@@ -277,6 +277,47 @@ window.AnalysisTab = {
             }
             return '';
         },
+        formatAnalysisText(value) {
+            const source = (value || '').toString()
+                .replace(/\\#/g, '#')
+                .replace(/\\\*/g, '*');
+            if (!source.trim()) return '';
+            const escapeHtml = (text) => text
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/\"/g, '&quot;');
+            const inline = (text) => escapeHtml(text)
+                .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+                .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-black/40 text-purple-200">$1</code>');
+            const blocks = [];
+            let list = null;
+            const flushList = () => {
+                if (!list) return;
+                blocks.push('<' + list.type + ' class="space-y-1.5 ml-5 ' + (list.type === 'ol' ? 'list-decimal' : 'list-disc') + '">' + list.items.map(item => '<li>' + inline(item) + '</li>').join('') + '</' + list.type + '>');
+                list = null;
+            };
+            source.split(/\r?\n/).forEach(line => {
+                const trimmed = line.trim();
+                if (!trimmed) { flushList(); return; }
+                const heading = trimmed.match(/^#{1,6}\s+(.+)$/);
+                const bullet = trimmed.match(/^[-*]\s+(.+)$/);
+                const numbered = trimmed.match(/^\d+[.)]\s+(.+)$/);
+                if (heading) {
+                    flushList();
+                    blocks.push('<h4 class="text-sm font-bold text-purple-200 mt-3 first:mt-0">' + inline(heading[1]) + '</h4>');
+                } else if (bullet || numbered) {
+                    const type = numbered ? 'ol' : 'ul';
+                    if (!list || list.type !== type) { flushList(); list = { type, items: [] }; }
+                    list.items.push((bullet || numbered)[1]);
+                } else {
+                    flushList();
+                    blocks.push('<p>' + inline(trimmed) + '</p>');
+                }
+            });
+            flushList();
+            return blocks.join('');
+        },
         getParsedQuestions() {
             const raw = this.getAnalysisSection('key questions');
             if (!raw) return [];
@@ -1022,7 +1063,7 @@ window.AnalysisTab = {
 
             <div v-if="phase2Result && phase2Result.analysis" class="bg-gray-900 border border-purple-800/80 rounded-lg p-4 space-y-2">
                 <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase 2 AI Analysis</p>
-                <p class="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{{ phase2Result.analysis }}</p>
+                <div class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
             </div>
 
             <div v-if="phase2EvidenceItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
