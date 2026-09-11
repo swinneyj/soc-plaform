@@ -41,6 +41,23 @@
                 this.closureSuggestedDisposition = 'Undetermined';
             }
 
+            // Follow-up analysis can produce a definitive verdict after the
+            // original triage row was created. Prefer that persisted state
+            // when suggesting the closure disposition.
+            axios
+                .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state')
+                .then(res => {
+                    const disposition = (res.data && res.data.provisional_disposition || '').toLowerCase();
+                    if (disposition === 'malicious') {
+                        this.closureForm.disposition = 'True Positive';
+                        this.closureSuggestedDisposition = 'True Positive';
+                    } else if (disposition === 'benign') {
+                        this.closureForm.disposition = 'Benign Positive';
+                        this.closureSuggestedDisposition = 'Benign Positive';
+                    }
+                })
+                .catch(() => {});
+
             axios
                 .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
                 .then(res => {
@@ -51,8 +68,13 @@
                     if (!this.closureForm.ruleId && triageCase && this.availableRules.length) {
                         const triageRuleName = (triageCase.rule_name || '').toLowerCase().trim();
                         let matchingRule = this.availableRules.find(
-                            r => (r.rule_name || '').toLowerCase().trim() === triageRuleName
+                            r => triageCase.rule_id && (r.rule_id || '').toLowerCase().trim() === triageCase.rule_id.toLowerCase().trim()
                         );
+                        if (!matchingRule) {
+                            matchingRule = this.availableRules.find(
+                                r => (r.rule_name || '').toLowerCase().trim() === triageRuleName
+                            );
+                        }
                         if (!matchingRule && triageRuleName) {
                             matchingRule = this.availableRules.find(r => {
                                 const name = (r.rule_name || '').toLowerCase().trim();

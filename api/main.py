@@ -4472,7 +4472,18 @@ def analyze_case(request: AnalyzeRequest):
             + [str(item) for item in (previous_state_payload.get("closure_blockers") or [])]
         )
 
-        if not phase2_queries:
+        # Later follow-up phases must advance the investigation rather than
+        # replaying model-generated titles from an earlier phase. The model
+        # still contributes reasoning, but the visible cards come only from
+        # unused, grounded playbook definitions for this phase.
+        if requested_phase_number > 2:
+            phase2_queries = _build_supportive_phase2_fallback(
+                phase_query_defs,
+                f"{prior_analysis} {blocker_context}",
+                response_text,
+                already_run_titles=already_run_titles,
+            )
+        elif not phase2_queries:
             phase2_queries = _build_supportive_phase2_fallback(
                 phase_query_defs,
                 f"{prior_analysis} {blocker_context}",
