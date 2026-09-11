@@ -142,14 +142,14 @@ window.AnalysisTab = {
             return Boolean(this.analysisCaseId);
         },
         stage2Complete() {
-            return Boolean(this.analysisResult || (this.investigationState && this.investigationState.iteration_count >= 1));
-        },
-        stage3Complete() {
             return Boolean(
                 this.investigationState &&
                 this.investigationState.evidence_summary &&
                 (this.investigationState.evidence_summary.substantive_items >= 1 || this.investigationState.evidence_summary.total_items >= 1)
             );
+        },
+        stage3Complete() {
+            return Boolean(this.analysisResult || (this.investigationState && this.investigationState.iteration_count >= 1));
         },
         stage4Complete() {
             return Boolean(
@@ -176,6 +176,29 @@ window.AnalysisTab = {
         }
     },
     methods: {
+        goToStage(stage) {
+            const requestedStage = Number(stage);
+            if (requestedStage <= 1) {
+                this.currentStage = 1;
+                return;
+            }
+            if (!this.analysisCaseId) {
+                return;
+            }
+            if (requestedStage >= 3 && !this.stage2Complete) {
+                this.currentStage = 2;
+                return;
+            }
+            if (requestedStage >= 4 && !this.stage3Complete) {
+                this.currentStage = 3;
+                return;
+            }
+            if (requestedStage >= 5 && !this.stage4Complete) {
+                this.currentStage = 4;
+                return;
+            }
+            this.currentStage = requestedStage;
+        },
         getSupportiveKey(q) {
             if (typeof this.getSupportiveKeyFn === 'function') return this.getSupportiveKeyFn(q);
             if (window.QueryKeys) return window.QueryKeys.supportive(q);
@@ -316,7 +339,7 @@ window.AnalysisTab = {
     <div class="flex items-center space-x-2 bg-gray-900 border border-gray-700 rounded-lg p-2.5 overflow-x-auto text-xs">
         <button
             type="button"
-            @click="currentStage = 1"
+            @click="goToStage(1)"
             :class="[
                 currentStage === 1
                     ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
@@ -337,7 +360,7 @@ window.AnalysisTab = {
 
         <button
             type="button"
-            @click="currentStage = 2"
+            @click="goToStage(2)"
             :class="[
                 currentStage === 2
                     ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
@@ -351,14 +374,14 @@ window.AnalysisTab = {
                 class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
                 :class="stage2Complete && currentStage !== 2 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
             >{{ stage2Complete && currentStage !== 2 ? '✓' : '2' }}</span>
-            <span>Initial Assessment</span>
+            <span>Evidence Collection</span>
         </button>
 
         <span :class="stage2Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
 
         <button
             type="button"
-            @click="currentStage = 3"
+            @click="goToStage(3)"
             :class="[
                 currentStage === 3
                     ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
@@ -372,7 +395,7 @@ window.AnalysisTab = {
                 class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
                 :class="stage3Complete && currentStage !== 3 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
             >{{ stage3Complete && currentStage !== 3 ? '✓' : '3' }}</span>
-            <span>Evidence Collection</span>
+            <span>Initial Assessment</span>
             <span v-if="investigationState && investigationState.evidence_summary && (investigationState.evidence_summary.substantive_items || investigationState.evidence_summary.total_items)" class="ml-1 px-1.5 py-0.2 rounded-full text-[10px] bg-blue-950 text-blue-200 border border-blue-700">
                 {{ investigationState.evidence_summary.substantive_items || investigationState.evidence_summary.total_items }}
             </span>
@@ -382,7 +405,7 @@ window.AnalysisTab = {
 
         <button
             type="button"
-            @click="currentStage = 4"
+            @click="goToStage(4)"
             :class="[
                 currentStage === 4
                     ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
@@ -403,7 +426,7 @@ window.AnalysisTab = {
 
         <button
             type="button"
-            @click="currentStage = 5"
+            @click="goToStage(5)"
             :class="[
                 currentStage === 5
                     ? 'bg-blue-600 text-white font-semibold shadow-md ring-2 ring-blue-400'
@@ -516,22 +539,22 @@ window.AnalysisTab = {
         <div class="flex justify-end pt-4 border-t border-gray-700">
             <button
                 type="button"
-                @click="currentStage = 2"
+                @click="goToStage(2)"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
             >
-                <span>Proceed to Initial Assessment</span>
+                <span>Proceed to Evidence Collection</span>
                 <span>&rarr;</span>
             </button>
         </div>
     </div>
 
     <!-- ============================================================= -->
-    <!-- STAGE 2: INITIAL AI ASSESSMENT -->
+    <!-- STAGE 3: INITIAL AI ASSESSMENT -->
     <!-- ============================================================= -->
-    <div v-show="currentStage === 2" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+    <div v-show="currentStage === 3" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
         <div>
-            <h3 class="text-lg font-bold text-blue-300">Stage 2: Initial AI Assessment</h3>
-            <p class="text-xs text-gray-400 mt-1">Select an Ollama model, provide optional analyst context, and execute initial threat reasoning.</p>
+            <h3 class="text-lg font-bold text-blue-300">Stage 3: Initial AI Assessment</h3>
+            <p class="text-xs text-gray-400 mt-1">Review the collected SPL results and raw notable logs, then run the initial evidence-based assessment.</p>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -630,30 +653,30 @@ window.AnalysisTab = {
         <div class="flex justify-between pt-4 border-t border-gray-700">
             <button
                 type="button"
-                @click="currentStage = 1"
+                @click="goToStage(2)"
                 class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
             >
-                &larr; Back to Case Context
+                &larr; Back to Evidence Collection
             </button>
             <button
                 type="button"
-                @click="currentStage = 3"
+                @click="goToStage(4)"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
             >
-                <span>Proceed to Evidence Collection</span>
+                <span>Proceed to Phase 2 Follow-Up</span>
                 <span>&rarr;</span>
             </button>
         </div>
     </div>
 
     <!-- ============================================================= -->
-    <!-- STAGE 3: EVIDENCE COLLECTION -->
+    <!-- STAGE 2: EVIDENCE COLLECTION -->
     <!-- ============================================================= -->
-    <div v-show="currentStage === 3" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+    <div v-show="currentStage === 2" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
         <div class="flex items-center justify-between">
             <div>
-                <h3 class="text-lg font-bold text-blue-300">Stage 3: Evidence Collection</h3>
-                <p class="text-xs text-gray-400 mt-1">Execute supportive playbook queries in Splunk/MDE, paste results with finding status, and persist to the ledger.</p>
+                <h3 class="text-lg font-bold text-blue-300">Stage 2: Evidence Collection</h3>
+                <p class="text-xs text-gray-400 mt-1">Run the available supportive SPL queries, paste raw results, and save the evidence before the initial assessment.</p>
             </div>
             <div class="flex items-center gap-2">
                 <button
@@ -819,17 +842,17 @@ window.AnalysisTab = {
         <div class="flex justify-between pt-4 border-t border-gray-700">
             <button
                 type="button"
-                @click="currentStage = 2"
+                @click="goToStage(1)"
                 class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
             >
-                &larr; Back to Initial Assessment
+                &larr; Back to Case Context
             </button>
             <button
                 type="button"
-                @click="currentStage = 4"
+                @click="goToStage(3)"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
             >
-                <span>Proceed to Phase 2 Follow-Up</span>
+                <span>Proceed to Initial Assessment</span>
                 <span>&rarr;</span>
             </button>
         </div>
@@ -961,7 +984,7 @@ window.AnalysisTab = {
         <div v-else class="bg-gray-900 border border-gray-700 rounded-lg p-6 text-center space-y-3">
             <p class="text-sm font-semibold text-gray-300">No Phase 2 recommendations loaded yet.</p>
             <p class="text-xs text-gray-400 max-w-md mx-auto">
-                Run Phase 1 analysis first in Stage 2, or click below to generate specialized follow-up queries grounded in this rule's detection playbook.
+                Run the initial assessment first in Stage 3, or click below to generate specialized follow-up queries grounded in this rule's detection playbook.
             </p>
             <button
                 type="button"
@@ -977,14 +1000,14 @@ window.AnalysisTab = {
         <div class="flex justify-between pt-4 border-t border-gray-700">
             <button
                 type="button"
-                @click="currentStage = 3"
+                @click="goToStage(3)"
                 class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
             >
-                &larr; Back to Evidence Collection
+                &larr; Back to Initial Assessment
             </button>
             <button
                 type="button"
-                @click="currentStage = 5"
+                @click="goToStage(5)"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow flex items-center gap-2"
             >
                 <span>Proceed to Verdict & Closure</span>
@@ -1107,7 +1130,7 @@ window.AnalysisTab = {
         <div class="flex items-center justify-between pt-4 border-t border-gray-700">
             <button
                 type="button"
-                @click="currentStage = 4"
+                @click="goToStage(4)"
                 class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
             >
                 &larr; Back to Phase 2 Follow-Up
