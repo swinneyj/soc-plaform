@@ -4160,7 +4160,7 @@ def analyze_case(request: AnalyzeRequest):
             "4. Supportive Query Recommendations (Phase 2 SPL)\n"
             "5. Triage Verdict\n"
             "6. Structured Closure Notes\n\n"
-            "In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 follow-up checks an analyst should run AFTER this analysis. "
+            "Keep the response concise (target 350-500 tokens total). Use 1-2 short sentences per section. In the 'Supportive Query Recommendations (Phase 2 SPL)' section, propose 1-3 follow-up checks an analyst should run AFTER this analysis. "
             "If supportive SPL templates are provided below, you MUST only recommend from that list (match by title). "
             "Do not invent indexes, sourcetypes, field names, SQL, or SPL that is not in the provided templates or data-source catalog. "
             "Prefer templates that are not already covered by saved investigation evidence. "
@@ -4300,7 +4300,15 @@ def analyze_case(request: AnalyzeRequest):
             prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context}")
 
         composite_prompt = "\n".join(prompt_parts)
-        result = client.generate(composite_prompt, model=model)
+        # Initial and follow-up assessments should be concise and bounded. A
+        # small deterministic output cap prevents a local model from spending
+        # minutes continuing prose after it has already reached a decision.
+        result = client.generate(
+            composite_prompt,
+            model=model,
+            temperature=0.2,
+            options={"num_predict": 500},
+        )
 
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
@@ -4408,6 +4416,12 @@ def analyze_case(request: AnalyzeRequest):
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
             "investigation_evidence_count": len(supportive_results),
+            "ollama_metrics": {
+                "eval_tokens": result.get("tokens", 0),
+                "prompt_tokens": result.get("prompt_eval_count", 0),
+                "total_duration_seconds": round((result.get("total_duration_ns", 0) or 0) / 1_000_000_000, 1),
+                "load_duration_seconds": round((result.get("load_duration_ns", 0) or 0) / 1_000_000_000, 1),
+            },
             "supportive_queries": [
                 {
                     "id": getattr(q, "id", None),

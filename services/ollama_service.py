@@ -5,6 +5,7 @@ Provides functions to call Ollama models and cache responses.
 
 import requests
 import json
+import time
 from typing import Optional, Dict, Any
 import os
 
@@ -18,6 +19,14 @@ try:
     OLLAMA_REQUEST_TIMEOUT = int(_timeout_env) if _timeout_env else 300
 except ValueError:
     OLLAMA_REQUEST_TIMEOUT = 300
+
+try:
+    _num_predict_env = os.environ.get('OLLAMA_NUM_PREDICT')
+    # Keep assessments bounded: the UI needs a concise decision and a few
+    # grounded follow-up queries, not an unbounded essay.
+    OLLAMA_NUM_PREDICT = int(_num_predict_env) if _num_predict_env else 500
+except ValueError:
+    OLLAMA_NUM_PREDICT = 500
 
 class OllamaClient:
     """Simple Ollama client for local LLM inference."""
@@ -88,9 +97,16 @@ class OllamaClient:
             }
             merged_options = dict(options or {})
             merged_options.setdefault("temperature", temperature)
+            merged_options.setdefault("num_predict", OLLAMA_NUM_PREDICT)
             if merged_options:
                 payload["options"] = merged_options
             
+            started_at = time.monotonic()
+            print(
+                f"[ollama] generate start model={model} prompt_chars={len(prompt)} "
+                f"max_tokens={merged_options.get('num_predict')}",
+                flush=True,
+            )
             r = requests.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
@@ -99,12 +115,21 @@ class OllamaClient:
             
             if r.status_code == 200:
                 data = r.json()
+                elapsed = time.monotonic() - started_at
+                print(
+                    f"[ollama] generate complete model={model} elapsed={elapsed:.1f}s "
+                    f"eval_tokens={data.get('eval_count', 0)}",
+                    flush=True,
+                )
                 return {
                     "success": True,
                     "response": data.get('response', ''),
                     "model": data.get('model', model),
                     "tokens": data.get('eval_count', 0),
                     "prompt_eval_count": data.get('prompt_eval_count', 0),
+                    "total_duration_ns": data.get('total_duration', 0),
+                    "load_duration_ns": data.get('load_duration', 0),
+                    "eval_duration_ns": data.get('eval_duration', 0),
                     "error": None
                 }
             else:

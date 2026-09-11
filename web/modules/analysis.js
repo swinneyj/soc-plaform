@@ -883,7 +883,11 @@
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                 }
                 if (requestId === this.analysisRequestId) {
-                    this._setAnalysisStatus('complete', 'Initial assessment completed.');
+                    const metrics = res.data && res.data.ollama_metrics;
+                    const detail = metrics && metrics.total_duration_seconds
+                        ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
+                        : '';
+                    this._setAnalysisStatus('complete', 'Initial assessment completed.' + detail);
                 }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
