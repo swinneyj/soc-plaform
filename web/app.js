@@ -251,33 +251,13 @@ createApp({
             if (!case_) {
                 return null;
             }
-
-            const caseRuleId = (case_.rule_id || '').trim();
-            if (caseRuleId) {
-                const byId = this.availableRules.find(r => (r.rule_id || '').trim() === caseRuleId);
-                if (byId) {
-                    return byId;
-                }
-            }
-
-            const caseRule = (case_.rule_name || '').toLowerCase().trim();
-            if (!caseRule) {
-                return null;
-            }
-
-            let rule = this.availableRules.find(
-                r => (r.rule_name || '').toLowerCase().trim() === caseRule
-            );
-            if (rule) {
-                return rule;
-            }
-
-            rule = this.availableRules.find(r => {
-                const name = (r.rule_name || '').toLowerCase().trim();
-                return !!name && (caseRule.includes(name) || name.includes(caseRule));
-            });
-
-            return rule || null;
+            return window.RuleFamilyResolver
+                ? window.RuleFamilyResolver.resolveCanonicalRule({
+                    case_,
+                    notable: this.analysisSourceNotable,
+                    availableRules: this.availableRules
+                })
+                : null;
         },
         filteredRecentNotables() {
             if (!this.showOpenNotablesOnly) {

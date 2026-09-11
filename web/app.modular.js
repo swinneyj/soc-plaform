@@ -336,51 +336,13 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     if (!case_) {
                         return null;
                     }
-
-                    // Prefer stable rule_id mapping when available so
-                    // supportive queries stay consistent for the same rule.
-                    const caseRuleId = (case_.rule_id || '').trim();
-                    if (caseRuleId) {
-                        const byId = this.availableRules.find(r => (r.rule_id || '').trim() === caseRuleId);
-                        if (byId) {
-                            return byId;
-                        }
-                    }
-                    const caseRuleRaw = (case_.rule_name || '');
-                    const caseRule = caseRuleRaw.toLowerCase().trim();
-                    if (!caseRule) {
-                        return null;
-                    }
-
-                    // Normalize wrapped ES labels like
-                    // "Endpoint - <Rule Name> - Rule" down to a core
-                    // so truncated correlation_search values still map
-                    // to the canonical rule.
-                    const normalizeRuleLabel = (text) => {
-                        let s = (text || '').toLowerCase().trim();
-                        s = s.replace(/^endpoint\s*-\s*/, '');
-                        s = s.replace(/\s*-\s*rule$/, '');
-                        return s;
-                    };
-
-                    const caseCore = normalizeRuleLabel(caseRuleRaw);
-
-                    // Prefer exact normalized name match first
-                    let rule = this.availableRules.find(
-                        r => normalizeRuleLabel(r.rule_name || '') === caseCore
-                    );
-                    if (rule) {
-                        return rule;
-                    }
-
-                    // Fallback: relaxed contains-based match on
-                    // normalized labels.
-                    rule = this.availableRules.find(r => {
-                        const nameCore = normalizeRuleLabel(r.rule_name || '');
-                        return !!nameCore && (caseCore.includes(nameCore) || nameCore.includes(caseCore));
-                    });
-
-                    return rule || null;
+                    return window.RuleFamilyResolver
+                        ? window.RuleFamilyResolver.resolveCanonicalRule({
+                            case_,
+                            notable: this.analysisSourceNotable,
+                            availableRules: this.availableRules
+                        })
+                        : null;
                 },
                 filteredRecentNotables() {
                     if (!this.showOpenNotablesOnly) {
