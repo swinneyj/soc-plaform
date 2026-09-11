@@ -1207,6 +1207,38 @@ window.AnalysisTab = {
                 </div>
             </div>
 
+            <!-- Guided blocker-resolution workflow -->
+            <div
+                v-if="(investigationState.closure_blockers && investigationState.closure_blockers.length) || (investigationState.unresolved_questions && investigationState.unresolved_questions.length)"
+                class="bg-blue-950/30 border border-blue-800/80 rounded-lg p-4 space-y-3"
+            >
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <p class="text-xs font-bold uppercase tracking-wider text-blue-300">Resolve Blockers Before Closure</p>
+                        <p class="text-xs text-gray-300 mt-1">Use the Phase 2 follow-up checks to answer the open questions, save the findings, and rerun the analysis. This screen will update when the blockers are reevaluated.</p>
+                    </div>
+                    <button
+                        type="button"
+                        class="flex-shrink-0 px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition"
+                        @click="goToStage(4)"
+                    >Investigate in Phase 2 &rarr;</button>
+                </div>
+                <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length" class="space-y-2 pt-2 border-t border-blue-900/70">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Recommended next actions</p>
+                    <div v-for="(action, index) in investigationState.recommended_next_actions" :key="'next-action:' + index + ':' + action.title" class="flex items-start gap-2 text-xs text-gray-300">
+                        <span class="w-4 h-4 rounded-full bg-blue-950 border border-blue-700 text-blue-300 flex items-center justify-center text-[10px] font-bold flex-shrink-0">{{ index + 1 }}</span>
+                        <span><strong class="text-gray-100">{{ action.title }}</strong><span v-if="action.description"> — {{ action.description }}</span></span>
+                    </div>
+                </div>
+                <div v-else-if="investigationState.unresolved_questions && investigationState.unresolved_questions.length" class="space-y-2 pt-2 border-t border-blue-900/70">
+                    <p class="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Open questions to resolve</p>
+                    <div v-for="(question, index) in investigationState.unresolved_questions" :key="'open-question:' + index" class="flex items-start gap-2 text-xs text-gray-300">
+                        <span class="w-4 h-4 rounded-full bg-blue-950 border border-blue-700 text-blue-300 flex items-center justify-center text-[10px] font-bold flex-shrink-0">{{ index + 1 }}</span>
+                        <span>{{ question }}</span>
+                    </div>
+                </div>
+            </div>
+
             <!-- Evidence Ledger Table Overview -->
             <div v-if="evidenceTimelineItems.length" class="space-y-2 pt-2">
                 <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Evidence Ledger Summary</p>
