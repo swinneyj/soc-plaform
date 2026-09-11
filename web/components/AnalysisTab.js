@@ -158,11 +158,21 @@ window.AnalysisTab = {
             return Boolean(this.analysisCaseId);
         },
         stage2Complete() {
-            return Boolean(
-                this.investigationState &&
-                this.investigationState.evidence_summary &&
-                (this.investigationState.evidence_summary.substantive_items >= 1 || this.investigationState.evidence_summary.total_items >= 1)
+            const evidenceSummary = this.investigationState && this.investigationState.evidence_summary;
+            const hasEvidence = Boolean(
+                evidenceSummary &&
+                (evidenceSummary.substantive_items >= 1 || evidenceSummary.total_items >= 1)
             );
+            // Unsupported rules have no trusted SPL cards to collect yet.
+            // Allow the analyst to reach Initial Assessment so the platform
+            // can expose the review-gated playbook onboarding flow.
+            const noPlaybookDetected = this.supportivePlaybookAvailable === false ||
+                (this.supportivePlaybookAvailable == null &&
+                    !(this.analysisRule && (this.analysisRule.supportive_queries || []).length));
+            const noPlaybookToCollect = noPlaybookDetected &&
+                !this.displayPhase2Queries.length &&
+                !hasEvidence;
+            return hasEvidence || noPlaybookToCollect;
         },
         stage3Complete() {
             return Boolean(this.analysisResult || (this.investigationState && this.investigationState.iteration_count >= 1));
