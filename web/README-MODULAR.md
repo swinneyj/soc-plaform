@@ -18,29 +18,29 @@ This is a standard split and makes troubleshooting clearer:
 - Wrong API payload / 500 → `modules/api.js`
 - Bad placeholder substitution → `utils/queryRender.js`
 
-## Files for testing (live site unchanged)
+## Current state (cutover complete — Piece 5 done)
 
 | File | Purpose |
 |------|---------|
-| `index.html` | **Live site** – still the monolith. Do not replace until you confirm modular works. |
-| `index.modular.html` | **Test shell** – thin HTML that wires all components |
-| `app.modular.js` | Root Vue app (logic from live + component registration) |
-| `components/AnalysisTab.js` | **NEW** – extracted AI Analysis tab |
-| `components/CodeReviewTab.js` | **NEW** – extracted Code Review tab |
+| `index.html` | **Live site** – now the thin modular shell (was monolith pre-Piece 5). Backup at `Old/index.bak` / `index.html.bak`. |
+| `index.modular.html` | **Reference test shell** – kept for side-by-side comparison / QA |
+| `app.modular.js` | Root Vue app (data, computed, spreads, mounted) |
+| `components/*` | All 8 tab components |
+| `modules/*` | Domain modules (database, analysis, closure, codeReview, tools, api) |
 
-## How to test
+> Stale `web/app.js` (2079-line monolith) has been archived to `Old/app.js-pre-modular-monolith.bak`. Do not reintroduce it — use `app.modular.js`.
 
-1. Serve the `web/` folder as you normally do (same backend).
-2. Open **`/index.modular.html`** (or whatever path maps to it).
-3. Click through every tab: Tools, Database, AI Analysis, Closure, Jobs, Reports, Code Review.
-4. Live **`/index.html`** remains the original monolith.
+## How to test / verify
 
-When modular looks good, Piece 5 will swap live `index.html` to the modular shell (with a backup).
+1. Serve the `web/` folder (same backend, or static file server for UI-only check).
+2. Open **`/`** (→ `index.html` live shell) and verify all tabs: Tools, Database, AI Analysis, Closure, Jobs, Reports, Code Review.
+3. Optionally open **`/index.modular.html`** for side-by-side comparison — should be identical to `/`.
+4. Hard-refresh after script changes (Ctrl+Shift+R) — browsers cache old `index.html` aggressively.
 
-## Script load order in `index.modular.html`
+## Script load order (both `index.html` and `index.modular.html`)
 
 1. Vue + axios (CDN)
 2. `utils/*`
-3. `modules/*`
-4. `components/*` (all 8 tabs)
+3. `modules/*` (api.js first, then domain modules)
+4. `components/*` (all 8 tabs + HeaderNav)
 5. `app.modular.js`

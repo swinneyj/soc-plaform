@@ -89,45 +89,52 @@ If you are new to this repo, read in this order:
 - `docs\REPO_MAP.md`
   This navigation guide
 
-### UI Feature Map (Where Each Tab Lives)
+### UI Feature Map (Where Each Tab Lives) — modular layout (post-Piece 6c)
 
-Use this when you want to change a specific part of the web app:
+Live entry is now a thin shell: `web/index.html` (≈30 KB) → `web/app.modular.js` + `web/components/*` + `web/modules/*` + `web/utils/*`. Use this to jump straight to the owning file:
 
 - **Tools Tab**
-  - UI: `web\index.html` ("Tools Catalog" section and tool execution modal)
-  - API: `/api/tools` and `/execute` handlers in `api\main.py`
+  - UI: `web/components/ToolsTab.js` (+ `HeaderNav.js`); shell: `web/index.html`
+  - Logic: `web/modules/tools.js` (execute, poll jobs, registry) + `web/modules/api.js`
+  - API: `/api/tools`, `/api/execute`, `/api/jobs` in `api/main.py` (+ `api/routes/system.py`)
 
 - **Database Tab (Triage / Notables / Stats)**
-  - UI: `web\index.html` ("Database" tab section)
-  - API: `/api/db/triage`, `/api/db/notables`, `/api/db/stats` in `api\main.py`
-  - Models: `TriageResult`, `SplunkEvent` in `db\models.py`
+  - UI: `web/components/DatabaseTab.js`
+  - Logic: `web/modules/database.js` (+ `web/utils/pocSummary.js`, `selection.js`)
+  - API: `/api/db/triage`, `/api/db/notables`, `/api/db/stats` in `api/main.py`
+  - Models: `TriageResult`, `SplunkEvent` in `db/models.py`
 
 - **AI Analysis Tab**
-  - UI: `web\index.html` ("AI Analysis" tab: case selector, model dropdown, Analysis Result card, Phase 2 SPL recommendations)
-  - API: `/api/db/analyze` in `api\main.py` (and related analysis helpers)
-  - Models: `AnalysisResult`, `SupportiveQuery`, `SupportiveQueryResult` in `db\models.py`
-  - Ollama integration: `services\ollama_service.py`
+  - UI: `web/components/AnalysisTab.js`
+  - Logic: `web/modules/analysis.js` (phase1/phase2/supportive/aliases/evidence) + `web/utils/queryRender.js`, `keys.js`
+  - API: `/api/db/analyze`, `/api/db/triage/{id}/evidence`, `/api/db/placeholder-aliases`, `/api/db/supportive-queries` in `api/main.py`
+  - Models: `AnalysisResult`, `SupportiveQuery`, `SupportiveQueryResult`, `InvestigationState` in `db/models.py`
+  - Ollama: `services/ollama_service.py` + `services/investigation_state.py` / `evidence_service.py`
 
 - **Closure Notes Tab**
-  - UI: `web\index.html` ("Closure Notes" tab: closure form, generated note panel)
-  - API: `/api/db/closure-note` in `api\main.py`
-  - Models: `ClosureNote`, `ESCorrelationRule` in `db\models.py`
+  - UI: `web/components/ClosureTab.js`
+  - Logic: `web/modules/closure.js`
+  - API: `/api/db/closure-note`, `/api/db/rules` in `api/main.py`
+  - Models: `ClosureNote`, `ESCorrelationRule` in `db/models.py`; `services/closure_service.py`
 
 - **Jobs Tab**
-  - UI: `web\index.html` ("Jobs" tab: queued tool runs and stdout/stderr views)
-  - API: `/api/jobs` in `api\main.py`
+  - UI: `web/components/JobsTab.js`
+  - Logic: `web/modules/tools.js`
+  - API: `/api/jobs` in `api/main.py`
 
 - **Reports Tab**
-  - UI: `web\index.html` ("Generated Reports" grid)
-  - API: `/api/reports` in `api\main.py`
-  - Files: `Data\Reports\` (generated report artifacts)
+  - UI: `web/components/ReportsTab.js`
+  - Logic: `web/modules/tools.js`
+  - API: `/api/reports` in `api/main.py`
+  - Files: `Data/Reports/`
 
 - **Code Review Tab**
-  - UI: `web\index.html` ("Code Review with Local Ollama" tab: language/model dropdowns, file/folder upload, instructions box, result and history tables)
-  - API: `/api/code-review`, `/api/code-review/zip`, `/api/code-reviews`, `/api/code-reviews/{id}` in `api\main.py`
-  - Models: `CodeReview` in `db\models.py`
+  - UI: `web/components/CodeReviewTab.js`
+  - Logic: `web/modules/codeReview.js` + `web/utils/codeSections.js`
+  - API: `/api/code-review`, `/api/code-review/zip`, `/api/code-reviews/*` in `api/main.py`
+  - Models: `CodeReview` in `db/models.py`
 
-When you want to modify a feature, start from this map: find the tab, open the listed UI file (`web\index.html`) and corresponding API/DB files, then use either VS Code + Copilot (this chat) or the in-app Code Review against those specific files/snippets.
+Root wiring: `web/app.modular.js` (data, computed, spreads, mounted, intervals — see `docs/FRONTEND_MODULARIZATION.md` load order). When you want to modify a feature, start from the tab above and open that component + its module before touching `api/`.
 
 ---
 
@@ -163,35 +170,31 @@ Use `docs\` like this:
 ### Pull the latest changes safely
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
+# from the repo root (folder containing docker-compose.yml)
 .\scripts\sync_upstream_safe.ps1 -CheckOnly
 ```
 
 ### Pull with an automatic checkpoint
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\sync_upstream_safe.ps1 -AutoCheckpoint
 ```
 
 ### Start the platform
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\start_platform.ps1 -OpenBrowser
 ```
 
 ### Check platform health
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\status_platform.ps1
 ```
 
 ### Stop the platform cleanly
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\stop_platform.ps1
 ```
 

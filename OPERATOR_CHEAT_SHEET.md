@@ -16,28 +16,24 @@ If you want the full visual dashboard in the browser, run:
 
 ## Current Canonical Working Copy
 
-Use this folder for day-to-day work:
-
-`C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825`
+Use this repo's **root folder** (where this file lives) for day-to-day work. On Windows with OneDrive it may be under `...\SOC\SOC_Automation_Working_Fresh_20260825`; on macOS it may be `~/Downloads/soc-plaform-main` — both are fine, just `cd` to the folder containing `docker-compose.yml`.
 
 ## Start
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
+# from the repo root (folder containing docker-compose.yml)
 .\scripts\start_platform.ps1 -OpenBrowser
 ```
 
 ## Status
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\status_platform.ps1
 ```
 
 ## Stop
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\stop_platform.ps1
 ```
 
@@ -46,14 +42,12 @@ Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SO
 Check first:
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\sync_upstream_safe.ps1 -CheckOnly
 ```
 
 Pull with an automatic checkpoint if there are local edits:
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\sync_upstream_safe.ps1 -AutoCheckpoint
 ```
 
@@ -62,14 +56,12 @@ Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SO
 Use this as the default decision tool before startup, sync, or push:
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\troubleshoot_platform.ps1
 ```
 
 Use this when the platform is already up and you want a live validation pass:
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 .\scripts\troubleshoot_platform.ps1 -RunSmokeTest
 ```
 
@@ -82,7 +74,6 @@ Use the root launcher if you want a menu:
 Or do it manually:
 
 ```powershell
-Set-Location "C:\Users\dalton.lewis\OneDrive - US Navy-flankspeed\Desktop\SOC\SOC_Automation_Working_Fresh_20260825"
 git add -A
 git commit -m "Describe your change"
 git push origin HEAD
