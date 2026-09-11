@@ -22,3 +22,4 @@ splunk-es-backup-toolkit.old/
 
 *.log
 *.tmp
+.DS_Store
