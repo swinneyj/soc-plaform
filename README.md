@@ -1,100 +1,93 @@
-# Dummy DB Reset Pack
+# SOC Automation Platform
 
-Wipe the SOC Platform operational tables and load a clean, deterministic set of:
+A local-first SOC workspace for evidence-driven triage, AI-assisted investigation, Splunk ES workflows, and structured case closure.
 
-- **TEST-*** triage cases (from the project's own `seed_test_cases.py`)
-- Matching supportive query results (from `seed_supportive_results.py`)
-- **5 clean closed / historical notables** (for Closed Notables view, delete, and details testing)
+## What it does
 
-## Requirements
+- Runs local AI assessment with Ollama.
+- Generates targeted, editable SPL follow-up queries.
+- Adds evidence to a durable phase-aware ledger.
+- Tracks inquiry resolution and closure blockers.
+- Creates Phase 3+ follow-ups only when evidence requires them.
+- Produces a final verdict and structured closure note.
+- Includes Tools, Database, Jobs, Reports, and Code Review features.
 
-- Project root is the extracted `SOC_Automation_Working_clean` folder
-- Postgres is running (Docker Compose on host port **5433** is the default)
-- Python can import `db.models` (same environment you use for the platform)
-- Optional: API up on port 8000 for the final verify step
+Case state, analysis results, inquiry resolutions, and evidence history are stored in PostgreSQL so work can resume after a restart.
 
-## Install / layout
+## Notable data source
 
-Copy the entire `db_reset_dummy` folder into your project root so it sits next to `seed_test_cases.py` and `api/`:
+Operational notables originate in **Splunk Enterprise Security (Splunk ES)**. Authorized notable or event data is ingested, normalized for local triage, and persisted in PostgreSQL for investigation history and review.
 
-```
-SOC_Automation_Working_clean/
-  seed_test_cases.py
-  seed_supportive_results.py
-  api/
-  db/
-  db_reset_dummy/          <--- this pack
-    Reset-DummyDb.ps1
-    wipe_db.py
-    seed_dummy_closed_notables.py
-    README.md
-```
+The Database tab is a local operational view of data received from Splunk ES, not the authoritative Splunk ES data store. Keep the originating Splunk search, notable ID, time range, and analyst context with the case when available.
 
-## One-command reset
+Source references:
 
-From the **project root**:
+- [ingest_notables.py](ingest_notables.py)
+- [data_source_catalog.json](data_source_catalog.json)
+- [Database and API map](docs/API_DB_VISUAL_MAP.md)
 
-```powershell
-cd C:\Users\justin.swinney\Documents\SOC_Automation_Working_clean
-.\db_reset_dummy\Reset-DummyDb.ps1
-```
+## Architecture
 
-What it does:
+| Layer | Technology | Purpose |
+|---|---|---|
+| Web UI | HTML, CSS, JavaScript | Analyst workspace |
+| API | FastAPI | Case and workflow routes |
+| Database | PostgreSQL | Durable investigation state |
+| AI | Ollama | Local analysis and code review |
+| Detection | Splunk ES / SPL | Notable context and validation |
+| Runtime | Docker Compose or native services | Repeatable environments |
 
-1. `wipe_db.py` – truncates operational tables (triage, pasted notables, analysis, evidence, investigation state, closure notes)
-2. `python seed_test_cases.py` – loads the 7 TEST-* triage rows
-3. `python seed_supportive_results.py` – loads supportive evidence for those cases
-4. `seed_dummy_closed_notables.py` – inserts 5 clean historical notables
-5. Hits `/api/db/stats`, `/api/db/triage`, and `/api/db/notables/historical` if the API is up
+## Quick start
 
-### Useful switches
+~~~bash
+cp .env.example .env
+ollama serve
+ollama pull llama3.1:latest
+./scripts/start_platform.sh
+~~~
 
-```powershell
-# Skip supportive evidence seed
-.\db_reset_dummy\Reset-DummyDb.ps1 -SkipSupportive
+Open http://127.0.0.1:8000/index.modular.html and verify:
 
-# Skip the live API verify (useful if only Postgres is up)
-.\db_reset_dummy\Reset-DummyDb.ps1 -SkipVerify
+~~~bash
+curl http://127.0.0.1:8000/health
+~~~
 
-# Custom ports / URL
-.\db_reset_dummy\Reset-DummyDb.ps1 -ApiPort 8000 -DatabaseUrl "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
-```
+The default Docker database host port is 5433. Keep credentials in .env or a machine-local credential store; never commit them.
 
-## Manual / individual scripts
+For native API testing:
 
-```powershell
-$env:SOC_PLATFORM_ROOT = (Get-Location).Path
-$env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+~~~bash
+export DATABASE_URL='postgresql+psycopg://mini@localhost:5432/soc_platform'
+./scripts/restart_api.sh
+~~~
 
-python .\db_reset_dummy\wipe_db.py
-python .\seed_test_cases.py
-python .\seed_supportive_results.py
-python .\db_reset_dummy\seed_dummy_closed_notables.py
-```
+## Investigation workflow
 
-## Verify
+~~~text
+Evidence Collection → Initial Assessment → Phase 2 Follow-Up
+       → Phase 3+ only when blockers remain
+       → Final Verdict & Closure → Structured Closure Notes
+~~~
 
-```powershell
-Invoke-RestMethod http://127.0.0.1:8000/api/db/stats
-Invoke-RestMethod "http://127.0.0.1:8000/api/db/triage?limit=50"
-Invoke-RestMethod "http://127.0.0.1:8000/api/db/notables/historical?limit=20"
-```
+Each follow-up phase has targeted queries, a phase-specific evidence source, inquiry targets, analysis, and audit history. Resolved inquiries leave the active queue but remain available for additional validation.
 
-Expected after a clean run (approximate):
+## Repository map
 
-| Metric                         | Count |
-|--------------------------------|-------|
-| triage_cases                   | 7     |
-| pasted_notables_total          | 5     |
-| pasted_notables_historical     | 5     |
-| pasted_notables_open           | 0     |
-| analyses                       | 0     |
+- api/ — FastAPI routes and orchestration
+- db/ — SQLAlchemy models and database wiring
+- services/ — Ollama integrations
+- web/ — browser dashboard
+- scripts/ — startup and operational helpers
+- Tools/ — registered SOC tools
+- docs/ — operator and architecture references
+- Data/Reports/ — generated reports
 
-Closed notables have clean `host` / `title` / `disposition` values (no truncated parse garbage) so delete and details UI testing stays predictable.
+Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [multi-user-workflow.md](multi-user-workflow.md).
 
-## Notes
+## Security
 
-- Wipe does **not** drop schema, ES correlation rules, or placeholder aliases.
-- Closed notables are inserted directly into `splunk_events` with `historical: true` so they appear in the Closed Notables list without going through the paste sanitizer pipeline.
-- Re-running the pack is safe: wipe first, then re-seed.
-- If the API is not running, the data is still written to Postgres; start the platform later and refresh the Database tab.
+- Use authorized Splunk ES data only.
+- Keep passwords, tokens, keys, and private telemetry out of Git.
+- Minimize sensitive content in pasted evidence.
+- Use local PostgreSQL credentials or .pgpass; never hard-code secrets.
+- Synthetic fixtures are for development only, not production evidence.
