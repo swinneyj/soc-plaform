@@ -85,6 +85,12 @@ VALID_FINDING_TYPES = {
     "neutral",
 }
 
+VALID_QUESTION_RESOLUTIONS = {
+    "not_resolved",
+    "partially_resolved",
+    "resolved",
+}
+
 
 def _normalize_heading_candidate(line: str) -> str:
     """Normalize a potential section header line."""
@@ -303,6 +309,7 @@ def _build_investigation_state(
     # Carry forward prior unresolved questions
     prior_unresolved = _parse_json_list(previous_state.get("unresolved_questions", []))
     evidence_text_samples = []
+    explicitly_resolved_questions = set()
 
     current_hypothesis = initial_thoughts or (case.analysis_summary or "").strip()
     provisional_disposition = _infer_disposition_label(verdict_text, case.verdict)
@@ -343,6 +350,16 @@ def _build_investigation_state(
         finding_type = (raw_result.get("finding_type") or "neutral").strip().lower()
         if finding_type not in VALID_FINDING_TYPES:
             finding_type = "neutral"
+
+        question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
+        if question_resolution not in VALID_QUESTION_RESOLUTIONS:
+            question_resolution = "not_resolved"
+        if question_resolution == "resolved":
+            explicitly_resolved_questions.update(
+                str(question).strip()
+                for question in (raw_result.get("target_questions") or [])
+                if str(question).strip()
+            )
 
         source_system = (item.get("source_system") or raw_result.get("source_system") or "splunk").strip() or "splunk"
         title = (item.get("query_title") or raw_result.get("query_title") or "").strip()
@@ -424,7 +441,11 @@ def _build_investigation_state(
     else:
         combined_questions = extracted_questions
 
-    unresolved_questions = combined_questions[:6]
+    resolved_normalized = {question.lower() for question in explicitly_resolved_questions}
+    unresolved_questions = [
+        question for question in combined_questions
+        if question.strip().lower() not in resolved_normalized
+    ][:6]
 
     # Strengthen evidence-to-verdict logic
     if support_strength >= 2 and refute_strength == 0:

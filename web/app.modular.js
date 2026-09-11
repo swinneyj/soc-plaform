@@ -102,6 +102,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     phase2EditedQueries: {},
                     phase2ManualResults: {},
                     phase2FindingTypes: {},
+                    phase2ResolutionTypes: {},
 
                     // Closure Notes
                     availableRules: [],

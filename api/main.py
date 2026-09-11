@@ -659,6 +659,8 @@ class InvestigationEvidenceEntryPayload(BaseModel):
     result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
     analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
     finding_type: Optional[str] = Field("neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis")
+    question_resolution: Optional[str] = Field("not_resolved", description="Whether this evidence does not resolve, partially resolves, or resolves a targeted inquiry")
+    target_questions: List[str] = Field(default_factory=list, description="Open inquiries targeted by this evidence")
     result_status: Optional[str] = Field("success", description="Execution status: success, no_results, data_source_unavailable, query_failed, not_run, benign_result")
     collection_time: Optional[str] = Field(None, description="ISO timestamp when evidence was collected")
     source_system: Optional[str] = Field("splunk", description="Telemetry source system (splunk, mde, defender, edr, firewall, etc.)")
@@ -2962,6 +2964,8 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                     "result_text": result_text,
                     "analyst_summary": analyst_summary,
                     "finding_type": (entry.finding_type or "neutral").strip() or "neutral",
+                    "question_resolution": (entry.question_resolution or "not_resolved").strip() or "not_resolved",
+                    "target_questions": [str(q).strip() for q in (entry.target_questions or []) if str(q).strip()],
                     "result_status": (getattr(entry, "result_status", None) or "success").strip() or "success",
                     "collection_time": getattr(entry, "collection_time", None) or datetime.datetime.utcnow().isoformat(),
                     "source_system": getattr(entry, "source_system", source_system) or source_system,

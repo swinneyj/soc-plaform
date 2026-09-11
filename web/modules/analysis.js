@@ -22,6 +22,7 @@
             this.phase2EditedQueries = {};
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
+            this.phase2ResolutionTypes = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
 
@@ -1107,6 +1108,8 @@
                     result_text: resultText,
                     analyst_summary: '',
                     finding_type: this.phase2FindingTypes[key] || 'neutral',
+                    question_resolution: this.phase2ResolutionTypes[key] || 'not_resolved',
+                    target_questions: q.target_questions || [],
                     result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
                 });
             }
@@ -1146,6 +1149,7 @@
                     const raw = item.raw_result || {};
                     saved[key] = (raw.result_text || '').toString();
                     this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    this.phase2ResolutionTypes[key] = (raw.question_resolution || 'not_resolved').toString();
                     if (raw.query_text) {
                         this.phase2EditedQueries[key] = raw.query_text.toString();
                     }
@@ -1319,6 +1323,7 @@
                 phase2EditedQueries: this.phase2EditedQueries,
                 phase2ManualResults: this.phase2ManualResults,
                 phase2FindingTypes: this.phase2FindingTypes,
+                phase2ResolutionTypes: this.phase2ResolutionTypes,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,
@@ -1386,6 +1391,9 @@
                 }
                 if (snapshot.phase2FindingTypes) {
                     this.phase2FindingTypes = snapshot.phase2FindingTypes;
+                }
+                if (snapshot.phase2ResolutionTypes) {
+                    this.phase2ResolutionTypes = snapshot.phase2ResolutionTypes;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;

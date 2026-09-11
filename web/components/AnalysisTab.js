@@ -31,6 +31,7 @@ window.AnalysisTab = {
         'enrichmentFindingTypes',
         'phase2ManualResults',
         'phase2FindingTypes',
+        'phase2ResolutionTypes',
         'phase2EditedQueries',
         'supportiveEditorOpen',
         'supportiveEditorBusy',
@@ -227,6 +228,7 @@ window.AnalysisTab = {
             this.$emit('update:follow-up-phase', nextPhase);
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
+            this.phase2ResolutionTypes = {};
             this.phase2EditedQueries = {};
             this.currentStage = 4;
             this.$emit('run-phase2-analysis');
@@ -1091,6 +1093,18 @@ window.AnalysisTab = {
                             class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                         >
                             <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Inquiry Resolution</label>
+                        <select
+                            :value="phase2ResolutionTypes[getPhase2Key(q)] || 'not_resolved'"
+                            @change="$emit('update-phase2-resolution', {key: getPhase2Key(q), value: $event.target.value})"
+                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                        >
+                            <option value="not_resolved">Does Not Resolve</option>
+                            <option value="partially_resolved">Partially Resolves</option>
+                            <option value="resolved">Resolves Inquiry</option>
                         </select>
                     </div>
                 </div>
