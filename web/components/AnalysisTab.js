@@ -14,6 +14,7 @@ window.AnalysisTab = {
         'analysisModel',
         'analysisContext',
         'analysisRunning',
+        'analysisStatus',
         'analysisResult',
         'analysisSourceNotable',
         'analysisRule',
@@ -591,6 +592,29 @@ window.AnalysisTab = {
                 <span>{{ analysisRunning ? 'Analyzing with ' + analysisModel + '...' : (analysisResult ? 'Re-run Initial Analysis' : 'Run Initial Analysis') }}</span>
             </button>
             <span v-if="analysisRunning" class="text-xs text-blue-400 animate-pulse">Querying local Ollama instance...</span>
+        </div>
+
+        <div
+            v-if="analysisStatus && analysisStatus.phase !== 'idle'"
+            class="flex items-center justify-between gap-3 rounded border px-3 py-2 text-xs"
+            :class="analysisStatus.phase === 'error' || analysisStatus.phase === 'timeout' ? 'bg-red-950/40 border-red-700 text-red-200' : analysisStatus.phase === 'complete' ? 'bg-emerald-950/40 border-emerald-700 text-emerald-200' : 'bg-blue-950/40 border-blue-700 text-blue-200'"
+        >
+            <div class="flex items-center gap-2 min-w-0">
+                <span v-if="analysisRunning && analysisStatus.phase !== 'timeout'" class="animate-pulse">●</span>
+                <span v-else-if="analysisStatus.phase === 'complete'">✓</span>
+                <span v-else-if="analysisStatus.phase === 'error' || analysisStatus.phase === 'timeout'">!</span>
+                <span v-else>○</span>
+                <span class="truncate">{{ analysisStatus.message }}</span>
+            </div>
+            <div class="flex items-center gap-3 flex-shrink-0">
+                <span class="font-mono">{{ analysisStatus.elapsedSeconds }}s</span>
+                <button
+                    v-if="analysisRunning && analysisStatus.phase === 'timeout'"
+                    type="button"
+                    class="px-2 py-1 rounded bg-red-800 hover:bg-red-700 text-red-100 font-semibold"
+                    @click="$emit('cancel-analysis')"
+                >Cancel</button>
+            </div>
         </div>
 
         <!-- Formatted Initial Assessment Visual Cards -->

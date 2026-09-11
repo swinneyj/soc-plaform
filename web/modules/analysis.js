@@ -789,6 +789,54 @@
             }
         },
 
+        _startAnalysisStatus(message) {
+            if (this.analysisStatusTimer) {
+                clearInterval(this.analysisStatusTimer);
+            }
+            this.analysisStatusStartedAt = Date.now();
+            this.analysisStatus = {
+                phase: 'preparing',
+                message: message || 'Preparing assessment...',
+                elapsedSeconds: 0,
+                timedOut: false,
+                error: ''
+            };
+            this.analysisStatusTimer = setInterval(() => {
+                const elapsedSeconds = Math.floor((Date.now() - this.analysisStatusStartedAt) / 1000);
+                const timedOut = elapsedSeconds >= 30;
+                this.analysisStatus = {
+                    ...this.analysisStatus,
+                    phase: timedOut ? 'timeout' : this.analysisStatus.phase,
+                    message: timedOut
+                        ? 'Assessment is still processing after 30 seconds. Ollama may be busy or the request may be stuck.'
+                        : this.analysisStatus.message,
+                    elapsedSeconds,
+                    timedOut
+                };
+            }, 1000);
+        },
+
+        _setAnalysisStatus(phase, message, error = '') {
+            const elapsedSeconds = this.analysisStatusStartedAt
+                ? Math.floor((Date.now() - this.analysisStatusStartedAt) / 1000)
+                : 0;
+            this.analysisStatus = {
+                ...this.analysisStatus,
+                phase,
+                message,
+                elapsedSeconds,
+                timedOut: phase === 'timeout' || Boolean(this.analysisStatus && this.analysisStatus.timedOut),
+                error
+            };
+        },
+
+        _stopAnalysisStatusTimer() {
+            if (this.analysisStatusTimer) {
+                clearInterval(this.analysisStatusTimer);
+                this.analysisStatusTimer = null;
+            }
+        },
+
         async runAnalysis() {
             if (!this.analysisCaseId || !this.analysisModel) {
                 alert('Please select a case ID and model');
@@ -797,9 +845,11 @@
 
             const requestId = ++this.analysisRequestId;
             this.analysisRunning = true;
+            this._startAnalysisStatus('Saving collected evidence...');
             try {
                 await this.saveSupportiveEvidence({ silent: true });
                 await this.saveEnrichmentEvidence({ silent: true });
+                this._setAnalysisStatus('ollama', 'Sending evidence to Ollama for initial assessment...');
 
                 let combinedContext = this.analysisContext || '';
                 const priorAnalysisText = (
@@ -832,14 +882,19 @@
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                 }
+                if (requestId === this.analysisRequestId) {
+                    this._setAnalysisStatus('complete', 'Initial assessment completed.');
+                }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
+                    this._setAnalysisStatus('error', 'Initial assessment failed.', err.response?.data?.detail || err.message);
                     alert('Error: ' + (err.response?.data?.detail || err.message));
                 }
             } finally {
                 if (requestId === this.analysisRequestId) {
                     this.analysisRunning = false;
                 }
+                this._stopAnalysisStatusTimer();
             }
         },
 
@@ -1286,6 +1341,8 @@
             // Invalidate any in-flight analysis responses and clear the running flag.
             this.analysisRequestId += 1;
             this.analysisRunning = false;
+            this._setAnalysisStatus('cancelled', 'Assessment cancelled.', 'The in-flight response was ignored.');
+            this._stopAnalysisStatusTimer();
         },
 
         getSupportiveKey(q) {
