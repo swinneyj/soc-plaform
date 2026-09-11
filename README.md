@@ -57,7 +57,7 @@ The default Docker database host port is 5433. Keep credentials in .env or a mac
 For native API testing:
 
 ~~~bash
-export DATABASE_URL='postgresql+psycopg://mini@localhost:5432/soc_platform'
+export DATABASE_URL='postgresql+psycopg://<db-user>:<db-password>@localhost:5432/soc_platform'
 ./scripts/restart_api.sh
 ~~~
 
