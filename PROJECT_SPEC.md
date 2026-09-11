@@ -26,7 +26,7 @@ project-root/
 │   ├── splunk_csv_ingestor/   # CSV import tool
 │   ├── splunk_folder_watcher/ # Auto-watch folder tool
 │   ├── closure_notes_generator/ # Incident closure templates
-│   └── [29 other tools]       # SOC analysis/response tools
+│   └── [~30+ other tools]     # SOC analysis/response tools (see Commander_Registry.json; count varies)
 ├── docker-compose.yml         # Service orchestration
 └── Dockerfile                 # Container build (multi-stage)
 ```
@@ -56,7 +56,7 @@ analysis_summary, remediation_steps, triaged_at
 ## API Endpoints
 
 ### Tools
-- `GET /api/tools` - List all 31 tools with metadata
+- `GET /api/tools` - List all tools with metadata (registry count, ~30-40)
 - `GET /api/tools/{name}` - Get specific tool info
 - `POST /api/execute` - Execute tool asynchronously (returns job_id)
 - `GET /api/jobs/{job_id}` - Poll job status/results
@@ -98,7 +98,7 @@ To add a new tool:
 ## Web Dashboard (Vue.js)
 
 ### Tabs
-- **Tools**: Browse and execute all 31 tools
+- **Tools**: Browse and execute all tools from registry
 - **Database**: View Splunk events + Triage cases
 - **AI Analysis**: Select case + model, run Ollama analysis
 - **Status**: System health, Ollama models, job queue

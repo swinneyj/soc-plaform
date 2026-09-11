@@ -430,10 +430,32 @@ def _build_investigation_state(
     # Sort evidence timeline by timestamp / creation
     evidence_timeline.sort(key=lambda x: str(x.get("created_at") or ""), reverse=False)
 
-    # Process questions: preserve active questions from prior state not resolved
+    # Process questions: preserve active questions from prior state not resolved.
+    # Resolution is durable: questions the previous state recorded as resolved stay
+    # resolved even if their evidence rows were replaced/re-saved (which would
+    # otherwise drop the explicit resolved flags). Text matching is only a
+    # fallback for questions still open in the previous state.
+    prior_evidence_summary = previous_state.get("evidence_summary") or {}
+    if not isinstance(prior_evidence_summary, dict):
+        prior_evidence_summary = {}
+    durably_resolved = {
+        str(question).strip()
+        for question in (prior_evidence_summary.get("resolved_questions") or [])
+        if str(question).strip()
+    }
+    # Carry previously resolved questions forward so the durable record (and
+    # this round's resolved_questions output) keeps them even though their
+    # resolved-flag evidence rows may no longer exist.
+    explicitly_resolved_questions.update(durably_resolved)
+
     if prior_unresolved:
+        still_open_prior = [
+            question for question in prior_unresolved
+            if question.strip() not in durably_resolved
+            and question.strip().lower() not in {d.lower() for d in durably_resolved}
+        ]
         active_prior, resolved_prior = _evaluate_question_resolution(
-            prior_unresolved,
+            still_open_prior,
             analysis_text,
             evidence_text_samples,
         )
@@ -447,9 +469,14 @@ def _build_investigation_state(
         if question.strip().lower() not in resolved_normalized
     ][:6]
 
-    # Strengthen evidence-to-verdict logic
+    # Strengthen evidence-to-verdict logic.
+    # Only upgrade the disposition when the case is not already tracked as
+    # benign; supporting findings on a benign-tracked case indicate the
+    # analyst flagged corroborating context, not that the case is malicious.
+    benign_tracked = (case.verdict or "").strip().lower() == "benign"
     if support_strength >= 2 and refute_strength == 0:
-        provisional_disposition = "malicious"
+        if not benign_tracked:
+            provisional_disposition = "malicious"
     elif refute_strength >= 2 and support_strength == 0:
         if case.verdict == "benign" or benign_result_count > 0:
             provisional_disposition = "benign"
@@ -545,7 +572,7 @@ def _build_investigation_state(
 
     is_closure_eligible = (
         provisional_disposition in {"benign", "malicious", "false_positive"}
-        and confidence >= 0.80
+        and round(confidence, 3) >= 0.80
         and substantive_evidence_count >= 2
         and len(clean_blockers) == 0
         and len(unresolved_questions) == 0

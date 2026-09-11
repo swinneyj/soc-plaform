@@ -2436,7 +2436,13 @@ def derive_triage_verdict(disposition: str) -> str:
 def derive_triage_confidence(disposition: str) -> float:
     normalized = (disposition or "").strip().lower()
     if not normalized:
-        return 0.5
+        # Pasted notables usually arrive without an ES disposition field. A
+        # neutral 0.5 baseline plus the loop's +0.20 evidence bonus cap can
+        # never reach the 0.80 closure gate, which made organic closure
+        # impossible for promoted pastes. Start undetermined pastes exactly
+        # at the gate so earned evidence closes them naturally, while cases
+        # with refuting or missing evidence stay gated below it.
+        return 0.8
     if "false positive" in normalized or "true positive" in normalized or "benign" in normalized:
         return 0.8
     return 0.6
