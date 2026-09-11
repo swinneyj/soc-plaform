@@ -23,6 +23,7 @@
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
             this.phase2ResolutionTypes = {};
+            this.phase2ResolutionQuestions = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
 
@@ -1109,7 +1110,9 @@
                     analyst_summary: '',
                     finding_type: this.phase2FindingTypes[key] || 'neutral',
                     question_resolution: this.phase2ResolutionTypes[key] || 'not_resolved',
-                    target_questions: q.target_questions || [],
+                    target_questions: this.phase2ResolutionQuestions[key]
+                        ? [this.phase2ResolutionQuestions[key]]
+                        : (q.target_questions || []),
                     result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
                 });
             }
@@ -1150,6 +1153,9 @@
                     saved[key] = (raw.result_text || '').toString();
                     this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
                     this.phase2ResolutionTypes[key] = (raw.question_resolution || 'not_resolved').toString();
+                    if (raw.target_questions && raw.target_questions.length) {
+                        this.phase2ResolutionQuestions[key] = raw.target_questions[0].toString();
+                    }
                     if (raw.query_text) {
                         this.phase2EditedQueries[key] = raw.query_text.toString();
                     }
@@ -1324,6 +1330,7 @@
                 phase2ManualResults: this.phase2ManualResults,
                 phase2FindingTypes: this.phase2FindingTypes,
                 phase2ResolutionTypes: this.phase2ResolutionTypes,
+                phase2ResolutionQuestions: this.phase2ResolutionQuestions,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,
@@ -1394,6 +1401,9 @@
                 }
                 if (snapshot.phase2ResolutionTypes) {
                     this.phase2ResolutionTypes = snapshot.phase2ResolutionTypes;
+                }
+                if (snapshot.phase2ResolutionQuestions) {
+                    this.phase2ResolutionQuestions = snapshot.phase2ResolutionQuestions;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;

@@ -103,6 +103,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     phase2ManualResults: {},
                     phase2FindingTypes: {},
                     phase2ResolutionTypes: {},
+                    phase2ResolutionQuestions: {},
 
                     // Closure Notes
                     availableRules: [],
