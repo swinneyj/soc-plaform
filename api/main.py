@@ -2934,6 +2934,10 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                 (getattr(e, "result_text", "") or "").strip() or
                 (getattr(e, "analyst_summary", "") or "").strip() or
                 (getattr(e, "query_text", "") or "").strip()
+            ) and not (
+                (getattr(e, "result_status", None) or "success").strip().lower() == "success"
+                and not (getattr(e, "result_text", "") or "").strip()
+                and not (getattr(e, "analyst_summary", "") or "").strip()
             )
         ]
         if payload.replace_existing and valid_entries:
@@ -2954,8 +2958,11 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             result_text = (entry.result_text or "").strip()
             analyst_summary = (entry.analyst_summary or "").strip()
             query_text = (entry.query_text or "").strip()
+            result_status = (getattr(entry, "result_status", None) or "success").strip().lower()
 
             if not title or not (result_text or analyst_summary or query_text):
+                continue
+            if result_status == "success" and not result_text and not analyst_summary:
                 continue
 
             raw_result = json.dumps(
@@ -2966,7 +2973,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                     "finding_type": (entry.finding_type or "neutral").strip() or "neutral",
                     "question_resolution": (entry.question_resolution or "not_resolved").strip() or "not_resolved",
                     "target_questions": [str(q).strip() for q in (entry.target_questions or []) if str(q).strip()],
-                    "result_status": (getattr(entry, "result_status", None) or "success").strip() or "success",
+                    "result_status": result_status,
                     "collection_time": getattr(entry, "collection_time", None) or datetime.datetime.utcnow().isoformat(),
                     "source_system": getattr(entry, "source_system", source_system) or source_system,
                 },
