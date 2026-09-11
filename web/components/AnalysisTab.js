@@ -1046,7 +1046,17 @@ window.AnalysisTab = {
                     </div>
                 </div>
 
-                <pre class="text-xs text-gray-200 bg-black/60 rounded p-2.5 whitespace-pre-wrap font-mono">{{ renderPhase2Query(getPhase2Template(q)) }}</pre>
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Editable SPL Query</label>
+                    <textarea
+                        :value="getPhase2Template(q)"
+                        @input="onPhase2TemplateInput(q, $event.target.value)"
+                        rows="3"
+                        class="w-full mt-1 px-3 py-2 bg-black/60 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
+                        spellcheck="false"
+                    ></textarea>
+                    <p class="text-[10px] text-gray-500 mt-1">Edit this query if needed, then use Copy SPL to send the edited version to Splunk.</p>
+                </div>
 
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Notes for this Follow-Up Check</label>
