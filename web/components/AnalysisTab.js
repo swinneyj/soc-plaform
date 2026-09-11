@@ -1195,7 +1195,7 @@ window.AnalysisTab = {
                 type="button"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow inline-flex items-center gap-2"
                 :disabled="analysisRunning || !analysisCaseId"
-                @click="$emit('run-analysis')"
+                @click="$emit('run-phase2-analysis')"
             >
                 <span v-if="analysisRunning" class="animate-spin">⟳</span>
                 <span>{{ analysisRunning ? 'Running Analysis...' : 'Generate Follow-Up Recommendations' }}</span>
