@@ -1009,6 +1009,9 @@ window.AnalysisTab = {
                     <div>
                         <p class="text-xs font-bold text-purple-300">{{ q.title }}</p>
                         <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
+                        <p class="text-[11px] text-amber-300 mt-1" v-if="q.target_questions && q.target_questions.length">
+                            <span class="font-semibold uppercase tracking-wide">Targets:</span> {{ q.target_questions.join(' • ') }}
+                        </p>
                     </div>
                     <div class="flex gap-2">
                         <button

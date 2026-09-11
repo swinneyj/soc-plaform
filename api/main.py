@@ -622,6 +622,30 @@ def _build_supportive_phase2_fallback(
     return [item[1] for item in scored_queries[:max_queries]]
 
 
+def _annotate_phase2_targets(phase2_queries, investigation_state):
+    """Attach the open question/blocker each grounded query is intended to resolve."""
+    state = investigation_state or {}
+    questions = [str(item).strip() for item in (state.get("unresolved_questions") or []) if str(item).strip()]
+    blockers = [str(item).strip() for item in (state.get("closure_blockers") or []) if str(item).strip()]
+    targets = questions + [item for item in blockers if item not in questions and "remain unresolved" not in item.lower()]
+    if not targets:
+        return phase2_queries
+    for query in phase2_queries or []:
+        query_text = " ".join([
+            str(query.get("title") or ""),
+            str(query.get("description") or ""),
+            str(query.get("spl") or ""),
+        ]).lower()
+        ranked = []
+        for target in targets:
+            words = set(re.findall(r"[a-z0-9]+", target.lower()))
+            overlap = sum(1 for word in words if len(word) > 3 and word in query_text)
+            ranked.append((overlap, target))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        query["target_questions"] = [target for score, target in ranked if score > 0][:2] or targets[:1]
+    return phase2_queries
+
+
 class InvestigationEvidenceEntryPayload(BaseModel):
     query_title: str = Field(..., description="Short title for the investigative query or evidence item")
     query_text: Optional[str] = Field("", description="SPL or other query text used to gather the evidence")
@@ -4204,6 +4228,8 @@ def analyze_case(request: AnalyzeRequest):
                 prompt_parts.append("Closure Blockers:")
                 for item in blockers[:5]:
                     prompt_parts.append(f"- {item}")
+            if unresolved or blockers:
+                prompt_parts.append("Prioritize Phase 2 checks that directly resolve these open questions and closure blockers. Every follow-up query should have a clear disposition-changing purpose.")
 
         if prior_analysis:
             prompt_parts.append("\n\n=== PREVIOUS ANALYSIS HYPOTHESIS ===")
@@ -4305,11 +4331,15 @@ def analyze_case(request: AnalyzeRequest):
                     phase2_queries = _extract_phase2_queries(fallback_response_text)
 
         already_run_titles = _already_run_supportive_titles(supportive_results)
+        blocker_context = " ".join(
+            [str(item) for item in (previous_state_payload.get("unresolved_questions") or [])]
+            + [str(item) for item in (previous_state_payload.get("closure_blockers") or [])]
+        )
 
         if not phase2_queries:
             phase2_queries = _build_supportive_phase2_fallback(
                 supportive_query_defs,
-                prior_analysis,
+                f"{prior_analysis} {blocker_context}",
                 response_text,
                 already_run_titles=already_run_titles,
             )
@@ -4319,6 +4349,7 @@ def analyze_case(request: AnalyzeRequest):
             supportive_query_defs,
             already_run_titles=already_run_titles,
         )
+        phase2_queries = _annotate_phase2_targets(phase2_queries, previous_state_payload)
         display_analysis = _sanitize_analysis_text(response_text, phase2_queries)
         investigation_state = _build_investigation_state(
             case,
