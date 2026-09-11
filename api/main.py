@@ -4846,6 +4846,28 @@ def list_rules():
         all_supportive = db.query(SupportiveQuery).all()
         db.close()
 
+        # Older imported databases can contain enabled rule rows with a
+        # missing rule_name. Use the checked-in rule catalog as a read-only
+        # display fallback so closure selection remains understandable without
+        # requiring a database migration.
+        catalog_by_id: Dict[str, Dict[str, Any]] = {}
+        for catalog_path in [
+            Path(get_platform_root()) / "updated_rules.json",
+            Path(__file__).resolve().parent.parent / "updated_rules.json",
+        ]:
+            try:
+                if catalog_path.exists():
+                    catalog_payload = json.loads(catalog_path.read_text(encoding="utf-8"))
+                    catalog_by_id = {
+                        str(item.get("rule_id")): item
+                        for item in (catalog_payload.get("rules") or [])
+                        if item.get("rule_id")
+                    }
+                    if catalog_by_id:
+                        break
+            except Exception:
+                continue
+
         by_rule: Dict[str, List[Dict[str, Any]]] = {}
         for sq in all_supportive:
             by_rule.setdefault(sq.rule_id, []).append({
@@ -4883,12 +4905,12 @@ def list_rules():
         return [
             {
                 "rule_id": r.rule_id,
-                "rule_name": r.rule_name,
-                "description": r.description,
-                "category": r.category,
-                "severity": r.severity,
-                "drilldown_fields": json.loads(r.drilldown_fields) if r.drilldown_fields else [],
-                "required_closure_fields": json.loads(r.required_closure_fields) if r.required_closure_fields else [],
+                "rule_name": r.rule_name or catalog_by_id.get(r.rule_id, {}).get("rule_name") or r.rule_id,
+                "description": r.description or catalog_by_id.get(r.rule_id, {}).get("description") or "",
+                "category": r.category or catalog_by_id.get(r.rule_id, {}).get("category") or "",
+                "severity": r.severity or catalog_by_id.get(r.rule_id, {}).get("severity") or "medium",
+                "drilldown_fields": json.loads(r.drilldown_fields) if r.drilldown_fields else catalog_by_id.get(r.rule_id, {}).get("drilldown_fields", []),
+                "required_closure_fields": json.loads(r.required_closure_fields) if r.required_closure_fields else catalog_by_id.get(r.rule_id, {}).get("required_closure_fields", []),
                 "supportive_queries": supportive_for_rule(r),
             }
             for r in rules

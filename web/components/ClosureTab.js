@@ -49,7 +49,7 @@ window.ClosureTab = {
                                 :disabled="!closureForm.caseId">
                                 <option value="">-- Choose a rule --</option>
                                 <option v-for="rule in availableRules" :key="rule.rule_id" :value="rule.rule_id">
-                                    {{ rule.rule_name }} ({{ rule.severity }})
+                                    {{ rule.rule_name || rule.rule_id || 'Unnamed rule' }} ({{ rule.severity || 'medium' }})
                                 </option>
                             </select>
 
