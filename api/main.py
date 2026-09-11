@@ -614,9 +614,14 @@ def _build_supportive_phase2_fallback(
     scored_queries = []
 
     for query_def in supportive_query_defs:
-        title = (getattr(query_def, "title", "") or "").strip()
-        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
-        description = (getattr(query_def, "description", "") or "").strip()
+        if isinstance(query_def, dict):
+            title = (query_def.get("title") or "").strip()
+            spl_query = (query_def.get("spl_query") or query_def.get("spl") or "").strip()
+            description = (query_def.get("description") or "").strip()
+        else:
+            title = (getattr(query_def, "title", "") or "").strip()
+            spl_query = (getattr(query_def, "spl_query", "") or "").strip()
+            description = (getattr(query_def, "description", "") or "").strip()
         if not title or not spl_query:
             continue
 
