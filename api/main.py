@@ -3992,6 +3992,7 @@ def analyze_case(request: AnalyzeRequest):
         case_id = request.case_id
         model = request.model
         context = request.context
+        requested_analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
 
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState, AnalysisResult
@@ -4082,6 +4083,16 @@ def analyze_case(request: AnalyzeRequest):
                 "raw_result": raw,
             })
 
+        # A Stage 3 rerun should test the original case and Phase 1 evidence
+        # without making the saved Phase 2 answers part of the input. Keep all
+        # rows for rebuilding the durable investigation state below.
+        prompt_supportive_results = supportive_results
+        if requested_analysis_stage == "initial":
+            prompt_supportive_results = [
+                item for item in supportive_results
+                if (item.get("source_system") or "").strip().lower() != "phase2_manual"
+            ]
+
         # Load prior structured closure notes for this rule to give the model
         # examples of how similar incidents have been closed historically.
         prior_closures = []
@@ -4162,7 +4173,7 @@ def analyze_case(request: AnalyzeRequest):
         db.close()
 
         prior_analysis = (request.prior_analysis or "").strip()
-        analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
+        analysis_stage = requested_analysis_stage
         prior_analysis_marker = "PHASE2_QUERIES_JSON_START"
         prior_analysis_marker_idx = prior_analysis.find(prior_analysis_marker)
         if prior_analysis_marker_idx != -1:
@@ -4245,9 +4256,9 @@ def analyze_case(request: AnalyzeRequest):
                 sanitized_text = str(source_notable_payload["sanitized_text"])[:2500]
                 prompt_parts.append(f"\nRaw Sanitized Notable:\n{sanitized_text}")
 
-        if supportive_results:
+        if prompt_supportive_results:
             prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")
-            for idx, res in enumerate(supportive_results, 1):
+            for idx, res in enumerate(prompt_supportive_results, 1):
                 raw_result = res.get("raw_result")
                 if isinstance(raw_result, dict):
                     query_text = (raw_result.get("query_text") or "").strip()
@@ -4330,7 +4341,7 @@ def analyze_case(request: AnalyzeRequest):
                 except Exception:
                     phase2_queries = _extract_phase2_queries(fallback_response_text)
 
-        already_run_titles = _already_run_supportive_titles(supportive_results)
+        already_run_titles = _already_run_supportive_titles(prompt_supportive_results)
         blocker_context = " ".join(
             [str(item) for item in (previous_state_payload.get("unresolved_questions") or [])]
             + [str(item) for item in (previous_state_payload.get("closure_blockers") or [])]

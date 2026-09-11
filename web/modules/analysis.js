@@ -891,18 +891,17 @@
                 this._setAnalysisStatus('ollama', 'Sending evidence to Ollama for initial assessment...');
 
                 let combinedContext = this.analysisContext || '';
-                const priorAnalysisText = (
-                    (this.phase2Result && this.phase2Result.analysis) ||
-                    (this.analysisResult && this.analysisResult.analysis) ||
-                    ''
-                ).toString().trim();
+                // Stage 3 is an independent initial-assessment rerun. Do not
+                // feed a prior Phase 2 response back into it; Phase 2 itself
+                // remains responsible for using the complete evidence ledger.
+                const priorAnalysisText = (this.analysisResult && this.analysisResult.analysis || '').toString().trim();
 
                 const res = await axios.post(this.apiUrl + '/db/analyze', {
                     case_id: this.analysisCaseId,
                     model: this.analysisModel,
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
-                    analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                    analysis_stage: 'initial'
                 }, { signal: this.analysisAbortController.signal });
                 // Ignore stale responses if a newer analysis has been started or cancelled.
                 if (requestId === this.analysisRequestId) {
