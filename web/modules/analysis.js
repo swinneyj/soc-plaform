@@ -837,6 +837,44 @@
             }
         },
 
+        _startPhase2Status(message) {
+            if (this.phase2StatusTimer) clearInterval(this.phase2StatusTimer);
+            this.phase2StatusStartedAt = Date.now();
+            this.phase2Status = {
+                phase: 'preparing', message: message || 'Preparing Phase 2...',
+                elapsedSeconds: 0, timedOut: false, error: ''
+            };
+            this.phase2StatusTimer = setInterval(() => {
+                const elapsedSeconds = Math.floor((Date.now() - this.phase2StatusStartedAt) / 1000);
+                const timedOut = elapsedSeconds >= 30;
+                this.phase2Status = {
+                    ...this.phase2Status,
+                    phase: timedOut ? 'timeout' : this.phase2Status.phase,
+                    message: timedOut
+                        ? 'Phase 2 analysis is still processing after 30 seconds. Ollama may be busy or the request may be stuck.'
+                        : this.phase2Status.message,
+                    elapsedSeconds, timedOut
+                };
+            }, 1000);
+        },
+
+        _setPhase2Status(phase, message, error = '') {
+            const elapsedSeconds = this.phase2StatusStartedAt
+                ? Math.floor((Date.now() - this.phase2StatusStartedAt) / 1000)
+                : 0;
+            this.phase2Status = {
+                ...this.phase2Status, phase, message, elapsedSeconds,
+                timedOut: phase === 'timeout' || Boolean(this.phase2Status && this.phase2Status.timedOut), error
+            };
+        },
+
+        _stopPhase2StatusTimer() {
+            if (this.phase2StatusTimer) {
+                clearInterval(this.phase2StatusTimer);
+                this.phase2StatusTimer = null;
+            }
+        },
+
         async runAnalysis() {
             if (!this.analysisCaseId || !this.analysisModel) {
                 alert('Please select a case ID and model');
@@ -893,7 +931,9 @@
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
                     this._setAnalysisStatus('error', 'Initial assessment failed.', err.response?.data?.detail || err.message);
-                    alert('Error: ' + (err.response?.data?.detail || err.message));
+                    if (!(err.name === 'CanceledError' || err.code === 'ERR_CANCELED' || err.name === 'AbortError')) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
                 }
             } finally {
                 if (requestId === this.analysisRequestId) {
@@ -979,8 +1019,11 @@
 
             const requestId = ++this.analysisRequestId;
             this.analysisRunning = true;
+            this.analysisAbortController = new AbortController();
+            this._startPhase2Status('Saving Phase 2 evidence...');
             try {
                 await this.savePhase2Evidence({ silent: true });
+                this._setPhase2Status('ollama', 'Sending saved Phase 2 evidence to Ollama...');
 
                 let combinedContext = this.analysisContext || '';
                 const priorAnalysisText = (
@@ -995,7 +1038,7 @@
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
-                });
+                }, { signal: this.analysisAbortController.signal });
                 if (requestId === this.analysisRequestId) {
                     const newResult = res.data;
                     if (
@@ -1010,14 +1053,28 @@
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                 }
+                if (requestId === this.analysisRequestId) {
+                    const metrics = res.data && res.data.ollama_metrics;
+                    const detail = metrics && metrics.total_duration_seconds
+                        ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
+                        : '';
+                    this._setPhase2Status('complete', 'Phase 2 analysis completed.' + detail);
+                }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
-                    alert('Error: ' + (err.response?.data?.detail || err.message));
+                    if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED' || err.name === 'AbortError') {
+                        this._setPhase2Status('cancelled', 'Phase 2 analysis cancelled.', 'The in-flight response was ignored.');
+                    } else {
+                        this._setPhase2Status('error', 'Phase 2 analysis failed.', err.response?.data?.detail || err.message);
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
                 }
             } finally {
                 if (requestId === this.analysisRequestId) {
                     this.analysisRunning = false;
+                    this.analysisAbortController = null;
                 }
+                this._stopPhase2StatusTimer();
             }
         },
 
@@ -1353,6 +1410,10 @@
             this.analysisRunning = false;
             this._setAnalysisStatus('cancelled', 'Assessment cancelled.', 'The in-flight response was ignored.');
             this._stopAnalysisStatusTimer();
+            if (this.phase2Status && this.phase2Status.phase !== 'idle') {
+                this._setPhase2Status('cancelled', 'Phase 2 analysis cancelled.', 'The in-flight response was ignored.');
+                this._stopPhase2StatusTimer();
+            }
         },
 
         getSupportiveKey(q) {

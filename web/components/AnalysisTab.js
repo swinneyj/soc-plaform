@@ -15,6 +15,7 @@ window.AnalysisTab = {
         'analysisContext',
         'analysisRunning',
         'analysisStatus',
+        'phase2Status',
         'analysisResult',
         'analysisSourceNotable',
         'analysisRule',
@@ -121,6 +122,9 @@ window.AnalysisTab = {
     computed: {
         evidenceTimelineItems() {
             return (this.investigationState && this.investigationState.evidence_summary && this.investigationState.evidence_summary.timeline) || [];
+        },
+        phase2EvidenceItems() {
+            return this.evidenceTimelineItems.filter(item => item.source_system === 'phase2_manual');
         },
         selectableEvidenceKeys() {
             return this.evidenceTimelineItems
@@ -899,10 +903,28 @@ window.AnalysisTab = {
     <!-- ============================================================= -->
     <!-- STAGE 4: PHASE 2 FOLLOW-UP & DEEP INVESTIGATION -->
     <!-- ============================================================= -->
-    <div v-show="currentStage === 4" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
+        <div v-show="currentStage === 4" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
         <div>
             <h3 class="text-lg font-bold text-blue-300">Stage 4: Phase 2 Follow-Up</h3>
             <p class="text-xs text-gray-400 mt-1">Specialized post-compromise follow-up queries generated from Phase 1 findings to address remaining questions.</p>
+        </div>
+
+        <div
+            v-if="phase2Status && phase2Status.phase !== 'idle'"
+            class="rounded border px-3 py-2 text-xs flex items-center gap-2"
+            :class="phase2Status.phase === 'error' || phase2Status.phase === 'timeout' ? 'bg-red-950/40 border-red-700 text-red-200' : phase2Status.phase === 'complete' ? 'bg-emerald-950/40 border-emerald-700 text-emerald-200' : 'bg-blue-950/40 border-blue-700 text-blue-200'"
+        >
+            <span v-if="analysisRunning && phase2Status.phase !== 'timeout'" class="animate-pulse">●</span>
+            <span v-else-if="phase2Status.phase === 'complete'">✓</span>
+            <span v-else-if="phase2Status.phase === 'error' || phase2Status.phase === 'timeout'">!</span>
+            <span class="truncate">{{ phase2Status.message }}</span>
+            <span class="font-mono ml-auto">{{ phase2Status.elapsedSeconds }}s</span>
+            <button
+                v-if="analysisRunning && phase2Status.phase === 'timeout'"
+                type="button"
+                class="px-2 py-1 rounded bg-red-700 hover:bg-red-600 text-white font-semibold"
+                @click="$emit('cancel-analysis')"
+            >Cancel</button>
         </div>
 
         <!-- Inherited Context Card from Phase 1 -->
@@ -995,6 +1017,26 @@ window.AnalysisTab = {
                             <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
                         </select>
                     </div>
+                </div>
+            </div>
+
+            <div v-if="phase2Result && phase2Result.analysis" class="bg-gray-900 border border-purple-800/80 rounded-lg p-4 space-y-2">
+                <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase 2 AI Analysis</p>
+                <p class="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed">{{ phase2Result.analysis }}</p>
+            </div>
+
+            <div v-if="phase2EvidenceItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
+                <div class="flex items-center justify-between">
+                    <p class="text-xs font-bold uppercase tracking-wider text-gray-300">Saved Phase 2 Evidence ({{ phase2EvidenceItems.length }})</p>
+                    <span class="text-[10px] uppercase text-emerald-300">Durable</span>
+                </div>
+                <div v-for="item in phase2EvidenceItems" :key="'phase2-ledger:' + evidenceItemKey(item)" class="border border-gray-800 rounded p-3 space-y-1">
+                    <div class="flex items-center justify-between gap-2">
+                        <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
+                        <span class="text-[10px] uppercase text-gray-400">{{ item.result_status || 'success' }}</span>
+                    </div>
+                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span></p>
+                    <p class="text-xs text-gray-300 whitespace-pre-wrap">{{ item.summary || 'Saved result; no observation summary recorded.' }}</p>
                 </div>
             </div>
 
