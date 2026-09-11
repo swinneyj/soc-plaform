@@ -91,6 +91,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     showPhase1Analysis: true,
                     phase2Model: '',
                     phase2Result: null,
+                    followUpPhase: 2,
                     analysisSourceNotable: null,
                     investigationState: null,
                     enrichmentManualResults: {},

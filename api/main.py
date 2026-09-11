@@ -335,14 +335,21 @@ def _ground_phase2_queries(
         if len(grounded) >= max_queries:
             break
 
-    # Re-order: not-yet-run first
+    # Re-order: not-yet-run first. When a later follow-up phase is requested,
+    # do not keep resurfacing the same saved cards just because the model
+    # repeated their titles; prefer an unused playbook query instead.
     grounded.sort(
         key=lambda q: (0 if _normalize_phase2_text(q.get("title")) not in already_run_titles else 1)
     )
-    grounded = grounded[:max_queries]
+    unused_grounded = [
+        q for q in grounded
+        if _normalize_phase2_text(q.get("title")) not in already_run_titles
+    ]
+    if unused_grounded:
+        return unused_grounded[:max_queries]
 
-    if grounded:
-        return grounded
+    if grounded and not already_run_titles:
+        return grounded[:max_queries]
 
     # Model suggested nothing usable → ranked fallback from playbook, skip already-run when possible
     return _build_supportive_phase2_fallback(

@@ -21,6 +21,7 @@ window.AnalysisTab = {
         'analysisRule',
         'showPhase1Analysis',
         'phase2Model',
+        'followUpPhase',
         'phase2Result',
         'investigationState',
         'evidenceFindingOptions',
@@ -124,7 +125,7 @@ window.AnalysisTab = {
             return (this.investigationState && this.investigationState.evidence_summary && this.investigationState.evidence_summary.timeline) || [];
         },
         phase2EvidenceItems() {
-            return this.evidenceTimelineItems.filter(item => item.source_system === 'phase2_manual');
+            return this.evidenceTimelineItems.filter(item => /^phase\d+_manual$/i.test(item.source_system || ''));
         },
         phase2SavedTitles() {
             return new Set(this.phase2EvidenceItems.map(item => (item.title || '').toString().trim().toLowerCase()));
@@ -183,6 +184,9 @@ window.AnalysisTab = {
             return Number(value || 0);
         },
         displayPhase2Queries() {
+            if (this.phase2Result && this.phase2Result.phase2_queries && this.phase2Result.phase2_queries.length) {
+                return this.phase2Result.phase2_queries;
+            }
             if (this.analysisResult && this.analysisResult.phase2_queries && this.analysisResult.phase2_queries.length) {
                 return this.analysisResult.phase2_queries;
             }
@@ -217,6 +221,15 @@ window.AnalysisTab = {
                 return;
             }
             this.currentStage = requestedStage;
+        },
+        startNextFollowUpPhase() {
+            const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
+            this.$emit('update:follow-up-phase', nextPhase);
+            this.phase2ManualResults = {};
+            this.phase2FindingTypes = {};
+            this.phase2EditedQueries = {};
+            this.currentStage = 4;
+            this.$emit('run-phase2-analysis');
         },
         getSupportiveKey(q) {
             if (typeof this.getSupportiveKeyFn === 'function') return this.getSupportiveKeyFn(q);
@@ -482,7 +495,7 @@ window.AnalysisTab = {
                 class="w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold"
                 :class="stage4Complete && currentStage !== 4 ? 'bg-emerald-500 text-black' : 'bg-black/40'"
             >{{ stage4Complete && currentStage !== 4 ? '✓' : '4' }}</span>
-            <span>Phase 2 Follow-Up</span>
+            <span>Phase {{ followUpPhase }} Follow-Up</span>
         </button>
 
         <span :class="stage4Complete ? 'text-emerald-400 font-bold' : 'text-gray-600'">&rarr;</span>
@@ -949,8 +962,8 @@ window.AnalysisTab = {
     <!-- ============================================================= -->
         <div v-show="currentStage === 4" class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-6">
         <div>
-            <h3 class="text-lg font-bold text-blue-300">Stage 4: Phase 2 Follow-Up</h3>
-            <p class="text-xs text-gray-400 mt-1">Specialized post-compromise follow-up queries generated from Phase 1 findings to address remaining questions.</p>
+            <h3 class="text-lg font-bold text-blue-300">Stage 4: Phase {{ followUpPhase }} Follow-Up</h3>
+            <p class="text-xs text-gray-400 mt-1">Targeted investigation checks generated from the prior phase findings to address remaining questions.</p>
         </div>
 
         <div
@@ -983,17 +996,17 @@ window.AnalysisTab = {
                 </span>
             </div>
             <div v-if="investigationState?.unresolved_questions && investigationState.unresolved_questions.length" class="pt-1 border-t border-gray-800">
-                <p class="text-[11px] font-semibold text-amber-300">Open Inquiries Being Targeted in Phase 2:</p>
+                <p class="text-[11px] font-semibold text-amber-300">Open Inquiries Being Targeted in Phase {{ followUpPhase }}:</p>
                 <ul class="list-disc list-inside text-xs text-gray-300 space-y-1 mt-1">
                     <li v-for="item in investigationState.unresolved_questions" :key="'p2-q:' + item">{{ item }}</li>
                 </ul>
             </div>
         </div>
 
-        <!-- Phase 2 Specialized Grounded Query Cards -->
+        <!-- Specialized Grounded Query Cards -->
         <div v-if="displayPhase2Queries.length" class="space-y-4">
             <div class="flex items-center justify-between">
-                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Specialized Phase 2 Investigative Queries</p>
+                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Specialized Phase {{ followUpPhase }} Investigative Queries</p>
                 <button
                     type="button"
                     class="text-[11px] text-blue-300 hover:text-blue-200"
@@ -1074,13 +1087,13 @@ window.AnalysisTab = {
             </div>
 
             <div v-if="phase2Result && phase2Result.analysis" class="bg-gray-900 border border-purple-800/80 rounded-lg p-4 space-y-2">
-                <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase 2 AI Analysis</p>
+                <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase {{ followUpPhase }} AI Analysis</p>
                 <div class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
             </div>
 
             <div v-if="phase2EvidenceItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
                 <div class="flex items-center justify-between">
-                    <p class="text-xs font-bold uppercase tracking-wider text-gray-300">Saved Phase 2 Evidence ({{ phase2EvidenceItems.length }})</p>
+                    <p class="text-xs font-bold uppercase tracking-wider text-gray-300">Saved Follow-Up Evidence ({{ phase2EvidenceItems.length }})</p>
                     <span class="text-[10px] uppercase text-emerald-300">Durable</span>
                 </div>
                 <div v-for="item in phase2EvidenceItems" :key="'phase2-ledger:' + evidenceItemKey(item)" class="border border-gray-800 rounded p-3 space-y-1">
@@ -1100,7 +1113,7 @@ window.AnalysisTab = {
                     :disabled="analysisRunning"
                     @click="$emit('save-phase2-evidence')"
                 >
-                    Save Phase 2 Evidence
+                    Save Phase {{ followUpPhase }} Evidence
                 </button>
                 <button
                     type="button"
@@ -1115,7 +1128,7 @@ window.AnalysisTab = {
         </div>
 
         <div v-else class="bg-gray-900 border border-gray-700 rounded-lg p-6 text-center space-y-3">
-            <p class="text-sm font-semibold text-gray-300">No Phase 2 recommendations loaded yet.</p>
+            <p class="text-sm font-semibold text-gray-300">No Phase {{ followUpPhase }} recommendations loaded yet.</p>
             <p class="text-xs text-gray-400 max-w-md mx-auto">
                 Run the initial assessment first in Stage 3, or click below to generate specialized follow-up queries grounded in this rule's detection playbook.
             </p>
@@ -1227,13 +1240,13 @@ window.AnalysisTab = {
                 <div class="flex items-start justify-between gap-4">
                     <div>
                         <p class="text-xs font-bold uppercase tracking-wider text-blue-300">Resolve Blockers Before Closure</p>
-                        <p class="text-xs text-gray-300 mt-1">Use the Phase 2 follow-up checks to answer the open questions, save the findings, and rerun the analysis. This screen will update when the blockers are reevaluated.</p>
+                        <p class="text-xs text-gray-300 mt-1">Use the current follow-up checks to answer the open questions, save the findings, and start the next investigation round. This screen will update when the blockers are reevaluated.</p>
                     </div>
                     <button
                         type="button"
                         class="flex-shrink-0 px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition"
-                        @click="goToStage(4)"
-                    >Investigate in Phase 2 &rarr;</button>
+                        @click="startNextFollowUpPhase()"
+                    >Start Phase {{ (Number(followUpPhase || 2) + 1) }} Follow-Up &rarr;</button>
                 </div>
                 <div v-if="investigationState.recommended_next_actions && investigationState.recommended_next_actions.length" class="space-y-2 pt-2 border-t border-blue-900/70">
                     <p class="text-[11px] font-semibold uppercase tracking-wider text-gray-400">Recommended next actions</p>
@@ -1298,7 +1311,7 @@ window.AnalysisTab = {
                 @click="goToStage(4)"
                 class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold text-gray-200 transition"
             >
-                &larr; Back to Phase 2 Follow-Up
+                &larr; Back to Phase {{ followUpPhase }} Follow-Up
             </button>
             <button
                 type="button"

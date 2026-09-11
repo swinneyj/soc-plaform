@@ -22,6 +22,7 @@
             this.phase2EditedQueries = {};
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
+            this.followUpPhase = 2;
             this.analysisSourceNotable = null;
 
             const caseId = this.analysisCaseId;
@@ -845,7 +846,7 @@
             if (this.phase2StatusTimer) clearInterval(this.phase2StatusTimer);
             this.phase2StatusStartedAt = Date.now();
             this.phase2Status = {
-                phase: 'preparing', message: message || 'Preparing Phase 2...',
+                phase: 'preparing', message: message || ('Preparing Phase ' + (this.followUpPhase || 2) + '...'),
                 elapsedSeconds: 0, timedOut: false, error: ''
             };
             this.phase2StatusTimer = setInterval(() => {
@@ -855,7 +856,7 @@
                     ...this.phase2Status,
                     phase: timedOut ? 'timeout' : this.phase2Status.phase,
                     message: timedOut
-                        ? 'Phase 2 analysis is still processing after 30 seconds. Ollama may be busy or the request may be stuck.'
+                        ? 'Phase ' + (this.followUpPhase || 2) + ' analysis is still processing after 30 seconds. Ollama may be busy or the request may be stuck.'
                         : this.phase2Status.message,
                     elapsedSeconds, timedOut
                 };
@@ -1024,10 +1025,11 @@
             const requestId = ++this.analysisRequestId;
             this.analysisRunning = true;
             this.analysisAbortController = new AbortController();
-            this._startPhase2Status('Saving Phase 2 evidence...');
+            const phaseNumber = this.followUpPhase || 2;
+            this._startPhase2Status('Saving Phase ' + phaseNumber + ' evidence...');
             try {
                 await this.savePhase2Evidence({ silent: true });
-                this._setPhase2Status('ollama', 'Sending saved Phase 2 evidence to Ollama...');
+                this._setPhase2Status('ollama', 'Sending saved follow-up evidence to Ollama...');
 
                 let combinedContext = this.analysisContext || '';
                 const priorAnalysisText = (
@@ -1063,14 +1065,14 @@
                     const detail = metrics && metrics.total_duration_seconds
                         ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
                         : '';
-                    this._setPhase2Status('complete', 'Phase 2 analysis completed.' + detail);
+                    this._setPhase2Status('complete', 'Phase ' + phaseNumber + ' analysis completed.' + detail);
                 }
             } catch (err) {
                 if (requestId === this.analysisRequestId) {
                     if (err.name === 'CanceledError' || err.code === 'ERR_CANCELED' || err.name === 'AbortError') {
-                        this._setPhase2Status('cancelled', 'Phase 2 analysis cancelled.', 'The in-flight response was ignored.');
+                        this._setPhase2Status('cancelled', 'Phase ' + phaseNumber + ' analysis cancelled.', 'The in-flight response was ignored.');
                     } else {
-                        this._setPhase2Status('error', 'Phase 2 analysis failed.', err.response?.data?.detail || err.message);
+                        this._setPhase2Status('error', 'Phase ' + phaseNumber + ' analysis failed.', err.response?.data?.detail || err.message);
                         alert('Error: ' + (err.response?.data?.detail || err.message));
                     }
                 }
@@ -1088,7 +1090,8 @@
                 return;
             }
 
-            const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
+            const phase2Queries = (this.phase2Result && this.phase2Result.phase2_queries) ||
+                (this.analysisResult && this.analysisResult.phase2_queries) || [];
             const entries = [];
             for (const q of phase2Queries) {
                 const key = this.getPhase2Key(q);
@@ -1113,7 +1116,7 @@
             }
 
             const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
-                source_system: 'phase2_manual',
+                source_system: 'phase' + (this.followUpPhase || 2) + '_manual',
                 replace_existing: true,
                 entries,
             });
@@ -1123,7 +1126,7 @@
             }
 
             if (!options.silent) {
-                alert('Phase 2 evidence saved for case ' + this.analysisCaseId);
+                alert('Phase ' + (this.followUpPhase || 2) + ' evidence saved for case ' + this.analysisCaseId);
                 await this.loadInvestigationState(this.analysisCaseId);
             }
         },
@@ -1135,7 +1138,7 @@
 
             try {
                 const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'phase2_manual' }
+                    params: { source_system: 'phase' + (this.followUpPhase || 2) + '_manual' }
                 });
                 const saved = {};
                 for (const item of (res.data || [])) {
@@ -1308,6 +1311,7 @@
                 analysisContext: this.analysisContext,
                 analysisModel: this.analysisModel,
                 phase2Model: this.phase2Model,
+                followUpPhase: this.followUpPhase,
                 supportiveManualResults: this.supportiveManualResults,
                 supportiveFindingTypes: this.supportiveFindingTypes,
                 enrichmentManualResults: this.enrichmentManualResults,
@@ -1358,6 +1362,9 @@
                 }
                 if (snapshot.phase2Model) {
                     this.phase2Model = snapshot.phase2Model;
+                }
+                if (snapshot.followUpPhase) {
+                    this.followUpPhase = snapshot.followUpPhase;
                 }
                 if (snapshot.supportiveManualResults) {
                     this.supportiveManualResults = snapshot.supportiveManualResults;

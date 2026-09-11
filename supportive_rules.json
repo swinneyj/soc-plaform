@@ -152,6 +152,11 @@
           "title": "Script block hashes for correlation",
           "description": "Generate hashes of script blocks to correlate across endpoints.",
           "spl_query": "index=security sourcetype=XmlWinEventLog:Microsoft-Windows-PowerShell/Operational host=$host$ user=$user$ | eval script_hash=sha1(ScriptBlockText) | stats dc(script_hash) as distinct_hashes values(script_hash) as hashes by user, host | sort - distinct_hashes"
+        },
+        {
+          "title": "Encoded PowerShell payload context",
+          "description": "Identify the encoded command, parent process, and surrounding PowerShell fields needed to determine the payload's purpose.",
+          "spl_query": "index=security sourcetype=XmlWinEventLog:Microsoft-Windows-PowerShell/Operational host=$host$ user=$user$ (Message=\"*-Enc*\" OR ScriptBlockText=\"*-Enc*\") | table _time host user Message ScriptBlockText ParentImage ParentCommandLine ProcessId | sort -_time"
         }
       ]
     },
