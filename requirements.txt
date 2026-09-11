@@ -1,4 +1,4 @@
-﻿requests
+requests
 sqlalchemy
 psycopg2-binary
 psycopg[binary]
