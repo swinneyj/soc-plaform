@@ -4151,9 +4151,64 @@ def analyze_case(request: AnalyzeRequest):
 
         # Load supportive SPL definitions tied to the rule so the model
         # can recommend additional queries to validate its hypothesis.
+        # Imported Splunk notables may carry a custom UUID instead of the
+        # platform rule_id, so resolve the query family from the notable
+        # labels/fields before loading the playbook.
         supportive_query_defs = []
-        if detection_rule:
-            rule_id = (detection_rule.rule_id or "").strip()
+        supportive_rule_id = (detection_rule.rule_id if detection_rule else (case.rule_id or "")).strip()
+        catalog_supportive_path = os.path.join(get_platform_root(), "supportive_rules.json")
+        catalog_rules = []
+        if os.path.isfile(catalog_supportive_path):
+            try:
+                with open(catalog_supportive_path, "r", encoding="utf-8") as rf:
+                    catalog_rules = json.load(rf).get("rules") or []
+            except Exception as ex:
+                print(f"Failed to load supportive rule catalog: {ex}", file=sys.stderr)
+
+        if catalog_rules:
+            notable_fields = (source_notable_payload or {}).get("fields") or {}
+            anchor_text = " ".join(
+                str(value) for value in [
+                    case.rule_name,
+                    notable_fields.get("correlation_search"),
+                    notable_fields.get("title"),
+                    notable_fields.get("description"),
+                    notable_fields.get("file_path"),
+                    notable_fields.get("file_name"),
+                    notable_fields.get("process"),
+                    notable_fields.get("parent_process"),
+                ] if value
+            )
+            normalized_anchor = _normalize_rule_match_text(anchor_text)
+            exact_catalog = next(
+                (item for item in catalog_rules
+                 if (item.get("rule_id") or "").strip() == supportive_rule_id),
+                None,
+            )
+            if not exact_catalog:
+                anchor_tokens = set(normalized_anchor.split())
+                best_catalog = None
+                best_score = 0
+                for item in catalog_rules:
+                    candidate_text = " ".join([
+                        str(item.get("rule_id") or ""),
+                        str(item.get("rule_name") or ""),
+                        " ".join(str(q.get("title") or "") for q in (item.get("supportive_queries") or [])),
+                    ])
+                    candidate_tokens = set(_normalize_rule_match_text(candidate_text).split())
+                    score = len(anchor_tokens & candidate_tokens)
+                    if score > best_score:
+                        best_catalog = item
+                        best_score = score
+                if best_catalog and best_score >= 2:
+                    supportive_rule_id = (best_catalog.get("rule_id") or "").strip()
+
+        if supportive_rule_id and case.rule_id != supportive_rule_id:
+            case.rule_id = supportive_rule_id
+            db.commit()
+
+        if supportive_rule_id:
+            rule_id = supportive_rule_id
 
             # Base queries explicitly keyed to this rule_id
             supportive_query_defs.extend(
@@ -4171,28 +4226,26 @@ def analyze_case(request: AnalyzeRequest):
                     if q.title not in existing_titles:
                         supportive_query_defs.append(q)
 
-            # Merge specialized follow-up queries from supportive_rules.json
-            repo_supportive_path = os.path.join(get_platform_root(), "supportive_rules.json")
-            if os.path.isfile(repo_supportive_path):
-                try:
-                    with open(repo_supportive_path, "r", encoding="utf-8") as rf:
-                        rules_file_data = json.load(rf)
-                    existing_titles = {_normalize_phase2_text(getattr(q, "title", "")) for q in supportive_query_defs}
-                    for r_entry in (rules_file_data.get("rules") or []):
-                        if (r_entry.get("rule_id") or "").strip().lower() == rule_id.lower():
-                            for sq in (r_entry.get("supportive_queries") or []):
-                                t = sq.get("title") or ""
-                                if _normalize_phase2_text(t) not in existing_titles:
-                                    class VirtualQuery:
-                                        def __init__(self, t, d, s, qid=None):
-                                            self.id = qid
-                                            self.title = t
-                                            self.description = d
-                                            self.spl_query = s
-                                    supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
-                                    existing_titles.add(_normalize_phase2_text(t))
-                except Exception as ex:
-                    print(f"Failed to load supportive_rules.json: {ex}", file=sys.stderr)
+            # Merge specialized follow-up queries from the catalog already
+            # loaded above. This also works when the DB has no matching
+            # SupportiveQuery rows but the checked-in playbook is present.
+            try:
+                existing_titles = {_normalize_phase2_text(getattr(q, "title", "")) for q in supportive_query_defs}
+                for r_entry in catalog_rules:
+                    if (r_entry.get("rule_id") or "").strip().lower() == rule_id.lower():
+                        for sq in (r_entry.get("supportive_queries") or []):
+                            t = sq.get("title") or ""
+                            if _normalize_phase2_text(t) not in existing_titles:
+                                class VirtualQuery:
+                                    def __init__(self, t, d, s, qid=None):
+                                        self.id = qid
+                                        self.title = t
+                                        self.description = d
+                                        self.spl_query = s
+                                supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
+                                existing_titles.add(_normalize_phase2_text(t))
+            except Exception as ex:
+                print(f"Failed to merge supportive rule catalog: {ex}", file=sys.stderr)
 
         db.close()
 
