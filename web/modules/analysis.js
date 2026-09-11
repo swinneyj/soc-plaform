@@ -1099,7 +1099,12 @@
                 const key = this.getPhase2Key(q);
                 const resultText = (this.phase2ManualResults[key] || '').trim();
                 const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
-                if (!resultText && !queryText) {
+                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                // Do not turn untouched generated cards into durable pending
+                // evidence. They create false closure blockers and are not
+                // useful to later phases. Explicit no-results/failure states
+                // are still saved even when the analyst has no result text.
+                if (!resultText && resultStatus === 'success') {
                     continue;
                 }
 
@@ -1113,7 +1118,7 @@
                     target_questions: this.phase2ResolutionQuestions[key]
                         ? [this.phase2ResolutionQuestions[key]]
                         : (q.target_questions || []),
-                    result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
+                    result_status: resultStatus,
                 });
             }
 
