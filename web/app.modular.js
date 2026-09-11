@@ -104,6 +104,9 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     phase2FindingTypes: {},
                     phase2ResolutionTypes: {},
                     phase2ResolutionQuestions: {},
+                    supportivePlaybookAvailable: null,
+                    supportiveDraftBusy: false,
+                    supportiveDraftError: '',
 
                     // Closure Notes
                     availableRules: [],

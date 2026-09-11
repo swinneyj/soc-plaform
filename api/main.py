@@ -707,6 +707,10 @@ class SupportiveQueryPayload(BaseModel):
     spl_query: str = Field(..., description="SPL to run in Splunk or another system")
 
 
+class SupportivePlaybookDraftRequest(BaseModel):
+    case_id: str = Field(..., description="Case used to ground the draft playbook")
+
+
 class SupportiveQueryUpdatePayload(BaseModel):
     """Partial update payload for supportive SPL queries."""
 
@@ -4536,6 +4540,8 @@ def analyze_case(request: AnalyzeRequest):
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
             "investigation_evidence_count": len(supportive_results),
+            "supportive_playbook_available": bool(supportive_query_defs),
+            "supportive_rule_id": supportive_rule_id or (case.rule_id or ""),
             "ollama_metrics": {
                 "eval_tokens": result.get("tokens", 0),
                 "prompt_tokens": result.get("prompt_eval_count", 0),
@@ -4823,6 +4829,89 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
         ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/db/supportive-queries/draft", tags=["Rules"])
+def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
+    """Create reviewable, unsaved SPL drafts for a rule without a playbook.
+
+    Drafts intentionally use an explicit index placeholder. They are never
+    returned as authoritative investigation cards until an analyst approves
+    and saves them through the normal supportive-query editor.
+    """
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQuery
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == payload.case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {payload.case_id} not found")
+
+        rule_key = (case.rule_id or "").strip()
+        if not rule_key:
+            rule_key = re.sub(r"[^a-z0-9]+", "_", (case.rule_name or "unsupported_rule").lower()).strip("_") or "unsupported_rule"
+        existing = db.query(SupportiveQuery).filter(SupportiveQuery.rule_id == rule_key).count()
+        if existing:
+            return {"requires_approval": False, "playbook_available": True, "rule_id": case.rule_id, "draft_queries": []}
+
+        source_fields: Dict[str, Any] = {}
+        # SplunkEvent stores the promotion linkage inside the raw JSON
+        # payload, rather than as a mapped ORM column.
+        for event in db.query(SplunkEvent).order_by(SplunkEvent.id.desc()).all():
+            if not event.raw:
+                continue
+            try:
+                event_payload = json.loads(event.raw) or {}
+            except Exception:
+                continue
+            if event_payload.get("promoted_case_id") == payload.case_id:
+                source_fields = event_payload.get("fields") or {}
+                break
+
+        host = source_fields.get("host") or source_fields.get("destination") or "$host$"
+        user = source_fields.get("user") or source_fields.get("username") or "$user$"
+        process = source_fields.get("process") or source_fields.get("process_name") or "$process$"
+        rule_label = case.rule_name or source_fields.get("correlation_search") or case.rule_id or "unsupported rule"
+        anchor = " ".join(str(source_fields.get(key) or "") for key in ("title", "description", "correlation_search", "rule_id", "process", "file_path"))
+        quoted_anchor = re.sub(r"[^A-Za-z0-9_.:/ -]", " ", anchor).strip()[:180] or rule_label
+
+        drafts = [
+            {
+                "rule_id": rule_key,
+                "title": "Rule-scoped event context",
+                "description": "Review events matching the notable's rule and core entities. Replace the index placeholder before approval.",
+                "spl_query": f'index=<REVIEW_REQUIRED> host="{host}" ("{quoted_anchor}" OR process="{process}") | table _time host user process parent_process command_line _raw | sort 0 -_time',
+            },
+            {
+                "rule_id": rule_key,
+                "title": "Related activity by host and user",
+                "description": "Look for adjacent activity by the affected host and identity around the notable time window.",
+                "spl_query": f'index=<REVIEW_REQUIRED> host="{host}" user="{user}" earliest=-24h | stats count values(process) as processes values(parent_process) as parent_processes values(command_line) as command_lines by host user | sort -count',
+            },
+            {
+                "rule_id": rule_key,
+                "title": "Process and destination correlation",
+                "description": "Check whether the process or destination appears with related network or execution activity.",
+                "spl_query": f'index=<REVIEW_REQUIRED> host="{host}" (process="{process}" OR dest="{source_fields.get("destination_ip") or "$destination_ip$"}") | table _time host user process parent_process dest dest_ip command_line action result | sort 0 -_time',
+            },
+        ]
+        return {
+            "requires_approval": True,
+            "playbook_available": False,
+            "case_id": payload.case_id,
+            "rule_id": rule_key,
+            "rule_name": rule_label,
+            "draft_queries": drafts,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if db is not None:
+            db.close()
 
 
 @app.post("/api/db/supportive-queries", tags=["Rules"])

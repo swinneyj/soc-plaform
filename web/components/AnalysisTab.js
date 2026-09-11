@@ -34,6 +34,9 @@ window.AnalysisTab = {
         'phase2ResolutionTypes',
         'phase2ResolutionQuestions',
         'phase2EditedQueries',
+        'supportivePlaybookAvailable',
+        'supportiveDraftBusy',
+        'supportiveDraftError',
         'supportiveEditorOpen',
         'supportiveEditorBusy',
         'supportiveEditorQueries',
@@ -75,6 +78,7 @@ window.AnalysisTab = {
         'go-to-closure-from-analysis',
         'open-placeholder-alias-editor',
         'open-supportive-editor',
+        'generate-supportive-playbook-draft',
         'close-supportive-editor',
         'add-supportive-query',
         'remove-supportive-query',
@@ -1187,11 +1191,24 @@ window.AnalysisTab = {
         </div>
 
         <div v-else class="bg-gray-900 border border-gray-700 rounded-lg p-6 text-center space-y-3">
-            <p class="text-sm font-semibold text-gray-300">No Phase {{ followUpPhase }} recommendations loaded yet.</p>
-            <p class="text-xs text-gray-400 max-w-md mx-auto">
+            <div v-if="supportivePlaybookAvailable === false" class="bg-amber-950/40 border border-amber-700/70 rounded-lg p-4 text-left space-y-2">
+                <p class="text-sm font-semibold text-amber-200">No supportive playbook exists for this rule yet.</p>
+                <p class="text-xs text-gray-300">Generate draft SPL from this notable, review the index and fields, then explicitly save the approved queries to create the rule playbook.</p>
+                <p v-if="supportiveDraftError" class="text-xs text-red-300">{{ supportiveDraftError }}</p>
+                <button
+                    type="button"
+                    class="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded text-xs font-bold text-white transition"
+                    :disabled="analysisRunning || supportiveDraftBusy || !analysisCaseId"
+                    @click="$emit('generate-supportive-playbook-draft')"
+                >
+                    {{ supportiveDraftBusy ? 'Generating Drafts...' : 'Generate Draft Supportive Playbook' }}
+                </button>
+            </div>
+            <p v-if="supportivePlaybookAvailable !== false" class="text-sm font-semibold text-gray-300">No Phase {{ followUpPhase }} recommendations loaded yet.</p>
+            <p v-if="supportivePlaybookAvailable !== false" class="text-xs text-gray-400 max-w-md mx-auto">
                 Run the initial assessment first in Stage 3, or click below to generate specialized follow-up queries grounded in this rule's detection playbook.
             </p>
-            <button
+            <button v-if="supportivePlaybookAvailable !== false"
                 type="button"
                 class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow inline-flex items-center gap-2"
                 :disabled="analysisRunning || !analysisCaseId"

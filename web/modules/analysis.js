@@ -341,6 +341,8 @@
                 }
 
                 await this.loadRules();
+                this.supportivePlaybookAvailable = true;
+                this.supportiveDraftError = '';
 
                 // If the currently selected rule matches, refresh its
                 // reference so the updated queries show up immediately.
@@ -924,6 +926,7 @@
                         newResult.phase2_queries = this.analysisResult.phase2_queries;
                     }
                     this.analysisResult = newResult;
+                    this.supportivePlaybookAvailable = newResult.supportive_playbook_available !== false;
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                     this._storeAnalysisStateSnapshot();
@@ -1059,6 +1062,7 @@
                         newResult.phase2_queries = this.analysisResult.phase2_queries;
                     }
                     this.phase2Result = newResult;
+                    this.supportivePlaybookAvailable = newResult.supportive_playbook_available !== false;
                     this.investigationState = newResult.investigation_state || this.investigationState;
                     await this._ensureTimelineEvidenceIds(this.analysisCaseId);
                     this._storeAnalysisStateSnapshot();
@@ -1085,6 +1089,38 @@
                     this.analysisAbortController = null;
                 }
                 this._stopPhase2StatusTimer();
+            }
+        },
+
+        async generateSupportivePlaybookDraft() {
+            if (!this.analysisCaseId) {
+                return;
+            }
+            this.supportiveDraftBusy = true;
+            this.supportiveDraftError = '';
+            try {
+                const res = await axios.post(this.apiUrl + '/db/supportive-queries/draft', {
+                    case_id: this.analysisCaseId,
+                });
+                const data = res.data || {};
+                if (!data.draft_queries || !data.draft_queries.length) {
+                    this.supportiveDraftError = data.playbook_available
+                        ? 'A supportive playbook already exists for this rule.'
+                        : 'No draft queries could be generated from this notable.';
+                    return;
+                }
+                this.supportiveEditorRuleId = data.rule_id || '';
+                this.supportiveEditorQueries = data.draft_queries.map((q, index) => ({
+                    ...q,
+                    id: null,
+                    localKey: `draft-${index}`,
+                }));
+                this.supportiveEditorError = 'Draft only: review the index, fields, and SPL before saving this playbook.';
+                this.supportiveEditorOpen = true;
+            } catch (err) {
+                this.supportiveDraftError = err.response?.data?.detail || err.message || 'Failed to generate playbook drafts.';
+            } finally {
+                this.supportiveDraftBusy = false;
             }
         },
 
