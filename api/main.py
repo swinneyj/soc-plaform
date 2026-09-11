@@ -120,6 +120,23 @@ class AnalyzeRequest(BaseModel):
     context: str = ""
     prior_analysis: str = ""
     analysis_stage: str = "initial"
+    analysis_phase: int = 1
+
+
+PHASE_SPECIFIC_SUPPORTIVE_QUERIES = {
+    "linux_ssh_key_creation": [
+        {
+            "title": "Authorized key ownership and session context",
+            "description": "Determine which account, audit session, source address, and command context were associated with the authorized_keys change.",
+            "spl_query": "index=nix host=\"$host$\" (\"authorized_keys\" OR \"ssh-keygen\") | rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\" | rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\" | rex field=_raw \"acct=\\\"(?<account>[^\\\"]+)\\\"\" | rex field=_raw \"auid=(?<auid>\\d+)\" | rex field=_raw \"ses=(?<session_id>\\d+)\" | rex field=_raw \"addr=(?<src_ip>\\S+)\" | search file_path=\"*/.ssh/authorized_keys*\" OR command=\"ssh-keygen\" | stats earliest(_time) as first_seen latest(_time) as last_seen values(account) as accounts values(auid) as auids values(session_id) as sessions values(src_ip) as source_ips values(command) as commands by host file_path | sort 0 -last_seen"
+        },
+        {
+            "title": "Other suspicious activity on host",
+            "description": "Look for additional persistence, privilege, download, or network activity on the affected host around the key modification.",
+            "spl_query": "index=nix host=\"$host$\" earliest=-24h (\"authorized_keys\" OR \"ssh-keygen\" OR \"sudo\" OR \"curl\" OR \"wget\" OR \"nc\" OR \"chmod\" OR \"chown\") | rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\" | rex field=_raw \"exe=\\\"(?<exe>[^\\\"]+)\\\"\" | rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\" | stats count as events earliest(_time) as first_seen latest(_time) as last_seen values(command) as commands values(exe) as executables values(file_path) as file_paths by host | sort -events"
+        }
+    ]
+}
 
 
 def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
@@ -4017,6 +4034,7 @@ def analyze_case(request: AnalyzeRequest):
         model = request.model
         context = request.context
         requested_analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
+        requested_phase_number = max(1, int(request.analysis_phase or 1))
 
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState, AnalysisResult
@@ -4244,10 +4262,25 @@ def analyze_case(request: AnalyzeRequest):
                                         self.title = t
                                         self.description = d
                                         self.spl_query = s
-                                supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
-                                existing_titles.add(_normalize_phase2_text(t))
+                                phase_min = int(sq.get("phase_min") or 2)
+                                if phase_min <= requested_phase_number:
+                                    supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
+                                    existing_titles.add(_normalize_phase2_text(t))
             except Exception as ex:
                 print(f"Failed to merge supportive rule catalog: {ex}", file=sys.stderr)
+
+            if requested_phase_number > 2:
+                existing_titles = {
+                    _normalize_phase2_text(
+                        query_def.get("title") if isinstance(query_def, dict) else getattr(query_def, "title", "")
+                    )
+                    for query_def in supportive_query_defs
+                }
+                for query_def in PHASE_SPECIFIC_SUPPORTIVE_QUERIES.get(rule_id, []):
+                    title_key = _normalize_phase2_text(query_def.get("title"))
+                    if title_key not in existing_titles:
+                        supportive_query_defs.append(query_def)
+                        existing_titles.add(title_key)
 
         db.close()
 
@@ -4421,6 +4454,14 @@ def analyze_case(request: AnalyzeRequest):
                     phase2_queries = _extract_phase2_queries(fallback_response_text)
 
         already_run_titles = _already_run_supportive_titles(prompt_supportive_results)
+        phase_query_defs = supportive_query_defs
+        if requested_phase_number > 2:
+            phase_query_defs = [
+                query_def for query_def in supportive_query_defs
+                if _normalize_phase2_text(
+                    query_def.get("title") if isinstance(query_def, dict) else getattr(query_def, "title", "")
+                ) not in already_run_titles
+            ]
         blocker_context = " ".join(
             [str(item) for item in (previous_state_payload.get("unresolved_questions") or [])]
             + [str(item) for item in (previous_state_payload.get("closure_blockers") or [])]
@@ -4428,7 +4469,7 @@ def analyze_case(request: AnalyzeRequest):
 
         if not phase2_queries:
             phase2_queries = _build_supportive_phase2_fallback(
-                supportive_query_defs,
+                phase_query_defs,
                 f"{prior_analysis} {blocker_context}",
                 response_text,
                 already_run_titles=already_run_titles,
@@ -4436,7 +4477,7 @@ def analyze_case(request: AnalyzeRequest):
 
         phase2_queries = _ground_phase2_queries(
             phase2_queries,
-            supportive_query_defs,
+            phase_query_defs,
             already_run_titles=already_run_titles,
         )
         phase2_queries = _annotate_phase2_targets(phase2_queries, previous_state_payload)
@@ -4487,10 +4528,10 @@ def analyze_case(request: AnalyzeRequest):
             },
             "supportive_queries": [
                 {
-                    "id": getattr(q, "id", None),
-                    "title": q.title,
-                    "description": q.description,
-                    "spl_query": q.spl_query,
+                    "id": q.get("id") if isinstance(q, dict) else getattr(q, "id", None),
+                    "title": q.get("title") if isinstance(q, dict) else q.title,
+                    "description": q.get("description") if isinstance(q, dict) else q.description,
+                    "spl_query": q.get("spl_query") if isinstance(q, dict) else q.spl_query,
                 }
                 for q in supportive_query_defs
             ],

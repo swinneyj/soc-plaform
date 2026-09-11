@@ -1045,7 +1045,8 @@
                     model: effectiveModel,
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
-                    analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                    analysis_stage: priorAnalysisText ? 'follow_up' : 'initial',
+                    analysis_phase: phaseNumber
                 }, { signal: this.analysisAbortController.signal });
                 if (requestId === this.analysisRequestId) {
                     const newResult = res.data;
