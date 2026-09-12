@@ -19,6 +19,7 @@ import subprocess
 import datetime
 import re
 import io
+import csv
 import zipfile
 import ast
 from pathlib import Path
@@ -709,6 +710,12 @@ class SupportiveQueryPayload(BaseModel):
 
 class SupportivePlaybookDraftRequest(BaseModel):
     case_id: str = Field(..., description="Case used to ground the draft playbook")
+
+
+class SupportiveResultsImportRequest(BaseModel):
+    case_id: str = Field(..., description="Case used to ground the draft playbook")
+    content: str = Field(..., min_length=1, max_length=2_000_000, description="Pasted or uploaded Splunk results")
+    filename: Optional[str] = Field(None, description="Original filename, if uploaded")
 
 
 class SupportiveQueryUpdatePayload(BaseModel):
@@ -4951,6 +4958,101 @@ def supportive_playbook_status(case_id: str):
             "playbook_available": query_count > 0,
             "query_count": query_count,
         }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if db is not None:
+            db.close()
+
+
+@app.post("/api/db/supportive-queries/import-results", tags=["Rules"])
+def import_supportive_results(payload: SupportiveResultsImportRequest):
+    """Turn analyst-provided Splunk results into reviewable, unsaved SPL drafts."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQuery
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == payload.case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {payload.case_id} not found")
+
+        records: List[Dict[str, Any]] = []
+        text_content = payload.content.strip()
+        suffix = (payload.filename or "").lower()
+        try:
+            parsed = json.loads(text_content) if suffix.endswith(".json") or text_content[:1] in "[{" else None
+            if isinstance(parsed, list):
+                records = [item for item in parsed if isinstance(item, dict)]
+            elif isinstance(parsed, dict):
+                for key in ("results", "events", "data", "rows"):
+                    if isinstance(parsed.get(key), list):
+                        records = [item for item in parsed[key] if isinstance(item, dict)]
+                        break
+                if not records:
+                    records = [parsed]
+        except Exception:
+            records = []
+
+        if not records and (suffix.endswith(".csv") or any("," in line for line in text_content.splitlines()[:3])):
+            try:
+                reader = csv.DictReader(io.StringIO(text_content))
+                records = [dict(row) for row in reader if row]
+            except Exception:
+                records = []
+
+        observed: Dict[str, List[str]] = {"index": [], "sourcetype": [], "host": [], "field_names": []}
+        def add_observed(bucket: str, value: Any):
+            if value is None:
+                return
+            for item in (value if isinstance(value, list) else [value]):
+                value_text = str(item).strip().strip('"')
+                if value_text and value_text not in observed[bucket]:
+                    observed[bucket].append(value_text)
+
+        for record in records:
+            lowered = {str(k).lower(): v for k, v in record.items()}
+            add_observed("index", lowered.get("index") or lowered.get("indexes") or lowered.get("search_index"))
+            add_observed("sourcetype", lowered.get("sourcetype") or lowered.get("source_type") or lowered.get("searchtype"))
+            add_observed("host", lowered.get("host") or lowered.get("dest") or lowered.get("destination"))
+            observed["field_names"].extend(str(k) for k in record.keys() if str(k) not in observed["field_names"])
+
+        for line in text_content.splitlines():
+            for key, bucket in (("index", "index"), ("sourcetype", "sourcetype"), ("searchtype", "sourcetype"), ("host", "host")):
+                match = re.search(rf"(?:^|[\s,]){key}\s*[:=]\s*[\"']?([^\s,\"']+)", line, re.IGNORECASE)
+                if match:
+                    add_observed(bucket, match.group(1))
+
+        # Pull the case's core entities from the stored notable.
+        source_fields: Dict[str, Any] = {}
+        for event in db.query(SplunkEvent).order_by(SplunkEvent.id.desc()).all():
+            try:
+                event_payload = json.loads(event.raw) if event.raw else {}
+            except Exception:
+                continue
+            if event_payload.get("promoted_case_id") == payload.case_id:
+                source_fields = event_payload.get("fields") or {}
+                break
+        host = source_fields.get("host") or source_fields.get("destination") or (observed["host"][0] if observed["host"] else "$host$")
+        user = source_fields.get("user") or source_fields.get("username") or "$user$"
+        process = source_fields.get("process") or source_fields.get("process_name") or "$process$"
+        rule_key = (case.rule_id or source_fields.get("rule_id") or "").strip()
+        if not rule_key:
+            rule_key = re.sub(r"[^a-z0-9]+", "_", (case.rule_name or "unsupported_rule").lower()).strip("_") or "unsupported_rule"
+        index_clause = " OR ".join(f'index="{value}"' for value in observed["index"]) or "index=<REVIEW_REQUIRED>"
+        sourcetype_clause = " OR ".join(f'sourcetype="{value}"' for value in observed["sourcetype"])
+        source_filter = f'({index_clause})' if " OR " in index_clause else index_clause
+        if sourcetype_clause:
+            source_filter += f" ({sourcetype_clause})"
+        drafts = [
+            {"rule_id": rule_key, "title": "Observed event context", "description": "Search the observed Splunk data source for the notable's core entities.", "spl_query": f'{source_filter} host="{host}" (process="{process}" OR user="{user}") | table _time host user process parent_process command_line _raw | sort 0 -_time'},
+            {"rule_id": rule_key, "title": "Related host and user activity", "description": "Review adjacent activity for the affected host and identity in the imported data source.", "spl_query": f'{source_filter} host="{host}" user="{user}" earliest=-24h | stats count values(process) as processes values(command_line) as command_lines by host user | sort -count'},
+            {"rule_id": rule_key, "title": "Process and persistence correlation", "description": "Check for related execution or persistence activity around the notable.", "spl_query": f'{source_filter} host="{host}" (process="{process}" OR file_path="{source_fields.get("file_path") or "$file_path$"}") | table _time host user process parent_process file_path command_line action result | sort 0 -_time'},
+        ]
+        return {"requires_approval": True, "playbook_available": False, "case_id": payload.case_id, "rule_id": rule_key, "observed": observed, "record_count": len(records), "draft_queries": drafts}
     except HTTPException:
         raise
     except Exception as e:

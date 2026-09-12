@@ -37,6 +37,8 @@ window.AnalysisTab = {
         'supportivePlaybookAvailable',
         'supportiveDraftBusy',
         'supportiveDraftError',
+        'supportiveImportBusy',
+        'supportiveImportError',
         'supportiveEditorOpen',
         'supportiveEditorBusy',
         'supportiveEditorQueries',
@@ -79,6 +81,7 @@ window.AnalysisTab = {
         'open-placeholder-alias-editor',
         'open-supportive-editor',
         'generate-supportive-playbook-draft',
+        'import-supportive-results',
         'close-supportive-editor',
         'add-supportive-query',
         'remove-supportive-query',
@@ -110,7 +113,9 @@ window.AnalysisTab = {
             selectedEvidenceKeys: [],
             currentStage: 1,
             evidenceResultStatuses: {},
-            showResolvedFollowUp: false
+            showResolvedFollowUp: false,
+            supportiveImportText: '',
+            supportiveImportFilename: ''
         };
     },
     watch: {
@@ -238,6 +243,21 @@ window.AnalysisTab = {
         }
     },
     methods: {
+        async readSupportiveImportFile(event) {
+            const file = event && event.target && event.target.files && event.target.files[0];
+            if (!file) return;
+            this.supportiveImportFilename = file.name || '';
+            this.supportiveImportText = await file.text();
+            event.target.value = '';
+        },
+        submitSupportiveImport() {
+            const content = (this.supportiveImportText || '').trim();
+            if (!content) return;
+            this.$emit('import-supportive-results', {
+                filename: this.supportiveImportFilename,
+                content,
+            });
+        },
         goToStage(stage) {
             const requestedStage = Number(stage);
             if (requestedStage <= 1) {
@@ -1438,6 +1458,19 @@ window.AnalysisTab = {
                 </div>
             </div>
             <p v-if="supportiveEditorError" class="mb-3 text-sm text-red-300">{{ supportiveEditorError }}</p>
+            <div class="mb-4 p-3 bg-blue-950/30 border border-blue-800 rounded space-y-2">
+                <p class="text-xs font-bold text-blue-200">Ground drafts with Splunk results</p>
+                <p class="text-[11px] text-gray-300">Upload CSV, JSON, or text containing fields such as <span class="font-mono">index</span>, <span class="font-mono">sourcetype</span>, <span class="font-mono">host</span>, and <span class="font-mono">searchtype</span>. Imported results create unsaved drafts for review.</p>
+                <div class="flex flex-wrap gap-2 items-center">
+                    <input type="file" accept=".csv,.json,.txt,.log,application/json,text/csv,text/plain" @change="readSupportiveImportFile" class="text-xs text-gray-300 file:mr-2 file:px-2 file:py-1 file:rounded file:border-0 file:bg-gray-700 file:text-gray-100">
+                    <span v-if="supportiveImportFilename" class="text-[11px] text-gray-400">{{ supportiveImportFilename }}</span>
+                </div>
+                <textarea v-model="supportiveImportText" rows="3" class="w-full bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs font-mono" placeholder="index=linux sourcetype=auditd host=prod-app-07\n_or paste CSV/JSON results_"></textarea>
+                <p v-if="supportiveImportError" class="text-xs text-red-300">{{ supportiveImportError }}</p>
+                <button type="button" class="px-3 py-2 bg-blue-600 hover:bg-blue-500 rounded text-xs font-semibold" :disabled="supportiveImportBusy || !supportiveImportText.trim()" @click="submitSupportiveImport">
+                    {{ supportiveImportBusy ? 'Importing...' : 'Build Drafts from Splunk Results' }}
+                </button>
+            </div>
             <div v-for="(q, index) in supportiveEditorQueries" :key="q.localKey || q.id || index" class="border border-gray-700 rounded p-3 mb-3 space-y-2">
                 <div class="flex gap-2">
                     <input v-model="q.title" class="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-sm" placeholder="Query title">

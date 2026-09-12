@@ -1136,6 +1136,34 @@
             }
         },
 
+        async importSupportiveResults(payload) {
+            if (!this.analysisCaseId || !payload || !payload.content) {
+                return;
+            }
+            this.supportiveImportBusy = true;
+            this.supportiveImportError = '';
+            try {
+                const res = await axios.post(this.apiUrl + '/db/supportive-queries/import-results', {
+                    case_id: this.analysisCaseId,
+                    filename: payload.filename || null,
+                    content: payload.content,
+                });
+                const data = res.data || {};
+                this.supportiveEditorRuleId = data.rule_id || '';
+                this.supportiveEditorQueries = (data.draft_queries || []).map((q, index) => ({
+                    ...q,
+                    id: null,
+                    localKey: `import-${Date.now()}-${index}`,
+                }));
+                this.supportiveEditorError = `Imported ${data.record_count || 0} Splunk result row(s). Review the observed source metadata and approve the drafts before saving.`;
+                this.supportiveEditorOpen = true;
+            } catch (err) {
+                this.supportiveImportError = err.response?.data?.detail || err.message || 'Failed to import Splunk results.';
+            } finally {
+                this.supportiveImportBusy = false;
+            }
+        },
+
         async savePhase2Evidence(options = {}) {
             if (!this.analysisCaseId) {
                 return;

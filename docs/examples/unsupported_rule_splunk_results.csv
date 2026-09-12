@@ -1,0 +1,3 @@
+_time,index,sourcetype,host,user,process,file_path,command_line
+2026-09-11T18:42:00Z,linux,auditd,prod-app-07,deploy,/usr/bin/crontab,/etc/cron.d/backup-sync,crontab -e
+2026-09-11T18:43:12Z,linux,auditd,prod-app-07,deploy,/usr/bin/bash,/tmp/backup-sync.sh,/bin/bash /tmp/backup-sync.sh

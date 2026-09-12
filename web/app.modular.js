@@ -107,6 +107,8 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     supportivePlaybookAvailable: null,
                     supportiveDraftBusy: false,
                     supportiveDraftError: '',
+                    supportiveImportBusy: false,
+                    supportiveImportError: '',
 
                     // Closure Notes
                     availableRules: [],
