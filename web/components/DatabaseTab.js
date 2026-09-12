@@ -153,6 +153,9 @@ window.DatabaseTab = {
             }
             const ids = (this.filteredTriageData || []).map(c => c.case_id);
             this.$emit('update:selected-triage-case-ids', ids);
+        },
+        toggleAllTriageFromButton() {
+            this.toggleSelectAllTriage({ target: { checked: !this.allTriageSelected } });
         }
     },
     template: `
@@ -569,13 +572,13 @@ window.DatabaseTab = {
             </div>
 
             <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
-                <div class="flex space-x-2 mb-4">
+                <div class="flex flex-wrap items-center gap-2 mb-4">
                     <input
                         :value="dbSearch"
                         @input="$emit('update:db-search', $event.target.value)"
                         type="text"
                         placeholder="Search case, rule, host, user, verdict..."
-                        class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                        class="flex-1 min-w-[220px] px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
                     <select
                         :value="dbVerdictFilter"
                         @change="$emit('update:db-verdict-filter', $event.target.value)"
@@ -585,36 +588,14 @@ window.DatabaseTab = {
                         <option value="suspicious">Suspicious</option>
                         <option value="malicious">Malicious</option>
                     </select>
-                    <label class="flex items-center text-xs text-gray-300 space-x-1">
-                        <input
-                            type="checkbox"
-                            :checked="allTriageSelected"
-                            @change="toggleSelectAllTriage($event)"
-                            class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
-                        <span>Select all</span>
-                    </label>
-                    <label class="flex items-center text-xs text-gray-300 space-x-1">
-                        <input
-                            type="checkbox"
-                            :checked="triageFromPastedOnly"
-                            @change="$emit('update:triage-from-pasted-only', $event.target.checked)"
-                            class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
-                        <span>From pasted notables only</span>
-                    </label>
-                    <label class="flex items-center text-xs text-gray-300 space-x-1">
-                        <input
-                            type="checkbox"
-                            :checked="deleteAnalysisWithCase"
-                            @change="$emit('update:delete-analysis-with-case', $event.target.checked)"
-                            class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
-                        <span>Delete AI analysis with cases</span>
-                    </label>
-                    <button @click="$emit('load-triage-data')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
+                    <button @click="toggleAllTriageFromButton" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Select All</button>
+                    <button v-if="selectedTriageCaseIds && selectedTriageCaseIds.length" @click="$emit('update:selected-triage-case-ids', [])" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
+                    <button @click="$emit('load-triage-data')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
                     <button
                         @click="$emit('delete-selected-triage-cases')"
                         :disabled="!selectedTriageCaseIds || !selectedTriageCaseIds.length"
-                        class="px-4 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-sm font-semibold transition">
-                        Delete selected
+                        class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                        Delete Selected
                     </button>
                 </div>
 
