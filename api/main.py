@@ -5257,7 +5257,7 @@ def list_rules():
 
             return base
 
-        return [
+        response_rules = [
             {
                 "rule_id": r.rule_id,
                 "rule_name": r.rule_name or catalog_by_id.get(r.rule_id, {}).get("rule_name") or r.rule_id,
@@ -5270,6 +5270,30 @@ def list_rules():
             }
             for r in rules
         ]
+
+        # Analyst-created unsupported rules do not necessarily have an
+        # ESCorrelationRule row yet. Once their reviewed supportive queries
+        # are saved, expose them as synthetic rule entries so the analysis UI
+        # can resolve the active case and render the new playbook immediately.
+        known_rule_ids = {str(item.get("rule_id") or "").strip() for item in response_rules}
+        for rule_id, queries in by_rule.items():
+            normalized_id = str(rule_id or "").strip()
+            if not normalized_id or normalized_id in known_rule_ids:
+                continue
+            catalog_item = catalog_by_id.get(normalized_id, {})
+            fallback_name = normalized_id.replace("_", " ").strip().title() or normalized_id
+            response_rules.append({
+                "rule_id": normalized_id,
+                "rule_name": catalog_item.get("rule_name") or fallback_name,
+                "description": catalog_item.get("description") or "Analyst-created supportive playbook rule",
+                "category": catalog_item.get("category") or "custom",
+                "severity": catalog_item.get("severity") or "medium",
+                "drilldown_fields": catalog_item.get("drilldown_fields") or [],
+                "required_closure_fields": catalog_item.get("required_closure_fields") or [],
+                "supportive_queries": queries,
+            })
+
+        return response_rules
     except Exception:
         return []
 

@@ -34,6 +34,12 @@
                 return;
             }
 
+            // A saved unsupported-rule playbook may have been created after
+            // the app initially loaded its rule catalog. Refresh the catalog
+            // whenever the active case changes so the resolver can surface
+            // that custom rule and render its Stage 2 cards.
+            this.loadRules();
+
             // Resume the last local browser snapshot before refreshing the
             // durable evidence/state from the API.
             this.loadAnalysisState(caseId);
