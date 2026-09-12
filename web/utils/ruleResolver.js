@@ -52,8 +52,11 @@
         const rules = Array.isArray(availableRules) ? availableRules : [];
         if (!case_ || !rules.length) return null;
 
-        const incomingId = String(case_.rule_id || '').trim();
-        const exact = rules.find(rule => String(rule.rule_id || '').trim() === incomingId);
+        const notableFields = (notable && (notable.raw_fields || notable.fields)) || {};
+        const incomingIds = [case_.rule_id, notableFields.rule_id]
+            .map(value => String(value || '').trim())
+            .filter(Boolean);
+        const exact = rules.find(rule => incomingIds.includes(String(rule.rule_id || '').trim()));
         if (exact) return exact;
 
         const incomingText = [
