@@ -696,6 +696,20 @@ window.AnalysisTab = {
             </div>
         </div>
 
+        <div v-if="supportivePlaybookAvailable === false" class="bg-amber-950/40 border border-amber-700/70 rounded-lg p-4 space-y-2">
+            <p class="text-sm font-semibold text-amber-200">No supportive playbook exists for this rule yet.</p>
+            <p class="text-xs text-gray-300">Before or after the initial assessment, generate reviewable SPL drafts, replace the index placeholder, and save the approved queries to create this rule's playbook.</p>
+            <p v-if="supportiveDraftError" class="text-xs text-red-300">{{ supportiveDraftError }}</p>
+            <button
+                type="button"
+                class="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded text-xs font-bold text-white transition"
+                :disabled="analysisRunning || supportiveDraftBusy || !analysisCaseId"
+                @click="$emit('generate-supportive-playbook-draft')"
+            >
+                {{ supportiveDraftBusy ? 'Generating Drafts...' : 'Generate Draft Supportive Playbook' }}
+            </button>
+        </div>
+
         <div class="flex items-center justify-between pt-2">
             <button
                 type="button"

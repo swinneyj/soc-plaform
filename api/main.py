@@ -4914,6 +4914,52 @@ def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
             db.close()
 
 
+@app.get("/api/db/supportive-queries/status/{case_id}", tags=["Rules"])
+def supportive_playbook_status(case_id: str):
+    """Report whether a case's rule already has an approved playbook."""
+    db = None
+    try:
+        sys.path.insert(0, get_platform_root())
+        from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQuery
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+        source_rule_id = ""
+        for event in db.query(SplunkEvent).order_by(SplunkEvent.id.desc()).all():
+            if not event.raw:
+                continue
+            try:
+                event_payload = json.loads(event.raw) or {}
+            except Exception:
+                continue
+            if event_payload.get("promoted_case_id") == case_id:
+                source_rule_id = ((event_payload.get("raw_fields") or {}).get("rule_id") or
+                                  (event_payload.get("fields") or {}).get("rule_id") or "").strip()
+                break
+
+        rule_key = (case.rule_id or source_rule_id).strip()
+        if not rule_key:
+            rule_key = re.sub(r"[^a-z0-9]+", "_", (case.rule_name or "unsupported_rule").lower()).strip("_") or "unsupported_rule"
+        query_count = db.query(SupportiveQuery).filter(SupportiveQuery.rule_id == rule_key).count()
+        return {
+            "case_id": case_id,
+            "rule_id": rule_key,
+            "rule_name": case.rule_name,
+            "playbook_available": query_count > 0,
+            "query_count": query_count,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if db is not None:
+            db.close()
+
+
 @app.post("/api/db/supportive-queries", tags=["Rules"])
 def create_supportive_query(payload: SupportiveQueryPayload):
     # Create a new supportive SPL query for a correlation rule.

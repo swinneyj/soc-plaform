@@ -26,6 +26,8 @@
             this.phase2ResolutionQuestions = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
+            this.supportivePlaybookAvailable = null;
+            this.supportiveDraftError = '';
 
             const caseId = this.analysisCaseId;
             if (!caseId) {
@@ -35,6 +37,16 @@
             // Resume the last local browser snapshot before refreshing the
             // durable evidence/state from the API.
             this.loadAnalysisState(caseId);
+
+            axios
+                .get(this.apiUrl + '/db/supportive-queries/status/' + encodeURIComponent(caseId))
+                .then(res => {
+                    this.supportivePlaybookAvailable = res.data && res.data.playbook_available === true;
+                })
+                .catch(err => {
+                    console.warn('Failed to load supportive playbook status:', err);
+                    this.supportivePlaybookAvailable = null;
+                });
 
             axios
                 .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
