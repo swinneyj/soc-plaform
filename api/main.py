@@ -84,6 +84,8 @@ app.include_router(system_router)
 
 # In-memory job tracking (in production, use Redis)
 jobs: Dict[str, Dict[str, Any]] = {}
+deleted_job_ids = set()
+STALE_JOB_SECONDS = 600
 
 # Pydantic Models
 class JobStatus(str, Enum):
@@ -91,6 +93,15 @@ class JobStatus(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+
+def _job_status_value(status: Any) -> str:
+    """Normalize enum instances and legacy persisted enum strings."""
+    if isinstance(status, JobStatus):
+        return status.value
+    value = str(status or "").strip()
+    if value.startswith("JobStatus."):
+        value = value.split(".", 1)[1].lower()
+    return value.lower()
 
 class ToolRequest(BaseModel):
     tool_name: str = Field(..., description="Name of the tool to execute")
@@ -106,6 +117,8 @@ class JobResponse(BaseModel):
     stdout: Optional[str] = None
     stderr: Optional[str] = None
     exit_code: Optional[int] = None
+    arguments: Optional[Dict[str, Any]] = None
+    artifacts: List[str] = Field(default_factory=list)
 
 class ToolInfo(BaseModel):
     name: str
@@ -1238,49 +1251,118 @@ def _fix_tool_path(tool_path: str) -> str:
                 return relative_path
     return tool_path
 
+def _tool_artifact_snapshot() -> set:
+    """Return files that tool runs may create, using portable paths."""
+    root = get_platform_root()
+    candidates = [
+        os.path.join(root, "Reports"),
+        os.path.join(root, "Data", "Reports"),
+        os.path.join(root, "Data", "Archive"),
+        os.path.join(root, "Data", "Active_Workspace"),
+        os.path.join(root, "Data", "Exports"),
+    ]
+    found = set()
+    for folder in candidates:
+        if not os.path.isdir(folder):
+            continue
+        for base, _, files in os.walk(folder):
+            for name in files:
+                path = os.path.join(base, name)
+                try:
+                    found.add(os.path.realpath(path))
+                except OSError:
+                    continue
+    return found
+
+
 def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False) -> Dict[str, Any]:
     """Execute a tool synchronously and return stdout/stderr/exit_code."""
     cmd = [sys.executable, tool_path]
+    boolean_flags = {
+        "silent", "list", "use_cases", "replace_all_supportive",
+    }
     for key, val in args.items():
-        if val:
+        if key in boolean_flags:
+            if val is True or str(val).strip().lower() in {"1", "true", "yes", "on"}:
+                cmd.append(f"--{key.replace('_', '-')}")
+        elif val:
             cmd.extend([f'--{key}', str(val)])
+    before = _tool_artifact_snapshot()
     try:
+        tool_env = os.environ.copy()
+        # API jobs must never block waiting for a terminal-only prompt.
+        tool_env["COMMANDER_BOOT"] = "1"
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=300,
-            cwd=get_platform_root()
+            cwd=get_platform_root(),
+            env=tool_env,
         )
+        after = _tool_artifact_snapshot()
+        artifacts = [os.path.relpath(p, get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
-            "exit_code": result.returncode
+            "exit_code": result.returncode,
+            "artifacts": artifacts,
         }
     except subprocess.TimeoutExpired:
         return {
             "stdout": "",
             "stderr": "Tool execution timed out after 300 seconds",
-            "exit_code": -1
+            "exit_code": -1,
+            "artifacts": [],
         }
     except Exception as e:
         return {
             "stdout": "",
             "stderr": str(e),
-            "exit_code": -1
+            "exit_code": -1,
+            "artifacts": [],
         }
 
 def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent: bool = False):
     """Background task to execute tool asynchronously."""
-    jobs[job_id]["status"] = JobStatus.RUNNING
+    if job_id in deleted_job_ids or job_id not in jobs:
+        return
+    jobs[job_id]["status"] = JobStatus.RUNNING.value
     result = execute_tool_sync(tool_path, args, silent)
+    if job_id in deleted_job_ids or job_id not in jobs:
+        return
     jobs[job_id].update({
-        "status": JobStatus.COMPLETED if result["exit_code"] == 0 else JobStatus.FAILED,
+        "status": JobStatus.COMPLETED.value if result["exit_code"] == 0 else JobStatus.FAILED.value,
         "stdout": result["stdout"],
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
+        "artifacts": result.get("artifacts", []),
         "completed_at": datetime.datetime.utcnow().isoformat()
     })
+    _persist_tool_run(jobs[job_id])
+
+
+def _persist_tool_run(job: Dict[str, Any]) -> None:
+    """Best-effort persistence; tool execution must not fail on DB outages."""
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        row = db.get(ToolRun, job["job_id"])
+        if row is None:
+            row = ToolRun(job_id=job["job_id"])
+            db.add(row)
+        row.tool_name = job.get("tool_name")
+        row.arguments = json.dumps(job.get("arguments") or {})
+        row.status = _job_status_value(job.get("status"))
+        row.stdout = job.get("stdout")
+        row.stderr = job.get("stderr")
+        row.exit_code = job.get("exit_code")
+        row.artifact_paths = json.dumps(job.get("artifacts") or [])
+        row.completed_at = datetime.datetime.fromisoformat(job["completed_at"]) if job.get("completed_at") else None
+        db.commit()
+        db.close()
+    except Exception as exc:
+        print(f"[tool_runs] Persistence unavailable: {exc}", file=sys.stderr)
 
 
 NOTABLE_FIELD_ALIASES = [
@@ -1309,6 +1391,9 @@ NOTABLE_FIELD_ALIASES = [
     ("Destination Port", "destination_port"),
     ("dest_port", "destination_port"),
     ("Disposition", "disposition"),
+    ("Closure Summary", "closure_summary"),
+    ("Closure Notes", "closure_summary"),
+    ("Closure Note", "closure_summary"),
     ("Username", "username"),
     ("SSH File Path", "ssh_file_path"),
     ("File Path", "file_path"),
@@ -2568,6 +2653,23 @@ def get_tool(tool_name: str):
         arguments=tool.get("arguments", [])
     )
 
+@app.post("/api/tools/regression", tags=["Tools"])
+def run_tool_catalog_regression():
+    """Run safe offline regression checks for the registered tool catalog."""
+    runner = os.path.join(get_platform_root(), "scripts", "run_tool_catalog_regression.py")
+    if not os.path.exists(runner):
+        raise HTTPException(status_code=404, detail="Catalog regression runner not found")
+    result = subprocess.run(
+        [sys.executable, runner, "--json"], cwd=get_platform_root(),
+        capture_output=True, text=True, timeout=180,
+    )
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail=result.stdout + result.stderr)
+    payload["exit_code"] = result.returncode
+    return payload
+
 @app.post("/api/execute", response_model=JobResponse, tags=["Execution"])
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
@@ -2579,16 +2681,20 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     if not os.path.exists(tool_path):
         raise HTTPException(status_code=400, detail=f"Tool script not found: {tool_path}")
     job_id = str(uuid.uuid4())
+    deleted_job_ids.discard(job_id)
     jobs[job_id] = {
         "job_id": job_id,
-        "status": JobStatus.PENDING,
+        "status": JobStatus.PENDING.value,
         "tool_name": request.tool_name,
         "created_at": datetime.datetime.utcnow().isoformat(),
         "completed_at": None,
         "stdout": None,
         "stderr": None,
-        "exit_code": None
+        "exit_code": None,
+        "arguments": request.arguments or {},
+        "artifacts": [],
     }
+    _persist_tool_run(jobs[job_id])
     background_tasks.add_task(
         execute_tool_async,
         job_id,
@@ -2602,16 +2708,114 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
 def get_job_status(job_id: str):
     """Retrieve job status and results."""
     if job_id not in jobs:
+        try:
+            from db.models import SessionLocal, ToolRun
+            db = SessionLocal()
+            row = db.get(ToolRun, job_id)
+            db.close()
+            if row is not None:
+                return JobResponse(
+                    job_id=row.job_id,
+                    status=_job_status_value(row.status),
+                    tool_name=row.tool_name,
+                    created_at=row.created_at.isoformat() if row.created_at else "",
+                    completed_at=row.completed_at.isoformat() if row.completed_at else None,
+                    stdout=row.stdout,
+                    stderr=row.stderr,
+                    exit_code=row.exit_code,
+                    arguments=json.loads(row.arguments or "{}"),
+                    artifacts=json.loads(row.artifact_paths or "[]"),
+                )
+        except Exception as exc:
+            print(f"[tool_runs] Could not load persisted job: {exc}", file=sys.stderr)
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-    return JobResponse(**jobs[job_id])
+    job = jobs[job_id]
+    job["status"] = _job_status_value(job.get("status"))
+    return JobResponse(**job)
 
 @app.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"])
 def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by job status")):
     """List all jobs, optionally filtered by status."""
     job_list = list(jobs.values())
+    for job in job_list:
+        job["status"] = _job_status_value(job.get("status"))
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        persisted = db.query(ToolRun).order_by(ToolRun.created_at.desc()).limit(100).all()
+        db.close()
+        live_ids = {j["job_id"] for j in job_list}
+        for row in persisted:
+            if row.job_id in live_ids:
+                continue
+            row_status = _job_status_value(row.status)
+            row_stderr = row.stderr
+            if row_status in {JobStatus.PENDING.value, JobStatus.RUNNING.value} and row.created_at:
+                age_seconds = (datetime.datetime.utcnow() - row.created_at).total_seconds()
+                if age_seconds > STALE_JOB_SECONDS:
+                    row_status = JobStatus.FAILED.value
+                    row_stderr = (row_stderr or "") + ("\n" if row_stderr else "") + "Job did not report completion and was marked interrupted after 10 minutes."
+                    try:
+                        from db.models import SessionLocal as _SessionLocal
+                        cleanup_db = _SessionLocal()
+                        row.status = row_status
+                        row.stderr = row_stderr
+                        row.completed_at = datetime.datetime.utcnow()
+                        cleanup_db.merge(row)
+                        cleanup_db.commit()
+                        cleanup_db.close()
+                    except Exception as exc:
+                        print(f"[tool_runs] Could not mark stale job: {exc}", file=sys.stderr)
+            job_list.append({
+                "job_id": row.job_id,
+                "status": row_status,
+                "tool_name": row.tool_name,
+                "created_at": row.created_at.isoformat() if row.created_at else "",
+                "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+                "stdout": row.stdout,
+                "stderr": row_stderr,
+                "exit_code": row.exit_code if row_status != JobStatus.FAILED.value else (row.exit_code if row.exit_code is not None else -1),
+                "arguments": json.loads(row.arguments or "{}"),
+                "artifacts": json.loads(row.artifact_paths or "[]"),
+            })
+    except Exception as exc:
+        print(f"[tool_runs] Could not load persisted jobs: {exc}", file=sys.stderr)
     if status:
         job_list = [j for j in job_list if j["status"] == status]
     return [JobResponse(**j) for j in job_list]
+
+@app.delete("/api/jobs/{job_id}", tags=["Execution"])
+def delete_job(job_id: str):
+    """Delete one job from memory and the persisted tool-run history."""
+    deleted_job_ids.add(job_id)
+    jobs.pop(job_id, None)
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        row = db.get(ToolRun, job_id)
+        if row is not None:
+            db.delete(row)
+            db.commit()
+        db.close()
+    except Exception as exc:
+        print(f"[tool_runs] Could not delete persisted job: {exc}", file=sys.stderr)
+    return {"deleted": job_id}
+
+@app.delete("/api/jobs", tags=["Execution"])
+def clear_jobs():
+    """Clear all in-memory and persisted tool-run history."""
+    deleted_job_ids.update(jobs.keys())
+    jobs.clear()
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        deleted = db.query(ToolRun).delete(synchronize_session=False)
+        db.commit()
+        db.close()
+    except Exception as exc:
+        print(f"[tool_runs] Could not clear persisted jobs: {exc}", file=sys.stderr)
+        deleted = 0
+    return {"deleted": deleted}
 
 @app.get("/api/reports", tags=["Data"])
 def list_reports():
@@ -2640,6 +2844,24 @@ def download_report(report_name: str):
         filename=report_name,
         media_type="text/plain"
     )
+
+@app.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"])
+def download_tool_artifact(artifact_path: str):
+    """Download only files from approved generated-artifact directories."""
+    root = Path(get_platform_root()).resolve()
+    candidate = (root / artifact_path).resolve()
+    allowed_roots = [
+        (root / "Reports").resolve(),
+        (root / "Data" / "Reports").resolve(),
+        (root / "Data" / "Archive").resolve(),
+        (root / "Data" / "Active_Workspace").resolve(),
+        (root / "Data" / "Exports").resolve(),
+    ]
+    if not any(allowed == candidate or allowed in candidate.parents for allowed in allowed_roots):
+        raise HTTPException(status_code=404, detail="Tool artifact not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Tool artifact not found")
+    return FileResponse(path=str(candidate), filename=candidate.name)
 
 @app.get("/api/registry", tags=["System"])
 def get_registry():
@@ -3475,6 +3697,8 @@ def paste_notable(request: PastedNotableRequest):
                 sanitized_fields = normalize_notable_fields(parsed_fields.copy())
 
             sanitized_history = extract_notable_history(sanitized_text)
+            if not sanitized_history:
+                sanitized_history = (sanitized_fields.get("closure_summary") or "").strip()
             parse_assessment = build_parse_assessment(raw_query_fields, sanitized_text, sanitized_history)
 
             # Dedup for both open and historical pastes.
@@ -3745,6 +3969,11 @@ def list_historical_notables(
                 continue
 
             fields = payload.get("fields", {}) or {}
+            history_text = str(payload.get("history") or "").strip()
+            history_summary = ""
+            if history_text:
+                first_line = next((line.strip() for line in history_text.splitlines() if line.strip()), "")
+                history_summary = first_line[:157].rstrip() + "..." if len(first_line) > 160 else first_line
             summaries.append({
                 "id": event.id,
                 "title": fields.get("title") or fields.get("correlation_search") or event.source,
@@ -3754,11 +3983,125 @@ def list_historical_notables(
                 "urgency": fields.get("urgency"),
                 "disposition": fields.get("disposition"),
                 "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+                "history_summary": history_summary,
             })
 
         return summaries
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.post("/api/db/notables/backfill-closure-notes", tags=["Database"])
+def backfill_historical_closure_notes():
+    """Create concise closure summaries for historical notables missing one.
+
+    Historical pasted notables predate the structured closure-note workflow, so
+    this backfill stores the summary in the notable payload and also records a
+    ClosureNote row using a stable synthetic historical case id.
+    """
+    db = None
+    try:
+        from db.models import ClosureNote, SessionLocal, SplunkEvent
+
+        db = SessionLocal()
+        rows = db.query(SplunkEvent).filter(
+            SplunkEvent.sourcetype == "splunk:notable:pasted"
+        ).order_by(SplunkEvent.id.asc()).all()
+
+        generated = []
+        skipped = []
+        now = datetime.datetime.utcnow()
+        for event in rows:
+            try:
+                payload = json.loads(event.raw or "{}")
+            except Exception:
+                continue
+            if not payload.get("historical"):
+                continue
+
+            existing_history = str(payload.get("history") or "").strip()
+            synthetic_case_id = f"HISTORICAL-NOTABLE-{event.id}"
+            if existing_history:
+                skipped.append(event.id)
+                continue
+
+            fields = payload.get("fields") or {}
+            title = (fields.get("title") or fields.get("correlation_search") or event.source or "Security notable").strip()
+            host = (fields.get("host") or fields.get("destination") or event.host or "unknown host").strip()
+            user = (fields.get("user") or fields.get("username") or "unknown user").strip()
+            process = (fields.get("process") or fields.get("process_name") or fields.get("parent_process") or "the recorded process").strip()
+            disposition = (fields.get("disposition") or "historical disposition not specified").strip()
+            summary = (
+                f"Closed historical notable '{title}' was recorded on {host} for {user}; "
+                f"the triggering activity was associated with {process}."
+                f" Recorded disposition: {disposition}."
+            )
+
+            payload["history"] = summary
+            payload["closure_summary"] = summary
+            event.raw = json.dumps(payload)
+
+            rule_id = (fields.get("rule_id") or fields.get("correlation_search") or fields.get("rule_name") or "historical_notable").strip()
+            note = db.query(ClosureNote).filter(ClosureNote.case_id == synthetic_case_id).first()
+            if not note:
+                note = ClosureNote(
+                    case_id=synthetic_case_id,
+                    rule_id=rule_id,
+                    analyst_notes="Backfilled from historical notable metadata for display and baseline analysis.",
+                    generated_note=summary,
+                    status="closed",
+                    created_at=now,
+                    submitted_at=now,
+                )
+                db.add(note)
+            generated.append(event.id)
+
+        db.commit()
+        return {"generated": len(generated), "event_ids": generated, "skipped": len(skipped)}
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=500, detail=str(exc))
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
+
+
+@app.get("/api/db/notables/{event_id}", tags=["Database"])
+def get_pasted_notable_details(event_id: int):
+    """Return full parsed and sanitized details for a closed pasted notable."""
+    try:
+        from db.models import SessionLocal, SplunkEvent
+        db = SessionLocal()
+        event = db.query(SplunkEvent).filter(
+            SplunkEvent.id == event_id,
+            SplunkEvent.sourcetype == "splunk:notable:pasted",
+        ).first()
+        if not event:
+            raise HTTPException(status_code=404, detail=f"Pasted notable {event_id} not found")
+        payload = json.loads(event.raw or "{}")
+        return {
+            "id": event.id,
+            "historical": bool(payload.get("historical")),
+            "fields": payload.get("fields") or {},
+            "raw_fields": payload.get("raw_fields") or {},
+            "sanitized_text": payload.get("sanitized_text") or "",
+            "history": payload.get("history") or "",
+            "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         try:
             db.close()
@@ -4383,6 +4726,29 @@ def analyze_case(request: AnalyzeRequest):
             if source_notable_payload.get("sanitized_text"):
                 sanitized_text = str(source_notable_payload["sanitized_text"])[:2500]
                 prompt_parts.append(f"\nRaw Sanitized Notable:\n{sanitized_text}")
+
+        if historical_baselines:
+            prompt_parts.append("\n\n=== HISTORICAL CLOSURE BASELINES ===")
+            prompt_parts.append("Use these prior closed notables only as contextual examples; do not treat them as proof of the current case.")
+            for baseline in historical_baselines[:5]:
+                fields = baseline.get("fields") or {}
+                prompt_parts.append(
+                    f"- Event {baseline.get('event_id')}: title={fields.get('title') or fields.get('correlation_search') or 'unknown'}; "
+                    f"host={fields.get('host') or fields.get('destination') or 'unknown'}; "
+                    f"user={fields.get('user') or fields.get('username') or 'unknown'}; "
+                    f"process={fields.get('process') or fields.get('process_name') or 'unknown'}; "
+                    f"disposition={fields.get('disposition') or 'unknown'}; "
+                    f"closure_summary={str(baseline.get('history') or '')[:500]}"
+                )
+
+        if prior_closures:
+            prompt_parts.append("\n\n=== PRIOR STRUCTURED CLOSURE NOTES ===")
+            prompt_parts.append("Use prior notes as disposition context, not as a substitute for current evidence.")
+            for prior in prior_closures[:5]:
+                prompt_parts.append(
+                    f"- {prior.get('case_id')}: disposition={prior.get('disposition') or prior.get('status')}; "
+                    f"note={str(prior.get('generated_note') or '')[:700]}"
+                )
 
         if prompt_supportive_results:
             prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")

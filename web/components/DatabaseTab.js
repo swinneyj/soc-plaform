@@ -1,6 +1,7 @@
 window.DatabaseTab = {
     props: [
         'dbStats',
+        'operationsStats',
         'notablePasteText',
         'notablePasteSegmentEstimate',
         'notableRedactionEnabled',
@@ -41,17 +42,27 @@ window.DatabaseTab = {
         'update:selected-triage-case-ids',
         'update:delete-analysis-with-case',
         'load-triage-data',
+        'load-db-stats',
         'delete-triage-case',
         'delete-selected-triage-cases',
         'load-triage-notable-details',
         'copy-triage-notable-fields',
         'analyze-case',
         'load-closed-notable-details',
-        'delete-closed-notable'
+        'delete-closed-notable',
+        'delete-selected-closed-notables'
     ],
     data() {
         return {
-            openClosedNotableId: null
+            openClosedNotableId: null,
+            selectedClosedNotableIds: [],
+            closedNotableFilters: {
+                title: '',
+                host: '',
+                user: '',
+                urgency: '',
+                disposition: ''
+            }
         };
     },
     computed: {
@@ -66,6 +77,17 @@ window.DatabaseTab = {
             if (!items.length) return false;
             const ids = this.selectedTriageCaseIds || [];
             return items.every(c => ids.includes(c.case_id));
+        },
+        filteredClosedNotables() {
+            const filters = this.closedNotableFilters || {};
+            const matches = (value, filter) => !filter || String(value || '').toLowerCase().includes(filter.toLowerCase());
+            return (this.historicalNotables || []).filter(item => (
+                matches(item.title || item.correlation_search, filters.title) &&
+                matches(item.host, filters.host) &&
+                matches(item.user, filters.user) &&
+                matches(item.urgency, filters.urgency) &&
+                matches(item.disposition, filters.disposition)
+            ));
         }
     },
     methods: {
@@ -75,6 +97,24 @@ window.DatabaseTab = {
             }
             this.openClosedNotableId = item.id;
             this.$emit('load-closed-notable-details', item);
+        },
+        toggleClosedNotableSelection(id, checked) {
+            const current = Array.isArray(this.selectedClosedNotableIds) ? this.selectedClosedNotableIds.slice() : [];
+            const index = current.indexOf(id);
+            if (checked && index === -1) current.push(id);
+            if (!checked && index !== -1) current.splice(index, 1);
+            this.selectedClosedNotableIds = current;
+        },
+        toggleSelectAllClosedNotables() {
+            const ids = this.filteredClosedNotables.map(item => item.id);
+            const selected = this.selectedClosedNotableIds || [];
+            const allSelected = ids.length > 0 && ids.every(id => selected.includes(id));
+            this.selectedClosedNotableIds = allSelected
+                ? selected.filter(id => !ids.includes(id))
+                : Array.from(new Set(selected.concat(ids)));
+        },
+        clearClosedNotableFilters() {
+            this.closedNotableFilters = { title: '', host: '', user: '', urgency: '', disposition: '' };
         },
         toggleNotableSelection(id, checked) {
             const current = Array.isArray(this.selectedNotableIds) ? this.selectedNotableIds.slice() : [];
@@ -161,6 +201,26 @@ window.DatabaseTab = {
                 <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
                     <p class="text-gray-400 text-sm">Closed Notables</p>
                     <p class="text-3xl font-bold text-amber-300">{{ dbStats.pasted_notables_historical || 0 }}</p>
+                </div>
+            </div>
+
+            <div class="bg-gray-800 border border-blue-900 rounded-lg p-4 mb-6">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                    <div>
+                        <h3 class="text-xl font-bold text-blue-400">Operations Dashboard</h3>
+                        <p class="text-xs text-gray-400">Workload, aging, blockers, evidence, closure, and tool health.</p>
+                    </div>
+                    <button @click="$emit('load-db-stats')" class="text-xs text-blue-300 hover:text-blue-200">Refresh metrics</button>
+                </div>
+                <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Open cases</p><p class="text-2xl font-bold text-blue-300">{{ operationsStats?.open_cases || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Blockers</p><p class="text-2xl font-bold text-red-300">{{ operationsStats?.closure_blockers || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Open questions</p><p class="text-2xl font-bold text-amber-300">{{ operationsStats?.unresolved_questions || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Aging &gt;24h</p><p class="text-2xl font-bold text-yellow-300">{{ operationsStats?.aging_24h || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Aging &gt;7d</p><p class="text-2xl font-bold text-orange-300">{{ operationsStats?.aging_7d || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Tool failures</p><p class="text-2xl font-bold text-red-300">{{ operationsStats?.tool_failures || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Evidence rows</p><p class="text-2xl font-bold text-green-300">{{ operationsStats?.evidence_results || 0 }}</p></div>
+                    <div class="bg-gray-900 rounded p-3"><p class="text-xs text-gray-400">Avg closure</p><p class="text-2xl font-bold text-purple-300">{{ operationsStats?.average_closure_hours == null ? '—' : operationsStats.average_closure_hours + 'h' }}</p></div>
                 </div>
             </div>
 
@@ -361,40 +421,73 @@ window.DatabaseTab = {
             </div>
 
             <div v-if="historicalNotablesVisible" class="bg-gray-800 border border-gray-700 rounded-lg p-4 mt-3">
-                <div class="flex items-center justify-between mb-3">
+                <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
                     <div>
                         <h3 class="text-lg font-bold text-blue-400">Closed Notables</h3>
                         <p class="text-xs text-gray-400">Compact summary of closed notables for quick baseline reference.</p>
                     </div>
-                    <button @click="$emit('load-historical-notables')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button @click="$emit('load-historical-notables')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                        <button @click="toggleSelectAllClosedNotables" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Select All</button>
+                        <button @click="$emit('delete-selected-closed-notables', selectedClosedNotableIds)" :disabled="!selectedClosedNotableIds.length" class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">Delete Selected</button>
+                        <button v-if="selectedClosedNotableIds.length" @click="selectedClosedNotableIds = []" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
+                        <button v-if="Object.values(closedNotableFilters).some(Boolean)" @click="clearClosedNotableFilters" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Filters</button>
+                    </div>
                 </div>
                 <div v-if="!historicalNotables || !historicalNotables.length" class="text-gray-500 text-xs">No historical pasted notables loaded yet.</div>
+                <div v-else-if="!filteredClosedNotables.length" class="text-gray-500 text-xs py-4">No closed notables match these filters.</div>
                 <div v-else class="overflow-x-auto">
-                    <table class="min-w-full text-xs text-gray-200">
+                    <table class="w-full table-fixed text-xs text-gray-200">
+                        <colgroup>
+                            <col class="w-[5%]" />
+                            <col class="w-[18%]" />
+                            <col class="w-[12%]" />
+                            <col class="w-[10%]" />
+                            <col class="w-[8%]" />
+                            <col class="w-[17%]" />
+                            <col class="w-[13%]" />
+                            <col class="w-[10%]" />
+                            <col class="w-[7%]" />
+                        </colgroup>
                         <thead>
                             <tr class="border-b border-gray-700 text-gray-400">
-                                <th class="px-2 py-1 text-left">ID</th>
-                                <th class="px-2 py-1 text-left">Title / Rule</th>
-                                <th class="px-2 py-1 text-left">Host</th>
-                                <th class="px-2 py-1 text-left">User</th>
-                                <th class="px-2 py-1 text-left">Urgency</th>
-                                <th class="px-2 py-1 text-left">Disposition</th>
-                                <th class="px-2 py-1 text-left">Closure summary</th>
-                                <th class="px-2 py-1 text-left">Saved</th>
-                                <th class="px-2 py-1 text-left">Actions</th>
+                                <th class="px-1.5 py-2 text-left">ID</th>
+                                <th class="px-1.5 py-2 text-left">Title / Rule</th>
+                                <th class="px-1.5 py-2 text-left">Host</th>
+                                <th class="px-1.5 py-2 text-left">User</th>
+                                <th class="px-1.5 py-2 text-left">Urgency</th>
+                                <th class="px-1.5 py-2 text-left">Disposition</th>
+                                <th class="px-1.5 py-2 text-left">Closure summary</th>
+                                <th class="px-1.5 py-2 text-left">Saved</th>
+                                <th class="px-1.5 py-2 text-left">Actions</th>
+                            </tr>
+                            <tr class="border-b border-gray-700 bg-gray-900 text-gray-300">
+                                <th class="px-1.5 py-2"></th>
+                                <th class="px-1.5 py-2"><input v-model.trim="closedNotableFilters.title" class="w-full min-w-0 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white placeholder-gray-500" placeholder="Title/rule" /></th>
+                                <th class="px-1.5 py-2"><input v-model.trim="closedNotableFilters.host" class="w-full min-w-0 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white placeholder-gray-500" placeholder="Host" /></th>
+                                <th class="px-1.5 py-2"><input v-model.trim="closedNotableFilters.user" class="w-full min-w-0 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white placeholder-gray-500" placeholder="User" /></th>
+                                <th class="px-1.5 py-2"><input v-model.trim="closedNotableFilters.urgency" class="w-full min-w-0 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white placeholder-gray-500" placeholder="Urgency" /></th>
+                                <th class="px-1.5 py-2"><input v-model.trim="closedNotableFilters.disposition" class="w-full min-w-0 px-1.5 py-1 bg-gray-800 border border-gray-700 rounded text-[10px] text-white placeholder-gray-500" placeholder="Disposition" /></th>
+                                <th class="px-1.5 py-2"></th>
+                                <th class="px-1.5 py-2"></th>
+                                <th class="px-1.5 py-2"></th>
                             </tr>
                         </thead>
                         <tbody>
                             <tr
-                                v-for="item in historicalNotables"
+                                v-for="item in filteredClosedNotables"
                                 :key="item.id"
-                                class="border-b border-gray-800 hover:bg-gray-750 cursor-pointer"
-                                @click.stop="handleClosedNotableClick(item)"
+                                class="border-b border-gray-800 hover:bg-gray-750"
                                 :title="item.history_summary || ''"
                             >
-                                <td class="px-2 py-1 align-top">{{ item.id }}</td>
                                 <td class="px-2 py-1 align-top">
-                                    <div class="font-semibold text-blue-300">{{ item.title || 'Untitled notable' }}</div>
+                                    <input type="checkbox" :checked="selectedClosedNotableIds.includes(item.id)" @click.stop @change="toggleClosedNotableSelection(item.id, $event.target.checked)" class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span class="ml-2">{{ item.id }}</span>
+                                </td>
+                                <td class="px-2 py-1 align-top">
+                                    <button @click.stop="handleClosedNotableClick(item)" class="block max-w-full text-left font-semibold text-blue-300 hover:text-blue-200 hover:underline break-words">
+                                        {{ item.title || 'Untitled notable' }}
+                                    </button>
                                     <div v-if="item.correlation_search" class="text-[11px] text-gray-400">{{ item.correlation_search }}</div>
                                 </td>
                                 <td class="px-2 py-1 align-top">{{ item.host || 'n/a' }}</td>
@@ -421,9 +514,11 @@ window.DatabaseTab = {
                         </tbody>
                     </table>
                     <div
-                        v-if="openClosedNotableId && triageNotableDetails && triageNotableDetails[openClosedNotableId]"
-                        class="mt-4 bg-gray-900 border border-gray-700 rounded p-3 text-xs text-gray-200"
+                        v-if="openClosedNotableId"
+                        class="fixed inset-0 z-50 bg-black bg-opacity-70 flex items-center justify-center p-4"
+                        @click.self="openClosedNotableId = null"
                     >
+                      <div class="bg-gray-800 border border-gray-600 rounded-lg p-5 text-xs text-gray-200 w-full max-w-4xl max-h-[85vh] overflow-y-auto shadow-2xl">
                         <div class="flex items-center justify-between mb-2">
                             <div class="font-semibold text-blue-300">
                                 Closed notable {{ openClosedNotableId }} details
@@ -435,7 +530,7 @@ window.DatabaseTab = {
                                 Close
                             </button>
                         </div>
-                        <div v-if="triageNotableDetails[openClosedNotableId].loading">
+                        <div v-if="!triageNotableDetails || !triageNotableDetails[openClosedNotableId] || triageNotableDetails[openClosedNotableId].loading">
                             Loading closed notable details...
                         </div>
                         <div v-else-if="triageNotableDetails[openClosedNotableId].error" class="text-red-400">
@@ -468,6 +563,7 @@ window.DatabaseTab = {
                                 </pre>
                             </div>
                         </div>
+                      </div>
                     </div>
                 </div>
             </div>
@@ -478,7 +574,7 @@ window.DatabaseTab = {
                         :value="dbSearch"
                         @input="$emit('update:db-search', $event.target.value)"
                         type="text"
-                        placeholder="Search case ID or rule..."
+                        placeholder="Search case, rule, host, user, verdict..."
                         class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
                     <select
                         :value="dbVerdictFilter"

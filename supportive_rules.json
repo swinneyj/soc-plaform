@@ -1,6 +1,26 @@
 {
   "rules": [
     {
+      "rule_id": "custom_linux_cron_persistence",
+      "supportive_queries": [
+        {
+          "title": "Observed event context",
+          "description": "Search the observed Splunk data source for the notable's core entities.",
+          "spl_query": "index=\"linux\" (sourcetype=\"auditd\") host=\"prod-app-07\" (process=\"/usr/bin/crontab\" OR user=\"deploy\") | table _time host user process parent_process command_line _raw | sort 0 -_time"
+        },
+        {
+          "title": "Process and persistence correlation",
+          "description": "Check for related execution or persistence activity around the notable.",
+          "spl_query": "index=\"linux\" (sourcetype=\"auditd\") host=\"prod-app-07\" (process=\"/usr/bin/crontab\" OR file_path=\"/etc/cron.d/backup-sync\") | table _time host user process parent_process file_path command_line action result | sort 0 -_time"
+        },
+        {
+          "title": "Related host and user activity",
+          "description": "Review adjacent activity for the affected host and identity in the imported data source.",
+          "spl_query": "index=\"linux\" (sourcetype=\"auditd\") host=\"prod-app-07\" user=\"deploy\" earliest=-24h | stats count values(process) as processes values(command_line) as command_lines by host user | sort -count"
+        }
+      ]
+    },
+    {
       "rule_id": "f5_bigip_tls_handshake",
       "supportive_queries": [
         {
@@ -152,11 +172,6 @@
           "title": "Script block hashes for correlation",
           "description": "Generate hashes of script blocks to correlate across endpoints.",
           "spl_query": "index=security sourcetype=XmlWinEventLog:Microsoft-Windows-PowerShell/Operational host=$host$ user=$user$ | eval script_hash=sha1(ScriptBlockText) | stats dc(script_hash) as distinct_hashes values(script_hash) as hashes by user, host | sort - distinct_hashes"
-        },
-        {
-          "title": "Encoded PowerShell payload context",
-          "description": "Identify the encoded command, parent process, and surrounding PowerShell fields needed to determine the payload's purpose.",
-          "spl_query": "index=security sourcetype=XmlWinEventLog:Microsoft-Windows-PowerShell/Operational host=$host$ user=$user$ (Message=\"*-Enc*\" OR ScriptBlockText=\"*-Enc*\") | table _time host user Message ScriptBlockText ParentImage ParentCommandLine ProcessId | sort -_time"
         }
       ]
     },
@@ -184,14 +199,9 @@
           "spl_query": "index=auth sourcetype=pingfederate host=$host$ user=$user$ | timechart span=5m count by outcome"
         },
         {
-          "title": "Source IP spray pattern",
-          "description": "Identify source IPs performing password spraying against PingFederate.",
-          "spl_query": "index=auth sourcetype=pingfederate signature=$signature$ | stats count dc(user) as distinct_users by src_ip | where distinct_users>5 | sort -count"
-        },
-        {
-          "title": "Post-authentication service and application access",
-          "description": "Identify enterprise applications and cloud resources accessed by the user immediately after authentication.",
-          "spl_query": "index=auth sourcetype=pingfederate user=$user$ outcome=\"SUCCESS\" | table _time, src_ip, app, target_service, session_id"
+          "title": "Downstream endpoint process execution by compromised account",
+          "description": "Detect host-level command execution and lateral movement originating from the compromised identity.",
+          "spl_query": "index=endpoint (sourcetype=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" OR sourcetype=\"WinEventLog:Security\") user=$user$ | table _time, host, Image, CommandLine, ParentImage"
         },
         {
           "title": "Impossible travel and concurrent IP activity for target user",
@@ -199,14 +209,19 @@
           "spl_query": "index=auth sourcetype=pingfederate user=$user$ | stats earliest(_time) as first_time, latest(_time) as last_time, values(src_ip) as ips, values(country) as countries by user | where mvcount(ips)>1"
         },
         {
+          "title": "Post-authentication service and application access",
+          "description": "Identify enterprise applications and cloud resources accessed by the user immediately after authentication.",
+          "spl_query": "index=auth sourcetype=pingfederate user=$user$ outcome=\"SUCCESS\" | table _time, src_ip, app, target_service, session_id"
+        },
+        {
           "title": "Self-service credential tampering or MFA device registration",
           "description": "Detect secondary persistence via newly registered MFA factors or recovery methods following successful login.",
           "spl_query": "index=audit sourcetype=\"pingfederate:audit\" user=$user$ (action=\"*mfa*\" OR action=\"*password*\" OR action=\"*device*\") | table _time, action, status, src_ip, user_agent"
         },
         {
-          "title": "Downstream endpoint process execution by compromised account",
-          "description": "Detect host-level command execution and lateral movement originating from the compromised identity.",
-          "spl_query": "index=endpoint (sourcetype=\"XmlWinEventLog:Microsoft-Windows-Sysmon/Operational\" OR sourcetype=\"WinEventLog:Security\") user=$user$ | table _time, host, Image, CommandLine, ParentImage"
+          "title": "Source IP spray pattern",
+          "description": "Identify source IPs performing password spraying against PingFederate.",
+          "spl_query": "index=auth sourcetype=pingfederate signature=$signature$ | stats count dc(user) as distinct_users by src_ip | where distinct_users>5 | sort -count"
         }
       ]
     }

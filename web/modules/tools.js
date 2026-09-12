@@ -22,12 +22,53 @@
                 console.error('Failed to load jobs:', err);
             }
         },
+        async deleteJob(jobId) {
+            try {
+                await axios.delete(this.apiUrl + '/jobs/' + encodeURIComponent(jobId));
+                this.selectedJobIds = (this.selectedJobIds || []).filter(id => id !== jobId);
+                await this.loadJobs();
+            } catch (err) {
+                alert('Could not delete job: ' + (err.response?.data?.detail || err.message));
+            }
+        },
+        async deleteSelectedJobs() {
+            const ids = this.selectedJobIds || [];
+            if (!ids.length || !confirm(`Delete ${ids.length} selected job(s)?`)) return;
+            try {
+                await Promise.all(ids.map(id => axios.delete(this.apiUrl + '/jobs/' + encodeURIComponent(id))));
+                this.selectedJobIds = [];
+                await this.loadJobs();
+            } catch (err) {
+                alert('Could not delete selected jobs: ' + (err.response?.data?.detail || err.message));
+            }
+        },
+        async clearJobs() {
+            if (!this.jobs.length || !confirm('Clear all tool job history? This cannot be undone.')) return;
+            try {
+                await axios.delete(this.apiUrl + '/jobs');
+                this.selectedJobIds = [];
+                await this.loadJobs();
+            } catch (err) {
+                alert('Could not clear job history: ' + (err.response?.data?.detail || err.message));
+            }
+        },
         async loadReports() {
             try {
                 const res = await axios.get(this.apiUrl + '/reports');
                 this.reports = res.data;
             } catch (err) {
                 console.error('Failed to load reports:', err);
+            }
+        },
+        async runToolRegression() {
+            this.regressionRunning = true;
+            try {
+                const res = await axios.post(this.apiUrl + '/tools/regression');
+                this.regressionResult = res.data;
+            } catch (err) {
+                this.regressionResult = { error: err.response?.data?.detail || err.message };
+            } finally {
+                this.regressionRunning = false;
             }
         },
         async executeTool(tool) {
@@ -58,6 +99,10 @@
             this.selectedToolForExecution = tool;
         },
         closeToolModal() {
+            this.selectedToolForExecution = null;
+        },
+        changeTab(tab) {
+            this.currentTab = tab;
             this.selectedToolForExecution = null;
         },
 

@@ -7,6 +7,7 @@ import os
 import csv
 import argparse
 import datetime
+import sys
 from collections import defaultdict
 
 current_dir = os.path.dirname(os.path.abspath(__file__))

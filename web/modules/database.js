@@ -197,6 +197,18 @@
             }
         },
 
+        async deleteSelectedClosedNotables(ids) {
+            const eventIds = Array.isArray(ids) ? ids : [];
+            if (!eventIds.length || !confirm('Permanently delete ' + eventIds.length + ' selected closed notable(s)?')) return;
+            try {
+                await axios.post(this.apiUrl + '/db/notables/batch-delete', { event_ids: eventIds });
+                await this.loadHistoricalNotables();
+                await this.loadDbStats();
+            } catch (err) {
+                alert('Error deleting selected closed notables: ' + ((err.response && err.response.data && err.response.data.detail) || err.message));
+            }
+        },
+
         async loadTriageData() {
             try {
                 const params = { limit: 50 };
@@ -233,6 +245,12 @@
                 this.dbStats = res.data;
             } catch (err) {
                 console.error('Failed to load DB stats:', err);
+            }
+            try {
+                const res = await axios.get(this.apiUrl + '/db/operations');
+                this.operationsStats = res.data;
+            } catch (err) {
+                console.error('Failed to load operations dashboard:', err);
             }
         },
 

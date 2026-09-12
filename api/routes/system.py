@@ -79,3 +79,47 @@ def db_stats():
             db.close()
     except Exception as exc:
         return {"triage_cases": 0, "error": str(exc)}
+
+
+@router.get("/api/db/operations", tags=["Database"])
+def operations_dashboard():
+    """Return operational case, closure, evidence, and tool-run metrics."""
+    try:
+        from datetime import datetime, timedelta
+        from db.models import ClosureNote, InvestigationState, SessionLocal, SupportiveQueryResult, TriageResult, ToolRun
+        db = SessionLocal()
+        try:
+            now = datetime.utcnow()
+            cases = db.query(TriageResult).all()
+            states = {row.case_id: row for row in db.query(InvestigationState).all()}
+            closed_states = {"closed", "closure_ready", "ready_for_closure", "resolved"}
+            open_cases = [case for case in cases if (states.get(case.case_id).loop_status.lower() if states.get(case.case_id) and states.get(case.case_id).loop_status else "open") not in closed_states]
+
+            def list_len(value):
+                try:
+                    parsed = json.loads(value or "[]")
+                    return len(parsed) if isinstance(parsed, list) else 0
+                except Exception:
+                    return 0
+
+            unresolved = sum(list_len(states[c.case_id].unresolved_questions) for c in open_cases if c.case_id in states)
+            blockers = sum(list_len(states[c.case_id].closure_blockers) for c in open_cases if c.case_id in states)
+            aging_24h = sum(1 for case in open_cases if case.triaged_at and now - case.triaged_at >= timedelta(hours=24))
+            aging_7d = sum(1 for case in open_cases if case.triaged_at and now - case.triaged_at >= timedelta(days=7))
+            notes = db.query(ClosureNote).filter(ClosureNote.submitted_at.isnot(None)).all()
+            closure_hours = [(n.submitted_at - n.created_at).total_seconds() / 3600 for n in notes if n.created_at and n.submitted_at and n.submitted_at >= n.created_at]
+            runs = db.query(ToolRun).all()
+            failed = [run for run in runs if str(run.status).lower().replace("jobstatus.", "") == "failed"]
+            return {
+                "total_cases": len(cases), "open_cases": len(open_cases),
+                "unresolved_questions": unresolved, "closure_blockers": blockers,
+                "aging_24h": aging_24h, "aging_7d": aging_7d,
+                "average_closure_hours": round(sum(closure_hours) / len(closure_hours), 1) if closure_hours else None,
+                "closure_count": len(closure_hours), "tool_runs": len(runs),
+                "tool_failures": len(failed), "evidence_results": db.query(SupportiveQueryResult).count(),
+                "verdict_breakdown": {v or "undetermined": sum(1 for c in cases if (c.verdict or "undetermined") == v) for v in sorted({c.verdict or "undetermined" for c in cases})},
+            }
+        finally:
+            db.close()
+    except Exception as exc:
+        return {"error": str(exc), "total_cases": 0, "open_cases": 0, "tool_runs": 0, "tool_failures": 0}

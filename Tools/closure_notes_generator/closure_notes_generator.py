@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# TOOL_NAME: closure_notes_generator
+# DESC: Generates structured incident closure notes from rule templates and evidence values.
+# CATEGORY: Uncategorized
 """
 Closure Notes Generator
 Generates formatted closure notes for incidents based on rule templates and supportive_rules.json.
@@ -298,3 +301,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+#!/usr/bin/env python3
+# TOOL_NAME: closure_notes_generator
+# DESC: Generates structured incident closure notes from rule templates and evidence values.
+# CATEGORY: Uncategorized

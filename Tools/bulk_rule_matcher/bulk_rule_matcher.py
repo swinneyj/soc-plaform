@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# TOOL_NAME: bulk_rule_matcher
+# DESC: Matches triage cases to enabled ES correlation rules by exact or fuzzy rule name.
+# CATEGORY: Uncategorized
 """
 Bulk Rule Matcher
 Matches triage cases to ES correlation rules by rule_name.
@@ -9,7 +12,16 @@ import os
 import sys
 from difflib import SequenceMatcher
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+tools_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, tools_root)
+
+# The catalog launches tools as standalone scripts.  In that mode Python's
+# import path starts at Tools/bulk_rule_matcher rather than the platform root,
+# so the repository-level ``db`` package is otherwise not importable on either
+# Windows or POSIX hosts.
+platform_root = os.path.dirname(tools_root)
+if platform_root not in sys.path:
+    sys.path.insert(0, platform_root)
 
 from core_lib.utils import get_platform_root, Colors
 

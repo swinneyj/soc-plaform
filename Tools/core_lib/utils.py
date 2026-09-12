@@ -36,7 +36,11 @@ def get_platform_root():
     # First checks if running inside a Docker container context, fallback to host path
     if os.path.exists("/app"):
         return "/app"
-    return str(pathlib.Path(__file__).parent.parent.parent.resolve())
+    # Resolve the module path before walking parents.  Several catalog tools
+    # import this module through a relative ``Tools/..`` entry; walking parents
+    # first leaves the ``..`` segment in the chain and can incorrectly return
+    # ``Tools/<tool>`` instead of the platform root on Windows and POSIX hosts.
+    return str(pathlib.Path(__file__).resolve().parents[2])
 
 def get_reports_dir():
     """Returns and ensures the existence of the platform Reports directory."""

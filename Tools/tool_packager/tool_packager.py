@@ -106,7 +106,15 @@ if exist Launch_Soc_Platform.bat (
     print("[*] Compressing files into release package...")
 
     try:
-        with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+        # Some Windows/source-control restores carry timestamps before the ZIP
+        # format epoch.  Let Python clamp those timestamps instead of failing
+        # the entire package build.
+        with zipfile.ZipFile(
+            output_path,
+            'w',
+            zipfile.ZIP_DEFLATED,
+            strict_timestamps=False,
+        ) as zipf:
             zipf.writestr('launch_commander.bat', bat_content)
             zipf.writestr('README.txt', readme_content)
             print("  [+] Injected resilient launch_commander.bat")

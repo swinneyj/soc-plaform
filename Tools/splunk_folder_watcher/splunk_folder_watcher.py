@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# TOOL_NAME: splunk_folder_watcher
+# DESC: Watches a folder for Splunk CSV exports, ingests them, and archives processed files.
+# CATEGORY: Uncategorized
 """
 Splunk CSV Folder Watcher
 Monitors a folder for new Splunk CSV exports and auto-ingests them.

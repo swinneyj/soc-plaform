@@ -1,12 +1,13 @@
 window.ToolsTab = {
-    props: ['tools', 'toolSearch', 'selectedCategory', 'toolArgs', 'selectedToolForExecution'],
+    props: ['tools', 'toolSearch', 'selectedCategory', 'toolArgs', 'selectedToolForExecution', 'regressionResult', 'regressionRunning'],
     emits: [
         'update:tool-search',
         'update:selected-category',
         'select-tool',
         'close-tool-modal',
         'execute-tool',
-        'change-tab'
+        'change-tab',
+        'run-regression'
     ],
     computed: {
         categories() {
@@ -35,6 +36,17 @@ window.ToolsTab = {
             <div>
                 <h2 class="text-3xl font-bold mb-2">Tools Catalog</h2>
                 <p class="text-gray-400">{{ tools.length }} tools available • Filter and execute SOC tasks</p>
+                <button @click="$emit('run-regression')" :disabled="regressionRunning" class="mt-3 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded text-xs font-semibold">
+                    {{ regressionRunning ? 'Running catalog checks…' : 'Run Catalog Regression Test' }}
+                </button>
+            </div>
+
+            <div v-if="regressionResult" class="bg-gray-800 border border-purple-700 rounded-lg p-4">
+                <h3 class="font-semibold text-purple-300">Catalog Regression Results</h3>
+                <p v-if="regressionResult.error" class="text-red-300 text-sm mt-2">{{ regressionResult.error }}</p>
+                <div v-else class="flex flex-wrap gap-3 mt-2 text-xs">
+                    <span v-for="(count, status) in regressionResult.counts" :key="status" class="px-2 py-1 rounded bg-gray-900">{{ status }}: {{ count }}</span>
+                </div>
             </div>
 
             <div class="bg-blue-950 border border-blue-800 rounded-lg p-4 flex items-start justify-between gap-4">

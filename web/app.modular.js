@@ -28,7 +28,10 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 return {
                     currentTab: 'database',
                     tools: [],
+                    regressionResult: null,
+                    regressionRunning: false,
                     jobs: [],
+                    selectedJobIds: [],
                     reports: [],
                     toolSearch: '',
                     selectedCategory: '',
@@ -41,6 +44,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     analysisCases: [],
                     recentNotables: [],
                     dbStats: { triage_cases: 0, verdict_breakdown: {} },
+                    operationsStats: { open_cases: 0, closure_blockers: 0, unresolved_questions: 0, aging_24h: 0, aging_7d: 0, tool_failures: 0, evidence_results: 0, average_closure_hours: null },
                     dbSearch: '',
                     dbVerdictFilter: '',
                     triageFromPastedOnly: false,
@@ -204,7 +208,9 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                         const haystack = [
                             case_.case_id,
                             case_.rule_name,
-                            case_.analysis_summary
+                            case_.verdict,
+                            case_.analysis_summary,
+                            ...Object.values(case_.key_fields || {})
                         ]
                             .filter(Boolean)
                             .join(' ')

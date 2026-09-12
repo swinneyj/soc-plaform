@@ -191,6 +191,23 @@ class CodeReview(Base):
     model_name = Column(String, default="llama3.1:8b")
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
+
+class ToolRun(Base):
+    """Persistent execution record shared by every catalog tool."""
+
+    __tablename__ = "tool_runs"
+
+    job_id = Column(String, primary_key=True, index=True)
+    tool_name = Column(String, index=True)
+    arguments = Column(Text)  # JSON object
+    status = Column(String, index=True, default="pending")
+    stdout = Column(Text)
+    stderr = Column(Text)
+    exit_code = Column(Integer)
+    artifact_paths = Column(Text)  # JSON array of repo-relative paths
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    completed_at = Column(DateTime)
+
 # Create tables
 Base.metadata.create_all(bind=engine)
 

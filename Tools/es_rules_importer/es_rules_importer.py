@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# TOOL_NAME: es_rules_importer
+# DESC: Imports and lists Splunk ES correlation rules and supportive queries.
+# CATEGORY: Uncategorized
 """
 Splunk ES Correlation Rules Importer
 Imports Splunk Enterprise Security correlation rules into the database.

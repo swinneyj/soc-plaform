@@ -63,7 +63,12 @@ def resolve_registry_path(tool_path):
 def execute_tool(target, args_string):
     """Executes a tool from the registry."""
     print(f"\n{Colors.WARNING}[*] Launching {target['name']}...{Colors.ENDC}")
-    parsed_args = shlex.split(args_string)
+    # Windows paths contain backslashes, which POSIX-mode shlex treats as
+    # escape characters.  That silently turns e.g. C:\\Logs\\alert.csv into
+    # C:Logsalert.csv before the tool ever starts.  Preserve Windows command
+    # line paths while still accepting quoted arguments on both platforms.
+    parsed_args = shlex.split(args_string, posix=(os.name != 'nt'))
+    parsed_args = [arg.strip('"\'') for arg in parsed_args]
     
     abort_launch = False
     if not parsed_args and target.get('arguments'):

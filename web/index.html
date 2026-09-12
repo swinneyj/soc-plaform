@@ -18,7 +18,7 @@
             :current-tab="currentTab"
             :ollama-health="ollamaHealth"
             :api-healthy="apiHealthy"
-            @change-tab="currentTab = $event"
+            @change-tab="changeTab"
         ></header-nav>
 
         <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
@@ -30,18 +30,22 @@
                 :selected-category="selectedCategory"
                 :tool-args="toolArgs"
                 :selected-tool-for-execution="selectedToolForExecution"
+                :regression-result="regressionResult"
+                :regression-running="regressionRunning"
                 @update:tool-search="toolSearch = $event"
                 @update:selected-category="selectedCategory = $event"
                 @select-tool="selectToolForExecution"
                 @close-tool-modal="closeToolModal"
                 @execute-tool="executeTool"
-                @change-tab="currentTab = $event"
+                @change-tab="changeTab"
+                @run-regression="runToolRegression"
             ></tools-tab>
 
             <!-- Database -->
             <database-tab
                 v-if="currentTab === 'database'"
                 :db-stats="dbStats"
+                :operations-stats="operationsStats"
                 :notable-paste-text="notablePasteText"
                 :notable-paste-segment-estimate="notablePasteSegmentEstimate"
                 :notable-redaction-enabled="notableRedactionEnabled"
@@ -60,7 +64,7 @@
                 :selected-notable-ids="selectedNotableIds"
                 :selected-triage-case-ids="selectedTriageCaseIds"
                 :triage-notable-details="triageNotableDetails"
-                @change-tab="currentTab = $event"
+                @change-tab="changeTab"
                 @update:notable-paste-text="notablePasteText = $event"
                 @update:notable-redaction-enabled="notableRedactionEnabled = $event"
                 @update:notable-historical="notableHistorical = $event"
@@ -80,6 +84,7 @@
                 @update:selected-triage-case-ids="selectedTriageCaseIds = $event"
                 @update:delete-analysis-with-case="deleteAnalysisWithCase = $event"
                 @load-triage-data="loadTriageData"
+                @load-db-stats="loadDbStats"
                 @delete-triage-case="deleteTriageCase"
                 @delete-selected-triage-cases="deleteSelectedTriageCases"
                 @load-triage-notable-details="loadTriageNotableDetails"
@@ -87,6 +92,7 @@
                 @analyze-case="analyzeCase"
                 @load-closed-notable-details="loadClosedNotableDetails"
                 @delete-closed-notable="deleteClosedNotable"
+                @delete-selected-closed-notables="deleteSelectedClosedNotables"
             ></database-tab>
 
             <!-- Analysis -->
@@ -181,6 +187,11 @@
             <jobs-tab
                 v-if="currentTab === 'jobs'"
                 :jobs="jobs"
+                :selected-job-ids="selectedJobIds"
+                @update:selected-job-ids="selectedJobIds = $event"
+                @delete-job="deleteJob"
+                @delete-selected-jobs="deleteSelectedJobs"
+                @clear-jobs="clearJobs"
             ></jobs-tab>
 
             <!-- Reports -->
@@ -472,23 +483,23 @@
 
     <!-- modules (API + domain) -->
     <script src="modules/api.js"></script>
-    <script src="modules/database.js"></script>
+    <script src="modules/database.js?v=17"></script>
     <script src="modules/analysis.js"></script>
     <script src="modules/codeReview.js"></script>
-    <script src="modules/tools.js"></script>
+    <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js"></script>
 
     <!-- components (UI) -->
     <script src="components/HeaderNav.js"></script>
-    <script src="components/ToolsTab.js"></script>
-    <script src="components/DatabaseTab.js"></script>
+    <script src="components/ToolsTab.js?v=11"></script>
+    <script src="components/DatabaseTab.js?v=23"></script>
     <script src="components/AnalysisTab.js"></script>
     <script src="components/ClosureTab.js"></script>
-    <script src="components/JobsTab.js"></script>
+    <script src="components/JobsTab.js?v=15"></script>
     <script src="components/ReportsTab.js"></script>
     <script src="components/CodeReviewTab.js"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js"></script>
+    <script src="app.modular.js?v=11"></script>
 </body>
 </html>

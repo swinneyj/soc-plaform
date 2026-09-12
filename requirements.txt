@@ -8,3 +8,4 @@ uvicorn
 python-dotenv
 python-multipart
 python-pptx
+cryptography
