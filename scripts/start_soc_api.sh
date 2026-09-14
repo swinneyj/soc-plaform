@@ -41,8 +41,16 @@ fi
 
 # 2) Start Ollama if it is not already serving
 if ! nc -z 127.0.0.1 "$OLLAMA_PORT" >/dev/null 2>&1; then
-  OLLAMA_BIN="$(command -v ollama || echo /usr/local/bin/ollama)"
-  if [[ -x "$OLLAMA_BIN" ]]; then
+  OLLAMA_BIN="$(command -v ollama || true)"
+  if [[ -z "$OLLAMA_BIN" ]]; then
+    # launchd gives us a minimal PATH, so probe the usual install locations
+    for cand in /opt/homebrew/bin/ollama /usr/local/bin/ollama \
+                "$HOME/Applications/Ollama.app/Contents/Resources/ollama" \
+                /Applications/Ollama.app/Contents/Resources/ollama; do
+      if [[ -x "$cand" ]]; then OLLAMA_BIN="$cand"; break; fi
+    done
+  fi
+  if [[ -n "$OLLAMA_BIN" && -x "$OLLAMA_BIN" ]]; then
     nohup "$OLLAMA_BIN" serve >> "$LOG_DIR/ollama.log" 2>&1 &
     echo "[$(date '+%F %T')] started ollama serve (pid $!)" >> "$LOG_DIR/soc-api.log"
   else
