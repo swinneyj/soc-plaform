@@ -1,0 +1,11 @@
+requests
+sqlalchemy
+psycopg[binary]
+redis
+pydantic
+fastapi
+uvicorn
+python-dotenv
+python-multipart
+python-pptx
+cryptography

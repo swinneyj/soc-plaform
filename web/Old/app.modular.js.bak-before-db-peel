@@ -1,0 +1,2991 @@
+/**
+ * app.modular.js
+ * Root Vue app for the modular shell (index.modular.html).
+ * Derived from the live index.html script so Analysis / Code Review features stay complete.
+ * Live index.html is NOT changed.
+ *
+ * Load order required:
+ *   Vue, axios, utils/*, modules/api.js (+ other modules), components/*, then this file.
+ */
+const { createApp } = Vue;
+
+        createApp({
+
+    components: {
+        'header-nav': window.HeaderNav,
+        'tools-tab': window.ToolsTab,
+        'database-tab': window.DatabaseTab,
+        'analysis-tab': window.AnalysisTab,
+        'closure-tab': window.ClosureTab,
+        'jobs-tab': window.JobsTab,
+        'reports-tab': window.ReportsTab,
+        'code-review-tab': window.CodeReviewTab
+    },
+            data() {
+                return {
+                    currentTab: 'database',
+                    tools: [],
+                    jobs: [],
+                    reports: [],
+                    toolSearch: '',
+                    selectedCategory: '',
+                    toolArgs: {},
+                    apiUrl: '/api',
+                    apiHealthy: false,
+                    
+                    // Database
+                    triageData: [],
+                    analysisCases: [],
+                    recentNotables: [],
+                    dbStats: { triage_cases: 0, verdict_breakdown: {} },
+                    dbSearch: '',
+                    dbVerdictFilter: '',
+                    deleteAnalysisWithCase: false,
+                    triageNotableDetails: {},
+                    selectedTriageCaseIds: [],
+                    showOpenNotablesOnly: true,
+                    historicalNotablesVisible: false,
+                    historicalNotables: [],
+                    notablePasteText: '',
+                    notableRedactionEnabled: true,
+                    notableHistorical: false,
+                    notablePasteSaving: false,
+                    notablePasteResult: null,
+                    notablePromotingId: null,
+                    selectedNotableIds: [],
+                    bulkPromoteNotablesRunning: false,
+                    
+                    // Analysis
+                    ollamaHealth: { available: false, models: [] },
+                    evidenceFindingOptions: ['supports', 'refutes', 'neutral'],
+                    analysisCaseSearch: '',
+                    analysisCaseId: '',
+                    analysisModel: '',
+                    analysisContext: '',
+                    analysisRunning: false,
+                    analysisRequestId: 0,
+                    analysisResult: null,
+                    showPhase1Analysis: true,
+                    phase2Model: '',
+                    phase2Result: null,
+                    analysisSourceNotable: null,
+                    investigationState: null,
+                    enrichmentManualResults: {},
+                    enrichmentFindingTypes: {},
+                    placeholderAliases: {},
+                    supportiveManualResults: {},
+                    supportiveFindingTypes: {},
+                    phase2EditedQueries: {},
+                    phase2ManualResults: {},
+                    phase2FindingTypes: {},
+
+                    // Closure Notes
+                    availableRules: [],
+                    selectedRule: null,
+                    closureSourceNotable: null,
+                    closureSuggestedRuleName: '',
+                    closureSuggestedDisposition: '',
+                    supportiveEditorOpen: false,
+                    supportiveEditorBusy: false,
+                    supportiveEditorQueries: [],
+                    supportiveEditorRuleId: '',
+                    supportiveEditorError: '',
+
+                    // Placeholder Alias Management (dynamic, no-code)
+                    placeholderAliasEditorOpen: false,
+                    placeholderAliasEditorBusy: false,
+                    placeholderAliasList: [],
+                    placeholderAliasEditorError: '',
+                    placeholderAliasSuggestions: [],
+                    placeholderAliasSuggestionsBusy: false,
+                    newAliasForm: { alias: '', fields: '', description: '' },
+                    editingAliasId: null,
+                    closureForm: {
+                        caseId: '',
+                        ruleId: '',
+                        fieldValues: {},
+                        analystNotes: '',
+                        disposition: 'Undetermined'
+                    },
+                    closureResult: null,
+                    closureGenerating: false,
+                    selectedToolForExecution: null,
+
+                    // Code Review
+                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b', uploadedFile: null, instructions: '' },
+                    codeReviewResult: null,
+                    codeReviewRunning: false,
+                    codeReviewsList: [],
+                    codeReviewDragActive: false,
+                    codeReviewSearchTerm: '',
+                    codeReviewSections: [],
+                    codeReviewSectionsBusy: false,
+                    codeReviewSectionsFilter: '',
+                    codeReviewSectionsFeaturesOnly: true, // only show sections that "do stuff"
+                    codeReviewSectionsMinLines: 12,       // hide tiny helpers by default
+                    codeReviewSectionsSourceText: '', // snapshot of code at detect time (for exact line slices)
+                    codeReviewSectionsUseLocal: true, // prefer smarter local outline
+                    codeReviewSectionsShowAdvanced: false, // hide technical filters by default
+                    codeReviewSectionsCodeOnly: false, // legacy filter (kept under Advanced)
+
+                    // In-place Find (Ctrl+F style) for the Code to Review textarea
+                    codeReviewFindTerm: '',
+                    codeReviewFindCaseSensitive: false,
+                    codeReviewFindMatches: [],   // array of { start, end }
+                    codeReviewFindIndex: -1
+                };
+            },
+            computed: {
+                categories() {
+                    const cats = new Set(this.tools.map(t => t.category));
+                    return Array.from(cats).sort();
+                },
+                filteredTools() {
+                    return this.tools.filter(tool => {
+                        const matchSearch = !this.toolSearch || tool.name.toLowerCase().includes(this.toolSearch.toLowerCase()) || 
+                                          tool.description.toLowerCase().includes(this.toolSearch.toLowerCase());
+                        const matchCategory = !this.selectedCategory || tool.category === this.selectedCategory;
+                        return matchSearch && matchCategory;
+                    });
+                },
+                filteredTriageData() {
+                    const searchTerm = this.dbSearch.trim().toLowerCase();
+
+                    return this.triageData.filter(case_ => {
+                        const verdict = (case_.verdict || '').toLowerCase();
+                        const matchesVerdict = !this.dbVerdictFilter || verdict === this.dbVerdictFilter.toLowerCase();
+
+                        if (!matchesVerdict) {
+                            return false;
+                        }
+
+                        if (this.triageFromPastedOnly) {
+                            const id = (case_.case_id || '').toUpperCase();
+                            if (!id.startsWith('NOTABLE-')) {
+                                return false;
+                            }
+                        }
+
+                        if (!searchTerm) {
+                            return true;
+                        }
+
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
+                },
+                filteredAnalysisCases() {
+                    const searchTerm = this.analysisCaseSearch.trim().toLowerCase();
+
+                    if (!searchTerm) {
+                        return this.analysisCases;
+                    }
+
+                    return this.analysisCases.filter(case_ => {
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.verdict,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
+                },
+                codeReviewModels() {
+                    const models = (this.ollamaHealth && this.ollamaHealth.models) || [];
+                    if (models.length) {
+                        return models;
+                    }
+                    // Fallback list when Ollama health is not available yet.
+                    return ['llama3.1:8b', 'llama2', 'mistral'];
+                },
+                filteredCodeReviewSections() {
+                    const sections = this.codeReviewSections || [];
+                    const term = (this.codeReviewSectionsFilter || '').trim().toLowerCase();
+                    const minLines = Math.max(0, parseInt(this.codeReviewSectionsMinLines, 10) || 0);
+                    let filtered = sections.slice();
+
+                    // Size filter — hide tiny helpers by default
+                    if (minLines > 0) {
+                        filtered = filtered.filter(section => {
+                            const lines = section.line_count
+                                || (section.start_line && section.end_line
+                                    ? (section.end_line - section.start_line + 1)
+                                    : 0);
+                            if (!lines) return true; // keep unknown size
+                            // Always keep high-level screens/tabs even if slightly under threshold
+                            const kind = (section.kind || '').toLowerCase();
+                            if (kind === 'tab' || kind === 'vue-block') return lines >= Math.min(minLines, 8);
+                            return lines >= minLines;
+                        });
+                    }
+
+                    // Features-only: keep sections that "do stuff" (actions, screens, major blocks)
+                    if (this.codeReviewSectionsFeaturesOnly) {
+                        filtered = filtered.filter(section => this.sectionDoesStuff(section));
+                    }
+
+                    // Legacy "Code Review methods only" (Advanced)
+                    if (this.codeReviewSectionsCodeOnly) {
+                        filtered = filtered.filter(section => {
+                            const label = (section.label || '').toString().toLowerCase();
+                            const name = (section.name || '').toString().toLowerCase();
+                            const title = (section.title || '').toString().toLowerCase();
+                            return label.includes('codereview') || name.includes('codereview')
+                                || title.includes('code review') || title.includes('find in code')
+                                || (label.includes('code') && label.includes('review'))
+                                || (name.includes('find') && name.includes('code'));
+                        });
+                    }
+
+                    if (term) {
+                        filtered = filtered.filter(section => {
+                            const haystack = [
+                                section.title, section.label, section.name, section.kind,
+                                section.feature, section.description, section.preview
+                            ].filter(Boolean).join(' ').toLowerCase();
+                            return haystack.includes(term);
+                        });
+                    }
+
+                    // Rank: more important / larger first within the list
+                    filtered.sort((a, b) => {
+                        const sa = this.sectionImportanceScore(a);
+                        const sb = this.sectionImportanceScore(b);
+                        if (sb !== sa) return sb - sa;
+                        return (a.start_line || 0) - (b.start_line || 0);
+                    });
+
+                    return filtered;
+                },
+                groupedCodeReviewSections() {
+                    // Group by friendly feature area (not raw kind)
+                    const groups = {};
+                    const order = [
+                        'Screens',
+                        'Code Review',
+                        'Find in code',
+                        'Files & upload',
+                        'AI review',
+                        'Major blocks',
+                        'Other features'
+                    ];
+                    for (const section of this.filteredCodeReviewSections) {
+                        const area = section.feature || this.inferFeatureArea(section);
+                        if (!groups[area]) groups[area] = [];
+                        groups[area].push(section);
+                    }
+                    const keys = Object.keys(groups).sort((a, b) => {
+                        const ia = order.indexOf(a);
+                        const ib = order.indexOf(b);
+                        if (ia === -1 && ib === -1) return a.localeCompare(b);
+                        if (ia === -1) return 1;
+                        if (ib === -1) return -1;
+                        return ia - ib;
+                    });
+                    return keys.map(area => ({
+                        kind: area,
+                        label: area,
+                        sections: groups[area]
+                    }));
+                },
+                analysisRule() {
+                    if (!this.analysisCaseId) {
+                        return null;
+                    }
+
+                    const case_ = this.analysisCases.find(c => c.case_id === this.analysisCaseId);
+                    if (!case_) {
+                        return null;
+                    }
+
+                    // Prefer stable rule_id mapping when available so
+                    // supportive queries stay consistent for the same rule.
+                    const caseRuleId = (case_.rule_id || '').trim();
+                    if (caseRuleId) {
+                        const byId = this.availableRules.find(r => (r.rule_id || '').trim() === caseRuleId);
+                        if (byId) {
+                            return byId;
+                        }
+                    }
+                    const caseRuleRaw = (case_.rule_name || '');
+                    const caseRule = caseRuleRaw.toLowerCase().trim();
+                    if (!caseRule) {
+                        return null;
+                    }
+
+                    // Normalize wrapped ES labels like
+                    // "Endpoint - <Rule Name> - Rule" down to a core
+                    // so truncated correlation_search values still map
+                    // to the canonical rule.
+                    const normalizeRuleLabel = (text) => {
+                        let s = (text || '').toLowerCase().trim();
+                        s = s.replace(/^endpoint\s*-\s*/, '');
+                        s = s.replace(/\s*-\s*rule$/, '');
+                        return s;
+                    };
+
+                    const caseCore = normalizeRuleLabel(caseRuleRaw);
+
+                    // Prefer exact normalized name match first
+                    let rule = this.availableRules.find(
+                        r => normalizeRuleLabel(r.rule_name || '') === caseCore
+                    );
+                    if (rule) {
+                        return rule;
+                    }
+
+                    // Fallback: relaxed contains-based match on
+                    // normalized labels.
+                    rule = this.availableRules.find(r => {
+                        const nameCore = normalizeRuleLabel(r.rule_name || '');
+                        return !!nameCore && (caseCore.includes(nameCore) || nameCore.includes(caseCore));
+                    });
+
+                    return rule || null;
+                },
+                filteredRecentNotables() {
+                    if (!this.showOpenNotablesOnly) {
+                        return this.recentNotables;
+                    }
+
+                    return this.recentNotables.filter(n => !n.historical);
+                },
+                notablePasteSegmentEstimate() {
+                    const text = (this.notablePasteText || '').replace(/\r\n/g, '\n');
+                    if (!text.trim()) {
+                        return 0;
+                    }
+
+                    const lines = text.split('\n');
+                    // Match only the top-of-card "Notable" heading (capital N)
+                    const notablePattern = /^\s*Notable\s*$/;
+                    let countNotable = 0;
+
+                    for (const line of lines) {
+                        if (notablePattern.test(line)) {
+                            countNotable++;
+                        }
+                    }
+
+                    if (countNotable >= 2) {
+                        return countNotable;
+                    }
+
+                    // Fallback: approximate based on Title/Correlation Search labels
+                    const headingPattern = /^\s*(Title|Correlation Search)\b/i;
+                    let countHeadings = 0;
+                    for (const line of lines) {
+                        if (headingPattern.test(line)) {
+                            countHeadings++;
+                        }
+                    }
+
+                    if (countHeadings <= 2) {
+                        return 1;
+                    }
+                    return countHeadings;
+                }
+            },
+            methods: {
+                async loadHistoricalNotables() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables/historical', { params: { limit: 20 } });
+                        this.historicalNotables = res.data || [];
+                    } catch (err) {
+                        console.error('Failed to load historical pasted notables:', err);
+                        this.historicalNotables = [];
+                    }
+                },
+                areAllPastedNotablesSelected() {
+                    const items = this.filteredRecentNotables;
+                    if (!items.length) {
+                        return false;
+                    }
+                    return items.every(n => this.selectedNotableIds.includes(n.id));
+                },
+                toggleSelectAllPastedNotables(event) {
+                    const checked = event.target.checked;
+                    if (checked) {
+                        this.selectedNotableIds = this.filteredRecentNotables.map(n => n.id);
+                    } else {
+                        this.selectedNotableIds = [];
+                    }
+                },
+                areAllTriageCasesSelected() {
+                    const items = this.filteredTriageData;
+                    if (!items.length) {
+                        return false;
+                    }
+                    return items.every(c => this.selectedTriageCaseIds.includes(c.case_id));
+                },
+                toggleSelectAllTriageCases(event) {
+                    const checked = event.target.checked;
+                    if (checked) {
+                        this.selectedTriageCaseIds = this.filteredTriageData.map(c => c.case_id);
+                    } else {
+                        this.selectedTriageCaseIds = [];
+                    }
+                },
+                getNotablePocSummary(notable) {
+                    const fields = notable?.fields || notable || {};
+                    const pocEntries = [];
+                    const addEntry = (label, value) => {
+                        if (!value) {
+                            return;
+                        }
+                        const cleaned = String(value).trim();
+                        if (!cleaned) {
+                            return;
+                        }
+                        pocEntries.push({ label, value: cleaned });
+                    };
+
+                    // Only surface the primary owner as a Point of Contact
+                    // to keep the UI focused and avoid duplicating user
+                    // details that already appear elsewhere.
+                    addEntry('Owner', fields.owner);
+
+                    return pocEntries;
+                },
+                async loadTools() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/tools');
+                        this.tools = res.data;
+                    } catch (err) {
+                        console.error('Failed to load tools:', err);
+                    }
+                },
+                async loadJobs() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/jobs');
+                        this.jobs = res.data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                    } catch (err) {
+                        console.error('Failed to load jobs:', err);
+                    }
+                },
+                async loadReports() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/reports');
+                        this.reports = res.data;
+                    } catch (err) {
+                        console.error('Failed to load reports:', err);
+                    }
+                },
+                onAnalysisCaseChanged() {
+                    this.analysisResult = null;
+                    this.investigationState = null;
+                    this.enrichmentManualResults = {};
+                    this.enrichmentFindingTypes = {};
+                    this.supportiveManualResults = {};
+                    this.supportiveFindingTypes = {};
+                    this.phase2EditedQueries = {};
+                    this.phase2ManualResults = {};
+                    this.phase2FindingTypes = {};
+                    this.analysisSourceNotable = null;
+
+                    const caseId = this.analysisCaseId;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.analysisSourceNotable = res.data;
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for analysis case:', err);
+                            this.analysisSourceNotable = null;
+                        });
+
+                            this.loadSavedSupportiveEvidence(caseId);
+                            this.loadSavedEnrichmentEvidence(caseId);
+                            this.loadSavedPhase2Evidence(caseId);
+                            this.loadInvestigationState(caseId);
+                },
+                async loadTriageData() {
+                    try {
+                        const params = { limit: 50 };
+                        if (this.dbSearch.trim()) {
+                            params.search = this.dbSearch.trim();
+                        }
+                        if (this.dbVerdictFilter) {
+                            params.verdict = this.dbVerdictFilter;
+                        }
+
+                        const res = await axios.get(this.apiUrl + '/db/triage', { params });
+                        this.triageData = res.data;
+                    } catch (err) {
+                        console.error('Failed to load triage data:', err);
+                        this.triageData = [];
+                    }
+                },
+                async loadAnalysisCases() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
+                            params: { limit: 1000 }
+                        });
+                        this.analysisCases = res.data;
+                    } catch (err) {
+                        console.error('Failed to load analysis cases:', err);
+                        this.analysisCases = [];
+                    }
+                },
+                async loadDbStats() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/stats');
+                        this.dbStats = res.data;
+                    } catch (err) {
+                        console.error('Failed to load DB stats:', err);
+                    }
+                },
+                async loadRecentNotables() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables', { params: { limit: 20 } });
+                        this.recentNotables = res.data;
+                    } catch (err) {
+                        console.error('Failed to load recent pasted notables:', err);
+                        this.recentNotables = [];
+                    }
+                },
+                async savePastedNotable() {
+                    if (!this.notablePasteText.trim()) {
+                        alert('Paste a notable before saving');
+                        return;
+                    }
+
+                    this.notablePasteSaving = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/notables/paste', {
+                            raw_text: this.notablePasteText,
+                            redaction_enabled: this.notableRedactionEnabled,
+                            historical: this.notableHistorical
+                        });
+                        this.notablePasteResult = res.data;
+                        this.notablePasteText = '';
+                        this.loadRecentNotables();
+                        this.loadDbStats();
+                    } catch (err) {
+                        console.error('Failed to save pasted notable:', err.response?.data?.detail || err.message);
+                    } finally {
+                        this.notablePasteSaving = false;
+                    }
+                },
+                async deletePastedNotable(notable) {
+                    if (!confirm('Remove this pasted notable from the recent list? This will not delete any triage cases created from it.')) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables', {
+                            params: { delete_event_id: notable.id }
+                        });
+                        this.recentNotables = res.data;
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async deleteSelectedPastedNotables() {
+                    if (!this.selectedNotableIds.length) {
+                        return;
+                    }
+
+                    if (!confirm('Delete ' + this.selectedNotableIds.length + ' pasted notable(s)? This will not delete any triage cases created from them.')) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/notables/batch-delete', {
+                            event_ids: this.selectedNotableIds,
+                        });
+                        this.selectedNotableIds = [];
+                        await this.loadRecentNotables();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async promoteNotableToTriage(notable) {
+                    if (notable && notable.historical && !notable.promoted_case_id) {
+                        console.warn('Historical pasted notables are not promoted to triage.');
+                        return;
+                    }
+                    this.notablePromotingId = notable.id;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                        await this.loadRecentNotables();
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        console.error('Failed to promote notable to triage:', err.response?.data?.detail || err.message);
+                    } finally {
+                        this.notablePromotingId = null;
+                    }
+                },
+                async promoteAllOpenPastedNotables() {
+                    if (this.bulkPromoteNotablesRunning) {
+                        return;
+                    }
+
+                    const candidates = this.filteredRecentNotables.filter(n => !n.historical && !n.promoted_case_id);
+                    if (!candidates.length) {
+                        return;
+                    }
+
+                    this.bulkPromoteNotablesRunning = true;
+                    try {
+                        for (const notable of candidates) {
+                            try {
+                                await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                            } catch (err) {
+                                console.error('Failed to promote notable', notable.id, ':', err.response?.data?.detail || err.message);
+                            }
+                        }
+
+                        await this.loadRecentNotables();
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } finally {
+                        this.bulkPromoteNotablesRunning = false;
+                    }
+                },
+                jumpToTriageCase(caseId) {
+                    this.dbSearch = caseId;
+                    this.currentTab = 'database';
+                    this.loadTriageData();
+                },
+                async deleteTriageCase(case_) {
+                    if (!confirm('Delete this triage case from the database?')) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
+                            params: {
+                                delete_case_id: case_.case_id,
+                                delete_analysis: this.deleteAnalysisWithCase
+                            }
+                        });
+                        this.triageData = res.data;
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async deleteSelectedTriageCases() {
+                    if (!this.selectedTriageCaseIds.length) {
+                        return;
+                    }
+
+                    const count = this.selectedTriageCaseIds.length;
+                    const msg = 'Delete ' + count + ' triage case(s) from the database?' + (this.deleteAnalysisWithCase ? ' This will also delete any AI analysis for these cases.' : '');
+                    if (!confirm(msg)) {
+                        return;
+                    }
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/triage/batch-delete', {
+                            case_ids: this.selectedTriageCaseIds,
+                            delete_analysis: this.deleteAnalysisWithCase,
+                        });
+                        this.selectedTriageCaseIds = [];
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async loadTriageNotableDetails(case_) {
+                    const caseId = case_.case_id;
+                    const existing = this.triageNotableDetails[caseId];
+
+                    if (existing && (existing.loading || existing.data)) {
+                        return;
+                    }
+
+                    this.triageNotableDetails[caseId] = { loading: true, error: null, data: null };
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable');
+                        this.triageNotableDetails[caseId] = { loading: false, error: null, data: res.data };
+                    } catch (err) {
+                        this.triageNotableDetails[caseId] = {
+                            loading: false,
+                            error: err.response?.data?.detail || err.message,
+                            data: null
+                        };
+                    }
+                },
+                async loadRules() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/rules');
+                        this.availableRules = res.data;
+                    } catch (err) {
+                        console.error('Failed to load rules:', err);
+                        this.availableRules = [];
+                    }
+                },
+                async openSupportiveEditor(rule) {
+                    if (!rule || !rule.rule_id) {
+                        return;
+                    }
+
+                    this.supportiveEditorRuleId = rule.rule_id;
+                    this.supportiveEditorError = '';
+                    this.supportiveEditorBusy = false;
+                    this.supportiveEditorQueries = [];
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/supportive-queries', {
+                            params: { rule_id: this.supportiveEditorRuleId }
+                        });
+                        // Clone the array so edits don't mutate the live rule copy
+                        this.supportiveEditorQueries = (res.data || []).map(q => ({
+                            id: q.id,
+                            rule_id: q.rule_id,
+                            title: q.title,
+                            description: q.description || '',
+                            spl_query: q.spl_query,
+                        }));
+                    } catch (err) {
+                        console.error('Failed to load supportive queries for rule:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to load supportive queries.';
+                        this.supportiveEditorQueries = [];
+                    }
+
+                    if (this.supportiveEditorQueries.length === 0) {
+                        // Seed with an empty row to make the editor less blank
+                        this.supportiveEditorQueries.push({
+                            id: null,
+                            rule_id: this.supportiveEditorRuleId,
+                            title: '',
+                            description: '',
+                            spl_query: '',
+                            localKey: 'new-0',
+                        });
+                    } else {
+                        // Ensure each row has a stable local key
+                        this.supportiveEditorQueries = this.supportiveEditorQueries.map((q, index) => ({
+                            ...q,
+                            localKey: q.id ? `db-${q.id}` : `new-${index}`,
+                        }));
+                    }
+
+                    this.supportiveEditorOpen = true;
+                },
+                closeSupportiveEditor() {
+                    this.supportiveEditorOpen = false;
+                    this.supportiveEditorQueries = [];
+                    this.supportiveEditorRuleId = '';
+                    this.supportiveEditorError = '';
+                },
+
+                // === Placeholder Alias Management (dynamic, no-code) ===
+                async openPlaceholderAliasEditor() {
+                    this.placeholderAliasEditorOpen = true;
+                    this.placeholderAliasEditorError = '';
+                    this.newAliasForm = { alias: '', fields: '', description: '' };
+                    this.editingAliasId = null;
+                    this.placeholderAliasSuggestions = [];
+                    await this.loadPlaceholderAliasList();
+                },
+                closePlaceholderAliasEditor() {
+                    if (this.placeholderAliasEditorBusy) return;
+                    this.placeholderAliasEditorOpen = false;
+                    this.placeholderAliasList = [];
+                    this.newAliasForm = { alias: '', fields: '', description: '' };
+                    this.editingAliasId = null;
+                    this.placeholderAliasEditorError = '';
+                    this.placeholderAliasSuggestions = [];
+                },
+                async loadPlaceholderAliasList() {
+                    this.placeholderAliasEditorBusy = true;
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
+                        this.placeholderAliasList = res.data || [];
+                    } catch (err) {
+                        console.error('Failed to load placeholder aliases:', err);
+                        this.placeholderAliasEditorError = 'Failed to load aliases from server.';
+                    } finally {
+                        this.placeholderAliasEditorBusy = false;
+                    }
+                },
+                async savePlaceholderAlias() {
+                    if (!this.newAliasForm.alias.trim()) {
+                        this.placeholderAliasEditorError = 'Alias name is required (e.g. url, signature).';
+                        return;
+                    }
+                    this.placeholderAliasEditorBusy = true;
+                    this.placeholderAliasEditorError = '';
+
+                    const payload = {
+                        alias: this.newAliasForm.alias.trim().toLowerCase(),
+                        fields: this.newAliasForm.fields.split(',').map(f => f.trim()).filter(Boolean),
+                        description: this.newAliasForm.description.trim()
+                    };
+
+                    try {
+                        if (this.editingAliasId) {
+                            await axios.put(`${this.apiUrl}/db/placeholder-aliases/${this.editingAliasId}`, payload);
+                        } else {
+                            await axios.post(this.apiUrl + '/db/placeholder-aliases', payload);
+                        }
+                        await this.loadPlaceholderAliasList();
+                        // Reset form
+                        this.newAliasForm = { alias: '', fields: '', description: '' };
+                        this.editingAliasId = null;
+                    } catch (err) {
+                        console.error('Failed to save placeholder alias:', err);
+                        this.placeholderAliasEditorError = err.response?.data?.detail || 'Failed to save alias.';
+                    } finally {
+                        this.placeholderAliasEditorBusy = false;
+                    }
+                },
+                editPlaceholderAlias(alias) {
+                    this.editingAliasId = alias.id;
+                    this.newAliasForm = {
+                        alias: alias.alias,
+                        fields: (alias.fields || []).join(', '),
+                        description: alias.description || ''
+                    };
+                    this.placeholderAliasEditorError = '';
+                },
+                async loadPlaceholderAliasSuggestions() {
+                    if (this.placeholderAliasSuggestionsBusy) {
+                        return;
+                    }
+                    this.placeholderAliasSuggestionsBusy = true;
+                    this.placeholderAliasEditorError = '';
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases/suggestions', {
+                            params: { limit_events: 50 }
+                        });
+                        this.placeholderAliasSuggestions = (res.data && res.data.candidates) || [];
+                    } catch (err) {
+                        console.error('Failed to load alias field suggestions:', err);
+                        this.placeholderAliasEditorError = 'Failed to load field suggestions from recent notables.';
+                        this.placeholderAliasSuggestions = [];
+                    } finally {
+                        this.placeholderAliasSuggestionsBusy = false;
+                    }
+                },
+                isAliasFieldSelected(fieldName) {
+                    const raw = this.newAliasForm.fields || '';
+                    const parts = raw.split(',').map(f => f.trim()).filter(Boolean);
+                    return parts.some(f => f.toLowerCase() === String(fieldName).toLowerCase());
+                },
+                toggleAliasFieldCandidate(fieldName) {
+                    const raw = this.newAliasForm.fields || '';
+                    let parts = raw.split(',').map(f => f.trim()).filter(Boolean);
+                    const normalized = String(fieldName).trim();
+                    const idx = parts.findIndex(f => f.toLowerCase() === normalized.toLowerCase());
+                    if (idx >= 0) {
+                        parts.splice(idx, 1);
+                    } else {
+                        parts.push(normalized);
+                    }
+                    this.newAliasForm.fields = parts.join(', ');
+                },
+                async deletePlaceholderAlias(id) {
+                    if (!confirm('Delete this placeholder alias? Supportive queries using it will fall back to direct field matching.')) {
+                        return;
+                    }
+                    this.placeholderAliasEditorBusy = true;
+                    try {
+                        await axios.delete(`${this.apiUrl}/db/placeholder-aliases/${id}`);
+                        await this.loadPlaceholderAliasList();
+                        if (this.editingAliasId === id) {
+                            this.editingAliasId = null;
+                            this.newAliasForm = { alias: '', fields: '', description: '' };
+                        }
+                    } catch (err) {
+                        console.error('Failed to delete placeholder alias:', err);
+                        this.placeholderAliasEditorError = 'Failed to delete alias.';
+                    } finally {
+                        this.placeholderAliasEditorBusy = false;
+                    }
+                },
+                addSupportiveQueryRow() {
+                    const index = this.supportiveEditorQueries.length;
+                    this.supportiveEditorQueries.push({
+                        id: null,
+                        rule_id: this.supportiveEditorRuleId,
+                        title: '',
+                        description: '',
+                        spl_query: '',
+                        localKey: `new-${index}`,
+                    });
+                },
+                async removeSupportiveQuery(index, q) {
+                    if (this.supportiveEditorBusy) {
+                        return;
+                    }
+
+                    const row = this.supportiveEditorQueries[index];
+                    if (!row) {
+                        return;
+                    }
+
+                    // If this row has not been persisted yet, just remove it locally
+                    if (!row.id) {
+                        this.supportiveEditorQueries.splice(index, 1);
+                        return;
+                    }
+
+                    const confirmed = window.confirm('Delete this supportive query from the database?');
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+                    try {
+                        await axios.delete(this.apiUrl + '/db/supportive-queries/' + row.id);
+                        this.supportiveEditorQueries.splice(index, 1);
+                        // Refresh rules so Analysis/Closure tabs reflect the change
+                        await this.loadRules();
+                    } catch (err) {
+                        console.error('Failed to delete supportive query:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to delete query.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
+                async saveSupportiveQueries() {
+                    if (!this.supportiveEditorRuleId) {
+                        return;
+                    }
+
+                    // Basic validation: every non-empty row needs title and SPL
+                    const rowsToApply = this.supportiveEditorQueries.filter(q =>
+                        (q.title && q.title.trim()) || (q.spl_query && q.spl_query.trim())
+                    );
+
+                    for (const q of rowsToApply) {
+                        if (!q.title || !q.title.trim() || !q.spl_query || !q.spl_query.trim()) {
+                            this.supportiveEditorError = 'Each query must have at least a title and SPL query.';
+                            return;
+                        }
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+
+                    try {
+                        // Persist each row individually; this is fine for the
+                        // small, analyst-driven counts typical of supportive queries.
+                        for (const q of rowsToApply) {
+                            const payload = {
+                                rule_id: this.supportiveEditorRuleId,
+                                title: q.title.trim(),
+                                description: (q.description || '').trim(),
+                                spl_query: q.spl_query.trim(),
+                            };
+
+                            if (q.id) {
+                                await axios.put(this.apiUrl + '/db/supportive-queries/' + q.id, payload);
+                            } else {
+                                const res = await axios.post(this.apiUrl + '/db/supportive-queries', payload);
+                                q.id = res.data.id;
+                            }
+                        }
+
+                        await this.loadRules();
+
+                        // If the currently selected rule matches, refresh its
+                        // reference so the updated queries show up immediately.
+                        if (this.selectedRule && this.selectedRule.rule_id === this.supportiveEditorRuleId) {
+                            this.selectedRule = this.availableRules.find(r => r.rule_id === this.supportiveEditorRuleId) || this.selectedRule;
+                        }
+
+                        this.closeSupportiveEditor();
+                    } catch (err) {
+                        console.error('Failed to save supportive queries:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to save queries.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
+                async checkOllama() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/ollama/health');
+                        this.ollamaHealth = res.data;
+                        if (this.ollamaHealth.models.length > 0) {
+                            const preferred = 'llama3.1:8b';
+                            const models = this.ollamaHealth.models;
+                            let selected = models[0];
+                            if (models.includes(preferred)) {
+                                selected = preferred;
+                            }
+                            this.analysisModel = selected;
+                            if (!this.phase2Model || !models.includes(this.phase2Model)) {
+                                this.phase2Model = selected;
+                            }
+                            // Keep Code Review model aligned with the same default
+                            // when it hasn't been explicitly set yet.
+                            if (!this.codeReviewForm.model || !this.codeReviewModels.includes(this.codeReviewForm.model)) {
+                                this.codeReviewForm.model = selected;
+                            }
+                        }
+                    } catch (err) {
+                        this.ollamaHealth = { available: false, models: [] };
+                    }
+                },
+                async loadPlaceholderAliases() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
+                        const map = {};
+                        for (const item of res.data || []) {
+                            map[item.alias.toLowerCase()] = item.fields || [];
+                        }
+                        this.placeholderAliases = map;
+                    } catch (err) {
+                        console.warn('Could not load placeholder aliases, using defaults:', err);
+                        // Keep built-in defaults in renderSupportiveQuery
+                    }
+                },
+                async executeTool(tool) {
+                    const args = {};
+                    if (tool.arguments) {
+                        for (const arg of tool.arguments) {
+                            const key = tool.name + '_' + arg.flag;
+                            if (this.toolArgs[key]) {
+                                args[arg.flag.replace('--', '')] = this.toolArgs[key];
+                            }
+                        }
+                    }
+
+                    try {
+                        const res = await axios.post(this.apiUrl + '/execute', {
+                            tool_name: tool.name,
+                            arguments: args,
+                            silent: false
+                        });
+                        this.currentTab = 'jobs';
+                        this.loadJobs();
+                        alert('Tool execution queued: ' + res.data.job_id.slice(0, 8));
+                    } catch (err) {
+                        alert('Error: ' + err.response?.data?.detail || err.message);
+                    }
+                },
+                async analyzeCase(case_) {
+                    this.analysisCaseId = case_.case_id;
+                    this.currentTab = 'analysis';
+                    this.onAnalysisCaseChanged();
+                },
+                async loadInvestigationState(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
+                        this.investigationState = res.data;
+                    } catch (err) {
+                        console.error('Failed to load investigation state:', err);
+                        this.investigationState = null;
+                    }
+                },
+                async runAnalysis() {
+                    if (!this.analysisCaseId || !this.analysisModel) {
+                        alert('Please select a case ID and model');
+                        return;
+                    }
+
+                    const requestId = ++this.analysisRequestId;
+                    this.analysisRunning = true;
+                    try {
+                        await this.saveSupportiveEvidence({ silent: true });
+                        await this.saveEnrichmentEvidence({ silent: true });
+
+                        let combinedContext = this.analysisContext || '';
+                        const priorAnalysisText = (
+                            (this.phase2Result && this.phase2Result.analysis) ||
+                            (this.analysisResult && this.analysisResult.analysis) ||
+                            ''
+                        ).toString().trim();
+
+                        const res = await axios.post(this.apiUrl + '/db/analyze', {
+                            case_id: this.analysisCaseId,
+                            model: this.analysisModel,
+                            context: combinedContext,
+                            prior_analysis: priorAnalysisText,
+                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                        });
+                        // Ignore stale responses if a newer analysis has been started or cancelled.
+                        if (requestId === this.analysisRequestId) {
+                            const newResult = res.data;
+                            // If the new response lacks phase2_queries but we previously had
+                            // them, preserve the existing list so phase 2 cards do not vanish.
+                            if (
+                                (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
+                            ) {
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                            }
+                            this.analysisResult = newResult;
+                            this.investigationState = newResult.investigation_state || this.investigationState;
+                        }
+                    } catch (err) {
+                        if (requestId === this.analysisRequestId) {
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
+                        }
+                    } finally {
+                        if (requestId === this.analysisRequestId) {
+                            this.analysisRunning = false;
+                        }
+                    }
+                },
+                getPhase2Key(q) {
+                    const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
+                    if (!title) {
+                        return 'phase2:title:unknown';
+                    }
+                    return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getPhase2KeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'phase2:title:unknown';
+                    }
+                    return 'phase2:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getPhase2Template(q) {
+                    const key = this.getPhase2Key(q);
+                    const existing = this.phase2EditedQueries[key];
+                    if (existing !== undefined && existing !== null && existing !== '') {
+                        return existing;
+                    }
+                    const raw = (q && q.spl ? q.spl : '').toString();
+                    // Resolve placeholders once so the editable SPL shows the concrete
+                    // value (e.g., src_ip) for this case. Subsequent edits operate on
+                    // the hard-coded version, matching the initial supportive queries.
+                    const resolved = this.renderPhase2Query(raw);
+                    this.phase2EditedQueries[key] = resolved;
+                    return resolved;
+                },
+                onPhase2TemplateInput(q, value) {
+                    const key = this.getPhase2Key(q);
+                    this.phase2EditedQueries[key] = value;
+                },
+                copyPhase2SPL(q) {
+                    const key = this.getPhase2Key(q);
+                    const template = (this.phase2EditedQueries[key] || q.spl || '').toString();
+                    const text = this.renderPhase2Query(template);
+                    if (!text) {
+                        alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (this.hasUnresolvedPlaceholders(text)) {
+                        alert('This Phase 2 query still contains unresolved placeholders like $host$ or $user$. Use enrichment data or edit the SPL before copying it into Splunk.');
+                        return;
+                    }
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard API not available; copy manually from the card.');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text).catch(err => {
+                        console.error('Failed to copy SPL:', err);
+                        alert('Failed to copy SPL to clipboard');
+                    });
+                },
+                async runPhase2Analysis() {
+                    if (!this.analysisCaseId) {
+                        alert('Please select a case ID');
+                        return;
+                    }
+
+                    const effectiveModel = this.phase2Model || this.analysisModel;
+                    if (!effectiveModel) {
+                        alert('Please select a Phase 2 model (or an Analysis model)');
+                        return;
+                    }
+
+                    const requestId = ++this.analysisRequestId;
+                    this.analysisRunning = true;
+                    try {
+                        await this.savePhase2Evidence({ silent: true });
+
+                        let combinedContext = this.analysisContext || '';
+                        const priorAnalysisText = (
+                            (this.phase2Result && this.phase2Result.analysis) ||
+                            (this.analysisResult && this.analysisResult.analysis) ||
+                            ''
+                        ).toString().trim();
+
+                        const res = await axios.post(this.apiUrl + '/db/analyze', {
+                            case_id: this.analysisCaseId,
+                            model: effectiveModel,
+                            context: combinedContext,
+                            prior_analysis: priorAnalysisText,
+                            analysis_stage: priorAnalysisText ? 'follow_up' : 'initial'
+                        });
+                        if (requestId === this.analysisRequestId) {
+                            const newResult = res.data;
+                            if (
+                                (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
+                                this.analysisResult &&
+                                this.analysisResult.phase2_queries &&
+                                this.analysisResult.phase2_queries.length
+                            ) {
+                                newResult.phase2_queries = this.analysisResult.phase2_queries;
+                            }
+                            this.phase2Result = newResult;
+                            this.investigationState = newResult.investigation_state || this.investigationState;
+                        }
+                    } catch (err) {
+                        if (requestId === this.analysisRequestId) {
+                            alert('Error: ' + (err.response?.data?.detail || err.message));
+                        }
+                    } finally {
+                        if (requestId === this.analysisRequestId) {
+                            this.analysisRunning = false;
+                        }
+                    }
+                },
+                async savePhase2Evidence(options = {}) {
+                    if (!this.analysisCaseId) {
+                        return;
+                    }
+
+                    const phase2Queries = (this.analysisResult && this.analysisResult.phase2_queries) || [];
+                    const entries = [];
+                    for (const q of phase2Queries) {
+                        const key = this.getPhase2Key(q);
+                        const resultText = (this.phase2ManualResults[key] || '').trim();
+                        const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+                        if (!resultText && !queryText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed phase 2 query',
+                            query_text: queryText,
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.phase2FindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'phase2_manual',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Phase 2 evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async loadSavedPhase2Evidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'phase2_manual' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getPhase2KeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                            if (raw.query_text) {
+                                this.phase2EditedQueries[key] = raw.query_text.toString();
+                            }
+                        }
+                        this.phase2ManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved phase 2 evidence:', err);
+                    }
+                },
+                async saveSupportiveEvidence(options = {}) {
+                    if (!this.analysisCaseId || !this.analysisRule || !this.analysisRule.supportive_queries) {
+                        return;
+                    }
+
+                    const entries = [];
+                    for (const q of this.analysisRule.supportive_queries) {
+                        const key = this.getSupportiveKey(q);
+                        const resultText = (this.supportiveManualResults[key] || '').trim();
+                        if (!resultText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed supportive query',
+                            query_text: this.renderSupportiveQuery(q),
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.supportiveFindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'supportive_manual',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Supportive evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async saveEnrichmentEvidence(options = {}) {
+                    if (!this.analysisCaseId || !this.analysisSourceNotable || !this.analysisSourceNotable.parse_assessment || !this.analysisSourceNotable.parse_assessment.generic_queries) {
+                        return;
+                    }
+
+                    const entries = [];
+                    for (const q of this.analysisSourceNotable.parse_assessment.generic_queries) {
+                        const key = this.getEnrichmentKey(q);
+                        const resultText = (this.enrichmentManualResults[key] || '').trim();
+                        if (!resultText) {
+                            continue;
+                        }
+
+                        entries.push({
+                            query_title: q.title || 'Unnamed enrichment query',
+                            query_text: (q && q.spl ? q.spl : '').toString().trim(),
+                            result_text: resultText,
+                            analyst_summary: '',
+                            finding_type: this.enrichmentFindingTypes[key] || 'neutral',
+                        });
+                    }
+
+                    await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+                        source_system: 'generic_enrichment',
+                        replace_existing: true,
+                        entries,
+                    });
+
+                    if (!options.silent) {
+                        alert('Enrichment evidence saved for case ' + this.analysisCaseId);
+                    }
+                },
+                async loadSavedSupportiveEvidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'supportive_manual' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getSupportiveKeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                        }
+                        this.supportiveManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved supportive evidence:', err);
+                    }
+                },
+                async loadSavedEnrichmentEvidence(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
+                            params: { source_system: 'generic_enrichment' }
+                        });
+                        const saved = {};
+                        for (const item of (res.data || [])) {
+                            const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
+                            const raw = item.raw_result || {};
+                            saved[key] = (raw.result_text || '').toString();
+                            this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                        }
+                        this.enrichmentManualResults = saved;
+                    } catch (err) {
+                        console.error('Failed to load saved enrichment evidence:', err);
+                    }
+                },
+                copyAnalysisResult() {
+                    const text = (this.analysisResult && this.analysisResult.analysis) || '';
+                    if (!text) {
+                        alert('No analysis text to copy');
+                        return;
+                    }
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+                    navigator.clipboard.writeText(text)
+                        .then(() => {
+                            alert('Analysis copied to clipboard');
+                        })
+                        .catch(err => {
+                            console.error('Failed to copy analysis:', err);
+                            alert('Failed to copy analysis to clipboard');
+                        });
+                },
+                saveAnalysisState() {
+                    if (!this.analysisCaseId) {
+                        alert('Select a case before saving analysis state');
+                        return;
+                    }
+
+                    const key = 'analysis_state:' + this.analysisCaseId;
+                    const snapshot = {
+                        analysisContext: this.analysisContext,
+                        analysisModel: this.analysisModel,
+                        phase2Model: this.phase2Model,
+                        supportiveManualResults: this.supportiveManualResults,
+                        supportiveFindingTypes: this.supportiveFindingTypes,
+                        enrichmentManualResults: this.enrichmentManualResults,
+                        enrichmentFindingTypes: this.enrichmentFindingTypes,
+                        phase2EditedQueries: this.phase2EditedQueries,
+                        phase2ManualResults: this.phase2ManualResults,
+                        phase2FindingTypes: this.phase2FindingTypes,
+                        analysisResult: this.analysisResult,
+                        phase2Result: this.phase2Result,
+                        investigationState: this.investigationState,
+                    };
+
+                    try {
+                        window.localStorage.setItem(key, JSON.stringify(snapshot));
+                        alert('Analysis state saved for case ' + this.analysisCaseId);
+                    } catch (err) {
+                        console.error('Failed to save analysis state:', err);
+                        alert('Failed to save analysis state: ' + (err.message || err));
+                    }
+                },
+                loadAnalysisState(caseId) {
+                    if (!caseId) {
+                        return;
+                    }
+
+                    const key = 'analysis_state:' + caseId;
+                    try {
+                        const raw = window.localStorage.getItem(key);
+                        if (!raw) {
+                            return;
+                        }
+                        const snapshot = JSON.parse(raw);
+                        if (snapshot.analysisContext !== undefined) {
+                            this.analysisContext = snapshot.analysisContext;
+                        }
+                        if (snapshot.analysisModel) {
+                            this.analysisModel = snapshot.analysisModel;
+                        }
+                        if (snapshot.phase2Model) {
+                            this.phase2Model = snapshot.phase2Model;
+                        }
+                        if (snapshot.supportiveManualResults) {
+                            this.supportiveManualResults = snapshot.supportiveManualResults;
+                        }
+                        if (snapshot.supportiveFindingTypes) {
+                            this.supportiveFindingTypes = snapshot.supportiveFindingTypes;
+                        }
+                        if (snapshot.enrichmentManualResults) {
+                            this.enrichmentManualResults = snapshot.enrichmentManualResults;
+                        }
+                        if (snapshot.enrichmentFindingTypes) {
+                            this.enrichmentFindingTypes = snapshot.enrichmentFindingTypes;
+                        }
+                        if (snapshot.phase2EditedQueries) {
+                            this.phase2EditedQueries = snapshot.phase2EditedQueries;
+                        }
+                        if (snapshot.phase2ManualResults) {
+                            this.phase2ManualResults = snapshot.phase2ManualResults;
+                        }
+                        if (snapshot.phase2FindingTypes) {
+                            this.phase2FindingTypes = snapshot.phase2FindingTypes;
+                        }
+                        if (snapshot.analysisResult) {
+                            this.analysisResult = snapshot.analysisResult;
+                        }
+                        if (snapshot.phase2Result) {
+                            this.phase2Result = snapshot.phase2Result;
+                        }
+                        if (snapshot.investigationState) {
+                            this.investigationState = snapshot.investigationState;
+                        }
+                    } catch (err) {
+                        console.error('Failed to load analysis state:', err);
+                    }
+                },
+                formatLoopStatus(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Unknown';
+                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+                },
+                formatDispositionLabel(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Undetermined';
+                    if (raw === 'false_positive') return 'False Positive';
+                    return raw.split('_').map(part => part.charAt(0).toUpperCase() + part.slice(1)).join(' ');
+                },
+                formatFindingLabel(value) {
+                    const raw = (value || '').toString().trim().toLowerCase();
+                    if (!raw) return 'Neutral';
+                    return raw.charAt(0).toUpperCase() + raw.slice(1);
+                },
+                cancelAnalysis() {
+                    // Invalidate any in-flight analysis responses and clear the running flag.
+                    this.analysisRequestId += 1;
+                    this.analysisRunning = false;
+                },
+                getSupportiveKey(q) {
+                    if (q && q.id != null) {
+                        return `id:${q.id}`;
+                    }
+                    const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
+                    if (!title) {
+                        return 'title:unknown';
+                    }
+                    return 'title:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getEnrichmentKey(q) {
+                    const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
+                    if (!title) {
+                        return 'enrichment:unknown';
+                    }
+                    return 'enrichment:' + title.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getSupportiveKeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'title:unknown';
+                    }
+                    return 'title:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
+                getEnrichmentKeyFromTitle(title) {
+                    const normalized = (title || '').toString().toLowerCase().trim();
+                    if (!normalized) {
+                        return 'enrichment:unknown';
+                    }
+                    return 'enrichment:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+                },
+                hasUnresolvedPlaceholders(text) {
+                    return /\$[A-Za-z0-9_]+\$/.test((text || '').toString());
+                },
+                copyEnrichmentSPL(q) {
+                    const text = (q && q.spl ? q.spl : '').toString();
+                    if (!text) {
+                        alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .catch(err => {
+                            console.error('Failed to copy generic enrichment SPL:', err);
+                            alert('Failed to copy SPL to clipboard');
+                        });
+                },
+                copySupportiveSPL(q) {
+                    const text = this.renderSupportiveQuery(q);
+                    if (!text) {
+                        alert('No SPL query text available to copy');
+                        return;
+                    }
+
+                    if (this.hasUnresolvedPlaceholders(text)) {
+                        alert('This query still contains unresolved placeholders like $host$ or $user$. Gather enrichment data or populate more case fields before copying it into Splunk.');
+                        return;
+                    }
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .catch(err => {
+                            console.error('Failed to copy SPL:', err);
+                            alert('Failed to copy SPL query to clipboard');
+                        });
+                },
+                renderPhase2Query(template) {
+                    const synthetic = { spl_query: template };
+                    return this.renderSupportiveQuery(synthetic);
+                },
+                async promotePhase2Query(q) {
+                    const rule = this.analysisRule;
+                    if (!rule || !rule.rule_id) {
+                        alert('Cannot save: no analysis rule selected for this case');
+                        return;
+                    }
+
+                    const key = this.getPhase2Key(q);
+                    const template = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+                    if (!template) {
+                        alert('Cannot save: SPL query is empty');
+                        return;
+                    }
+
+                    const title = (q.title || '').toString().trim() || 'Phase 2 Query';
+                    const description = (q.description || '').toString().trim();
+
+                    try {
+                        await axios.post(this.apiUrl + '/db/supportive-queries', {
+                            rule_id: rule.rule_id,
+                            title,
+                            description,
+                            spl_query: template,
+                        });
+                        await this.loadRules();
+                        alert('Saved phase 2 query as a supportive query for this rule.');
+                    } catch (err) {
+                        console.error('Failed to save phase 2 query as supportive:', err);
+                        alert('Error saving supportive query: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                renderSupportiveQuery(q) {
+                    const text = (q.spl_query || '').toString();
+                    if (!this.analysisSourceNotable) {
+                        return text;
+                    }
+
+                    const fields = this.analysisSourceNotable.raw_fields || this.analysisSourceNotable.fields || {};
+
+                    // Dynamic alias map loaded from backend (placeholder_aliases table + JSON seed).
+                    // Falls back to built-in defaults if not yet loaded.
+                    const aliasMap = Object.keys(this.placeholderAliases || {}).length > 0
+                        ? this.placeholderAliases
+                        : {
+                            host: ['host', 'destination_nt_hostname', 'destination', 'destination_ip'],
+                            dest: ['destination', 'destination_ip', 'host'],
+                            user: ['user', 'username', 'user_identity'],
+                            account: ['user', 'username', 'user_identity'],
+                            process: ['process', 'image', 'file_name', 'value'],
+                            // Fallback IP aliases so src_ip/source_ip still resolve even
+                            // if the dynamic placeholderAliases map has not yet loaded.
+                            src_ip: ['src_ip', 'source_ip'],
+                            source_ip: ['source_ip', 'src_ip'],
+                        };
+
+                    const placeholderRegex = /\$([A-Za-z0-9_]+)\$/g;
+
+                    const resolveValue = (name) => {
+                        const lower = name.toLowerCase();
+                        let value = '';
+
+                        // First, try alias mappings like host/dest/user/process.
+                        if (aliasMap[lower]) {
+                            for (const key of aliasMap[lower]) {
+                                if (fields[key]) {
+                                    value = fields[key];
+                                    break;
+                                }
+                            }
+                        }
+
+                        // If no alias hit, try direct field name matches.
+                        if (!value) {
+                            if (Object.prototype.hasOwnProperty.call(fields, name)) {
+                                value = fields[name];
+                            } else {
+                                // Case-insensitive field name match.
+                                const keys = Object.keys(fields);
+                                for (const key of keys) {
+                                    if (key.toLowerCase() === lower) {
+                                        value = fields[key];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Globally escape backslashes so literal Windows paths
+                        // like c:\windows\system32\certutil.exe render as
+                        // c\\windows\\system32\\certutil.exe in SPL,
+                        // which Splunk accepts inside quoted strings.
+                        if (typeof value === 'string' && value.includes('\\')) {
+                            return value.replace(/\\/g, '\\\\');
+                        }
+                        return value;
+                    };
+
+                    return text.replace(placeholderRegex, (match, name) => {
+                        const value = resolveValue(name);
+                        return value ? value : match;
+                    });
+                },
+                goToClosureFromAnalysis() {
+                    if (!this.analysisCaseId) {
+                        alert('Select a case to analyze first');
+                        return;
+                    }
+
+                    this.currentTab = 'closure';
+                    this.closureForm.caseId = this.analysisCaseId;
+                    this.onCaseSelected();
+                },
+                onCaseSelected() {
+                    this.closureForm.ruleId = '';
+                    this.closureForm.fieldValues = {};
+                    this.selectedRule = null;
+                     this.closureSuggestedRuleName = '';
+                     this.closureSuggestedDisposition = '';
+
+                    // Load source notable details for this case so we can
+                    // prepopulate closure fields (e.g., host, user) from
+                    // the parsed notable fields.
+                    const caseId = this.closureForm.caseId;
+                    this.closureSourceNotable = null;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    // Suggest a default disposition based on the triage verdict.
+                    const triageCase = this.triageData.find(c => c.case_id === caseId);
+                    if (triageCase) {
+                        const verdict = (triageCase.verdict || '').toLowerCase();
+                        if (verdict === 'malicious') {
+                            this.closureForm.disposition = 'True Positive';
+                            this.closureSuggestedDisposition = 'True Positive';
+                        } else if (verdict === 'benign') {
+                            this.closureForm.disposition = 'Benign Positive';
+                            this.closureSuggestedDisposition = 'Benign Positive';
+                        } else {
+                            this.closureForm.disposition = 'Undetermined';
+                            this.closureSuggestedDisposition = 'Undetermined';
+                        }
+                    } else {
+                        this.closureForm.disposition = 'Undetermined';
+                        this.closureSuggestedDisposition = 'Undetermined';
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.closureSourceNotable = res.data;
+
+                            // Choose the most appropriate rule for closure based on
+                            // the triage case's rule_name when none is selected yet.
+                            if (!this.closureForm.ruleId && triageCase && this.availableRules.length) {
+                                const triageRuleName = (triageCase.rule_name || '').toLowerCase().trim();
+                                let matchingRule = this.availableRules.find(
+                                    r => (r.rule_name || '').toLowerCase().trim() === triageRuleName
+                                );
+                                if (!matchingRule && triageRuleName) {
+                                    matchingRule = this.availableRules.find(r => {
+                                        const name = (r.rule_name || '').toLowerCase().trim();
+                                        return !!name && (triageRuleName.includes(name) || name.includes(triageRuleName));
+                                    });
+                                }
+                                if (matchingRule) {
+                                    this.closureForm.ruleId = matchingRule.rule_id;
+                                    this.closureSuggestedRuleName = matchingRule.rule_name;
+                                    this.onRuleSelected();
+                                }
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for closure form:', err);
+                            this.closureSourceNotable = null;
+                        });
+                },
+                onRuleSelected() {
+                    this.selectedRule = this.availableRules.find(r => r.rule_id === this.closureForm.ruleId) || null;
+                    this.closureForm.fieldValues = {};
+                    if (this.selectedRule) {
+                        const sourceFields = (this.closureSourceNotable && this.closureSourceNotable.fields) || {};
+
+                        const aliasMap = {
+                            host: ['host', 'destination_nt_hostname', 'destination'],
+                            destination: ['destination', 'destination_ip'],
+                            user: ['user', 'username', 'user_identity'],
+                            account: ['user', 'username', 'user_identity'],
+                        };
+
+                        for (const field of this.selectedRule.required_closure_fields) {
+                            let value = '';
+
+                            // Direct match on field name
+                            if (Object.prototype.hasOwnProperty.call(sourceFields, field)) {
+                                value = sourceFields[field];
+                            } else {
+                                // Fallback to simple aliases for common closure fields
+                                const aliases = aliasMap[field] || [];
+                                for (const key of aliases) {
+                                    if (sourceFields[key]) {
+                                        value = sourceFields[key];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Leave fields like 'justification' empty when there
+                            // is no meaningful value in the source notable.
+                            this.closureForm.fieldValues[field] = value || '';
+                        }
+                    }
+                },
+                async generateClosureNote() {
+                    const missingFields = this.selectedRule.required_closure_fields.filter(f => !this.closureForm.fieldValues[f]);
+                    if (missingFields.length > 0) {
+                        alert('Please fill in all required fields: ' + missingFields.join(', '));
+                        return;
+                    }
+
+                    this.closureGenerating = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/closure-note', {
+                            rule_id: this.closureForm.ruleId,
+                            case_id: this.closureForm.caseId,
+                            field_values: this.closureForm.fieldValues,
+                            analyst_notes: this.closureForm.analystNotes,
+                            disposition: this.closureForm.disposition
+                        });
+                        this.closureResult = res.data;
+                    } catch (err) {
+                        alert('Error: ' + err.response?.data?.detail || err.message);
+                    } finally {
+                        this.closureGenerating = false;
+                    }
+                },
+                copyToClipboard() {
+                    navigator.clipboard.writeText(this.closureResult.generated_note);
+                    alert('Closure note copied to clipboard!');
+                },
+                downloadClosureNote() {
+                    const element = document.createElement('a');
+                    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(this.closureResult.generated_note));
+                    element.setAttribute('download', this.closureForm.caseId + '_closure_note.txt');
+                    element.style.display = 'none';
+                    document.body.appendChild(element);
+                    element.click();
+                    document.body.removeChild(element);
+                },
+                copyTriageNotableFields(case_) {
+                    const caseId = case_.case_id;
+                    const details = this.triageNotableDetails[caseId];
+
+                    if (!details || !details.data || !details.data.fields) {
+                        alert('No source-notable fields loaded yet for this case');
+                        return;
+                    }
+
+                    const fields = details.data.fields;
+                    const lines = Object.entries(fields).map(([key, value]) => `${key}: ${value}`);
+                    const text = lines.join('\n');
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .then(() => {
+                            alert('Source notable fields copied to clipboard');
+                        })
+                        .catch(err => {
+                            console.error('Failed to copy fields:', err);
+                            alert('Failed to copy fields to clipboard');
+                        });
+                },
+                selectToolForExecution(tool) {
+                    this.selectedToolForExecution = tool;
+                },
+                closeToolModal() {
+                    this.selectedToolForExecution = null;
+                },
+
+                // ---- In-place Find helpers for Code to Review textarea ----
+                clearCodeReviewFind() {
+                    this.codeReviewFindTerm = '';
+                    this.codeReviewFindMatches = [];
+                    this.codeReviewFindIndex = -1;
+                },
+                runCodeReviewFind() {
+                    // Recompute matches only. Do NOT focus/select the textarea here —
+                    // that would steal the caret from the Find input on every keystroke.
+                    const term = (this.codeReviewFindTerm || '');
+                    const text = (this.codeReviewForm.codeSnippet || '');
+                    this.codeReviewFindMatches = [];
+                    this.codeReviewFindIndex = -1;
+
+                    if (!term || !text) {
+                        return;
+                    }
+
+                    const caseSensitive = !!this.codeReviewFindCaseSensitive;
+                    const haystack = caseSensitive ? text : text.toLowerCase();
+                    const needle = caseSensitive ? term : term.toLowerCase();
+                    const matches = [];
+                    let from = 0;
+                    while (from < haystack.length) {
+                        const idx = haystack.indexOf(needle, from);
+                        if (idx === -1) break;
+                        matches.push({ start: idx, end: idx + term.length });
+                        from = idx + Math.max(1, term.length);
+                    }
+                    this.codeReviewFindMatches = matches;
+                    // Leave index at -1 until the user presses Enter / Next / Prev
+                },
+                selectCodeReviewFindMatch(index) {
+                    const matches = this.codeReviewFindMatches || [];
+                    if (!matches.length || index < 0 || index >= matches.length) return;
+
+                    this.codeReviewFindIndex = index;
+                    const m = matches[index];
+                    const ta = this.$refs.codeReviewTextarea;
+                    if (!ta) return;
+
+                    // Browsers only paint the selection highlight while the textarea
+                    // has focus. Focus it, select the match, then scroll into view.
+                    // User can press Ctrl+F (or click the Find box) to return to typing.
+                    try {
+                        ta.focus();
+                        ta.setSelectionRange(m.start, m.end);
+                    } catch (e) {
+                        // ignore
+                    }
+
+                    // Accurate scroll: mirror the textarea styles into a hidden div,
+                    // measure the pixel offset of the match, and center it in view.
+                    // Fixes cases where the match was selected but still outside the
+                    // visible area (user had to scroll a little to see the highlight).
+                    try {
+                        this.scrollTextareaToOffset(ta, m.start, m.end);
+                    } catch (e) {
+                        // ignore scroll errors
+                    }
+
+                    // Re-apply selection on next tick (some browsers clear it during scroll)
+                    this.$nextTick(() => {
+                        try {
+                            if (document.activeElement === ta) {
+                                ta.setSelectionRange(m.start, m.end);
+                            }
+                        } catch (e2) { /* ignore */ }
+                    });
+                },
+                scrollTextareaToOffset(ta, start, end) {
+                    if (!ta) return;
+                    const text = ta.value || '';
+                    const style = window.getComputedStyle(ta);
+
+                    // Build a mirror that matches the textarea's typography & width
+                    const mirror = document.createElement('div');
+                    const props = [
+                        'boxSizing', 'width', 'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft',
+                        'borderTopWidth', 'borderRightWidth', 'borderBottomWidth', 'borderLeftWidth',
+                        'fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'letterSpacing',
+                        'textTransform', 'wordSpacing', 'textIndent', 'lineHeight',
+                        'whiteSpace', 'wordWrap', 'wordBreak', 'overflowWrap'
+                    ];
+                    mirror.style.position = 'absolute';
+                    mirror.style.top = '0';
+                    mirror.style.left = '-9999px';
+                    mirror.style.visibility = 'hidden';
+                    mirror.style.height = 'auto';
+                    mirror.style.overflow = 'hidden';
+                    mirror.style.whiteSpace = 'pre-wrap';
+                    mirror.style.wordWrap = 'break-word';
+                    // Match content width (clientWidth already excludes scrollbar)
+                    mirror.style.width = ta.clientWidth + 'px';
+                    props.forEach((p) => {
+                        try { mirror.style[p] = style[p]; } catch (e) { /* ignore */ }
+                    });
+                    // Force pre-wrap so long lines wrap the same way as the textarea
+                    if (!mirror.style.whiteSpace || mirror.style.whiteSpace === 'normal') {
+                        mirror.style.whiteSpace = 'pre-wrap';
+                    }
+
+                    // Text before the match + a marker span at the match position
+                    const before = text.substring(0, start);
+                    const matchText = text.substring(start, Math.max(start, end));
+                    const marker = document.createElement('span');
+                    marker.textContent = matchText || '.';
+                    mirror.textContent = before;
+                    mirror.appendChild(marker);
+                    document.body.appendChild(mirror);
+
+                    const markerTop = marker.offsetTop;
+                    const markerHeight = marker.offsetHeight || parseFloat(style.lineHeight) || 16;
+                    document.body.removeChild(mirror);
+
+                    // Place the match roughly 1/3 down the visible area so context
+                    // above and below is visible, and it is never clipped.
+                    const viewH = ta.clientHeight;
+                    const target = Math.max(0, markerTop - Math.floor(viewH / 3));
+                    const maxScroll = Math.max(0, ta.scrollHeight - viewH);
+                    ta.scrollTop = Math.min(target, maxScroll);
+
+                    // If after scrolling the marker would still be below the fold
+                    // (e.g. very tall wrapped match), nudge so its top is visible.
+                    if (markerTop + markerHeight > ta.scrollTop + viewH) {
+                        ta.scrollTop = Math.min(Math.max(0, markerTop - 8), maxScroll);
+                    }
+                },
+                codeReviewFindNext() {
+                    const n = (this.codeReviewFindMatches || []).length;
+                    if (!n) return;
+                    // First navigation lands on match 0; later ones advance
+                    const next = this.codeReviewFindIndex < 0 ? 0 : (this.codeReviewFindIndex + 1) % n;
+                    this.selectCodeReviewFindMatch(next);
+                },
+                codeReviewFindPrev() {
+                    const n = (this.codeReviewFindMatches || []).length;
+                    if (!n) return;
+                    const prev = this.codeReviewFindIndex < 0 ? (n - 1) : (this.codeReviewFindIndex - 1 + n) % n;
+                    this.selectCodeReviewFindMatch(prev);
+                },
+                onCodeReviewFindKeydown(event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        if (event.shiftKey) {
+                            this.codeReviewFindPrev();
+                        } else {
+                            this.codeReviewFindNext();
+                        }
+                    } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        this.clearCodeReviewFind();
+                        // return focus to the code box after clearing
+                        this.$nextTick(() => {
+                            const ta = this.$refs.codeReviewTextarea;
+                            if (ta) ta.focus();
+                        });
+                    } else if (event.key === 'F3') {
+                        event.preventDefault();
+                        if (event.shiftKey) this.codeReviewFindPrev();
+                        else this.codeReviewFindNext();
+                    }
+                },
+                onCodeReviewTextareaKeydown(event) {
+                    // Ctrl+F / Cmd+F focuses the find input instead of browser find
+                    if ((event.ctrlKey || event.metaKey) && (event.key === 'f' || event.key === 'F')) {
+                        event.preventDefault();
+                        const input = this.$refs.codeReviewFindInput;
+                        if (input) {
+                            input.focus();
+                            input.select();
+                        }
+                        return;
+                    }
+                    // While a find is active, Enter / Shift+Enter / F3 navigate matches
+                    // so you can keep jumping without going back to the Find box.
+                    const hasMatches = (this.codeReviewFindMatches || []).length > 0;
+                    if (hasMatches && event.key === 'Enter') {
+                        event.preventDefault();
+                        if (event.shiftKey) this.codeReviewFindPrev();
+                        else this.codeReviewFindNext();
+                        return;
+                    }
+                    if (event.key === 'F3') {
+                        event.preventDefault();
+                        if (event.shiftKey) this.codeReviewFindPrev();
+                        else this.codeReviewFindNext();
+                        return;
+                    }
+                    if (event.key === 'Escape' && (this.codeReviewFindTerm || '').trim()) {
+                        event.preventDefault();
+                        this.clearCodeReviewFind();
+                    }
+                },
+                // ---- end in-place Find helpers ----
+
+                handleCodeReviewFile(file) {
+                    if (!file) {
+                        this.codeReviewForm.uploadedFile = null;
+                        this.codeReviewSections = [];
+                        this.codeReviewSectionsSourceText = '';
+                        this.clearCodeReviewFind();
+                        return;
+                    }
+
+                    this.codeReviewForm.uploadedFile = file;
+                    this.codeReviewSections = [];
+                    this.codeReviewSectionsSourceText = '';
+                    this.clearCodeReviewFind();
+                    const name = file.name || '';
+                    const lowerName = name.toLowerCase();
+                    const ext = lowerName.includes('.') ? lowerName.substring(lowerName.lastIndexOf('.') + 1) : '';
+
+                    // Auto-set language based on extension when reasonable
+                    if (ext === 'js' || ext === 'ts') {
+                        this.codeReviewForm.language = 'javascript';
+                    } else if (ext === 'sh') {
+                        this.codeReviewForm.language = 'bash';
+                    } else if (ext === 'sql') {
+                        this.codeReviewForm.language = 'sql';
+                    } else if (ext === 'html' || ext === 'htm') {
+                        this.codeReviewForm.language = 'html';
+                    }
+
+                    // For non-zip files, load contents into the text area
+                    if (ext !== 'zip') {
+                        const reader = new FileReader();
+                        reader.onload = (e) => {
+                            const text = (e.target && e.target.result) || '';
+                            this.codeReviewForm.codeSnippet = typeof text === 'string' ? text : '';
+                            this.clearCodeReviewFind();
+                        };
+                        reader.readAsText(file);
+                    } else {
+                        // Zip projects can be large; leave textarea empty and route to zip endpoint
+                        this.codeReviewForm.codeSnippet = '';
+                        this.clearCodeReviewFind();
+                    }
+                },
+                handleFileUpload(event) {
+                    const file = event.target.files && event.target.files[0];
+                    this.handleCodeReviewFile(file);
+                },
+                focusCodeReviewSection() {
+                    const fullText = this.codeReviewForm.codeSnippet || '';
+                    const term = (this.codeReviewSearchTerm || '').trim();
+
+                    if (!fullText.trim()) {
+                        alert('No code loaded yet. Upload a file or paste code first.');
+                        return;
+                    }
+                    if (!term) {
+                        alert('Enter a search term to focus on (e.g., a component name or heading).');
+                        return;
+                    }
+
+                    const lowerText = fullText.toLowerCase();
+                    const lowerTerm = term.toLowerCase();
+                    const idx = lowerText.indexOf(lowerTerm);
+
+                    if (idx === -1) {
+                        alert(`The term "${term}" was not found in the current code.`);
+                        return;
+                    }
+
+                    const radius = 2000; // characters of context around the match
+                    const start = Math.max(0, idx - radius);
+                    const end = Math.min(fullText.length, idx + radius);
+                    const snippet = fullText.slice(start, end);
+
+                    this.codeReviewForm.codeSnippet = snippet;
+                    this.clearCodeReviewFind();
+                    alert('Focused on a smaller section around the first match. You can refine further or run the review now.');
+                },
+                formatSectionKind(kind) {
+                    const map = {
+                        'vue-block': 'Major blocks',
+                        tab: 'Screens',
+                        class: 'Classes',
+                        function: 'Actions',
+                        method: 'Actions',
+                        computed: 'Computed values',
+                        data: 'Data',
+                        hook: 'Startup hooks',
+                        region: 'Regions',
+                        section: 'Other'
+                    };
+                    return map[(kind || '').toLowerCase()] || (kind || 'Other');
+                },
+                /** True when a section is something a user would actually want to edit / review. */
+                sectionDoesStuff(section) {
+                    if (!section) return false;
+                    const kind = (section.kind || '').toLowerCase();
+                    const name = (section.name || '').toString();
+                    const nameL = name.toLowerCase();
+                    const lines = section.line_count
+                        || (section.start_line && section.end_line
+                            ? (section.end_line - section.start_line + 1) : 0);
+
+                    // Screens / tab regions always count
+                    if (kind === 'tab') return true;
+
+                    // Whole Vue option blocks that are big enough
+                    if (kind === 'vue-block' || kind === 'data' || kind === 'computed') {
+                        return lines >= 8;
+                    }
+
+                    // Classes always (they're structural)
+                    if (kind === 'class') return lines >= 10;
+
+                    // Lifecycle hooks only if substantial
+                    if (kind === 'hook') return lines >= 15;
+
+                    // Methods / functions: prefer ones that act (verbs) or are large
+                    if (kind === 'method' || kind === 'function' || kind === 'section') {
+                        if (this.looksLikeActionName(nameL)) return true;
+                        if (lines >= 20) return true; // large enough to matter even without verb
+                        return false;
+                    }
+
+                    return lines >= 15;
+                },
+                looksLikeActionName(nameL) {
+                    if (!nameL) return false;
+                    // Common action prefixes / verbs
+                    const verbs = [
+                        'handle', 'on', 'submit', 'load', 'save', 'delete', 'remove', 'add',
+                        'create', 'update', 'send', 'fetch', 'run', 'start', 'stop', 'open',
+                        'close', 'toggle', 'clear', 'reset', 'detect', 'focus', 'build',
+                        'parse', 'format', 'copy', 'paste', 'upload', 'download', 'import',
+                        'export', 'search', 'find', 'filter', 'sort', 'select', 'navigate',
+                        'switch', 'show', 'hide', 'render', 'process', 'analyze', 'review',
+                        'aggregate', 'extract', 'scan', 'validate', 'generate', 'refresh'
+                    ];
+                    for (const v of verbs) {
+                        if (nameL.startsWith(v)) return true;
+                    }
+                    // CamelCase contains an action word as a segment
+                    for (const v of verbs) {
+                        if (nameL.includes(v) && v.length >= 4) return true;
+                    }
+                    return false;
+                },
+                sectionImportanceScore(section) {
+                    const kind = (section.kind || '').toLowerCase();
+                    const nameL = (section.name || '').toString().toLowerCase();
+                    const lines = section.line_count || 0;
+                    let score = Math.min(lines, 80); // size helps
+                    if (kind === 'tab') score += 40;
+                    if (kind === 'vue-block') score += 25;
+                    if (kind === 'class') score += 20;
+                    if (this.looksLikeActionName(nameL)) score += 30;
+                    // Boost well-known feature areas in this app
+                    if (nameL.includes('codereview') || nameL.includes('code-review')) score += 25;
+                    if (nameL.includes('find')) score += 15;
+                    if (nameL.includes('section') || nameL.includes('detect') || nameL.includes('focus')) score += 20;
+                    if (nameL.includes('upload') || nameL.includes('folder') || nameL.includes('file')) score += 12;
+                    if (nameL.includes('submit') || nameL.includes('review')) score += 10;
+                    // Penalize pure event passthroughs
+                    if (/^on[a-z]+$/.test(nameL) && lines < 12) score -= 20;
+                    return score;
+                },
+                inferFeatureArea(section) {
+                    const kind = (section.kind || '').toLowerCase();
+                    const nameL = (section.name || '').toString().toLowerCase();
+                    const labelL = (section.label || '').toString().toLowerCase();
+                    const blob = nameL + ' ' + labelL;
+
+                    if (kind === 'tab') return 'Screens';
+                    if (kind === 'vue-block' || kind === 'data' || kind === 'computed') return 'Major blocks';
+
+                    if (blob.includes('find') && (blob.includes('code') || blob.includes('match') || blob.includes('search'))) {
+                        return 'Find in code';
+                    }
+                    if (blob.includes('codereview') || blob.includes('code-review') || blob.includes('code review')
+                        || blob.includes('section') || blob.includes('detect') || blob.includes('focus')) {
+                        return 'Code Review';
+                    }
+                    if (blob.includes('upload') || blob.includes('folder') || blob.includes('file')
+                        || blob.includes('drop') || blob.includes('drag')) {
+                        return 'Files & upload';
+                    }
+                    if (blob.includes('submit') || blob.includes('review') || blob.includes('ollama')
+                        || blob.includes('model')) {
+                        return 'AI review';
+                    }
+                    return 'Other features';
+                },
+                /** Turn camelCase / snake_case into a short plain-English title. */
+                humanizeName(name) {
+                    if (!name) return '';
+                    let s = String(name);
+                    // tab names like code-review
+                    s = s.replace(/[-_]+/g, ' ');
+                    // camelCase / PascalCase → spaces
+                    s = s.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+                    s = s.replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2');
+                    s = s.replace(/\s+/g, ' ').trim();
+                    // Lowercase then capitalize first letter of each word for readability
+                    s = s.split(' ').map(w => {
+                        if (!w) return w;
+                        // Keep short acronyms
+                        if (w.length <= 2) return w.toUpperCase();
+                        return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+                    }).join(' ');
+                    return s;
+                },
+                /** Known friendly titles for this app's important pieces. */
+                friendlyTitleFor(section) {
+                    const name = (section.name || '').toString();
+                    const nameL = name.toLowerCase();
+                    const kind = (section.kind || '').toLowerCase();
+
+                    // Explicit map for the features people actually edit
+                    const known = {
+                        'focuscodereviewonsection': 'Focus on a detected section',
+                        'focuscodereviewsection': 'Focus on section (by search term)',
+                        'detectcodereviewsections': 'Detect features / sections',
+                        'buildlocalcodereviewsections': 'Build the section outline',
+                        'submitcodereview': 'Submit code for AI review',
+                        'handlecodereviewfile': 'Handle an uploaded code file',
+                        'handlefolderupload': 'Upload a whole folder',
+                        'runcodereviewfind': 'Find text in the code box',
+                        'selectcodereviewfindmatch': 'Highlight a find match',
+                        'clearcodereviewfind': 'Clear the find bar',
+                        'codereviewfindnext': 'Go to next find match',
+                        'codereviewfindprev': 'Go to previous find match',
+                        'oncodereviewfindkeydown': 'Find bar keyboard shortcuts',
+                        'oncodereviewtextareakeydown': 'Code box keyboard shortcuts',
+                        'oncodereviewdragover': 'Drag-over on code box',
+                        'oncodereviewdragleave': 'Drag-leave on code box',
+                        'oncodereviewdrop': 'Drop a file onto code box',
+                        'copycodereviewtoclipboard': 'Copy review result',
+                        'loadcodereviews': 'Load past reviews',
+                        'loadfullcodereview': 'Open a past review'
+                    };
+                    if (known[nameL]) return known[nameL];
+
+                    if (kind === 'tab') {
+                        const nice = this.humanizeName(name);
+                        return 'Screen: ' + nice;
+                    }
+                    if (kind === 'vue-block' || kind === 'data' || kind === 'computed') {
+                        return 'Block: ' + this.humanizeName(name);
+                    }
+                    if (kind === 'class') {
+                        return 'Class: ' + this.humanizeName(name);
+                    }
+                    if (kind === 'hook') {
+                        return 'When the page ' + nameL;
+                    }
+
+                    // Generic: strip common noisy prefixes for a cleaner title
+                    let title = this.humanizeName(name);
+                    title = title.replace(/^(Handle|On|Do) /i, '');
+                    return title || (section.label || name || 'Section');
+                },
+                friendlyDescriptionFor(section) {
+                    const nameL = (section.name || '').toString().toLowerCase();
+                    const kind = (section.kind || '').toLowerCase();
+                    const lines = section.line_count || 0;
+
+                    if (kind === 'tab') {
+                        return 'The UI markup for this screen/tab. Click to edit just this view.';
+                    }
+                    if (nameL.includes('detect') && nameL.includes('section')) {
+                        return 'Builds the list of features you can jump to. Click to edit this logic.';
+                    }
+                    if (nameL.includes('focus') && nameL.includes('section')) {
+                        return 'Loads one section into the editor so you can review or change it.';
+                    }
+                    if (nameL.includes('find') && (nameL.includes('code') || nameL.includes('match'))) {
+                        return 'Powers the Find bar above the code box (search, next, previous).';
+                    }
+                    if (nameL.includes('submit') && nameL.includes('review')) {
+                        return 'Sends the current code to the AI model for review.';
+                    }
+                    if (nameL.includes('upload') || nameL.includes('folder') || nameL.includes('file')) {
+                        return 'Handles files or folders you drop or pick for review.';
+                    }
+                    if (kind === 'vue-block' && nameL === 'methods') {
+                        return 'All interactive actions for this page (large block).';
+                    }
+                    if (kind === 'vue-block' || kind === 'data' || kind === 'computed') {
+                        return 'A major Vue block in this file.';
+                    }
+                    if (lines) {
+                        return lines + ' lines · click to load only this part into “Code to Review”.';
+                    }
+                    return 'Click to load only this part into “Code to Review”.';
+                },
+                /** Attach friendly title / description / feature area onto each section. */
+                enrichSectionsWithFriendlyLabels(sections) {
+                    return (sections || []).map(s => {
+                        const feature = this.inferFeatureArea(s);
+                        const title = this.friendlyTitleFor(s);
+                        const description = this.friendlyDescriptionFor(s);
+                        return Object.assign({}, s, {
+                            feature,
+                            title,
+                            description,
+                            // Keep label for search, but prefer title in the UI
+                            label: title || s.label
+                        });
+                    });
+                },
+                /**
+                 * Smart local outline — Vue/JS/HTML aware.
+                 * Returns sections with: id, kind, name, label, start_line, end_line,
+                 * line_count, preview, content (full text of the section).
+                 */
+                buildLocalCodeReviewSections(code, language) {
+                    const text = code || '';
+                    if (!text.trim()) return [];
+
+                    const lines = text.split(/\r?\n/);
+                    const sections = [];
+                    let idSeq = 0;
+                    const pushSection = (partial) => {
+                        const start = Math.max(1, partial.start_line || 1);
+                        const end = Math.max(start, partial.end_line || start);
+                        const slice = lines.slice(start - 1, end).join('\n');
+                        const lineCount = end - start + 1;
+                        const preview = (partial.preview || slice).replace(/\s+/g, ' ').trim().slice(0, 140);
+                        sections.push({
+                            id: 'local-' + (++idSeq),
+                            kind: partial.kind || 'section',
+                            name: partial.name || '',
+                            label: partial.label || '',
+                            start_line: start,
+                            end_line: end,
+                            line_count: lineCount,
+                            preview,
+                            content: slice
+                        });
+                    };
+
+                    // --- helpers: rough brace matcher (skips strings / line comments) ---
+                    const findMatchingBrace = (src, openIdx) => {
+                        if (openIdx < 0 || openIdx >= src.length || src[openIdx] !== '{') return -1;
+                        let depth = 0;
+                        let i = openIdx;
+                        let inS = false, inD = false, inT = false, inLineComment = false;
+                        while (i < src.length) {
+                            const ch = src[i];
+                            const next = src[i + 1];
+                            if (inLineComment) {
+                                if (ch === '\n') inLineComment = false;
+                                i++;
+                                continue;
+                            }
+                            if (inS) {
+                                if (ch === '\\') { i += 2; continue; }
+                                if (ch === "'") inS = false;
+                                i++; continue;
+                            }
+                            if (inD) {
+                                if (ch === '\\') { i += 2; continue; }
+                                if (ch === '"') inD = false;
+                                i++; continue;
+                            }
+                            if (inT) {
+                                if (ch === '\\') { i += 2; continue; }
+                                if (ch === '`') inT = false;
+                                i++; continue;
+                            }
+                            if (ch === '/' && next === '/') { inLineComment = true; i += 2; continue; }
+                            if (ch === "'") { inS = true; i++; continue; }
+                            if (ch === '"') { inD = true; i++; continue; }
+                            if (ch === '`') { inT = true; i++; continue; }
+                            if (ch === '{') depth++;
+                            else if (ch === '}') {
+                                depth--;
+                                if (depth === 0) return i;
+                            }
+                            i++;
+                        }
+                        return -1;
+                    };
+
+                    const lineAt = (idx) => {
+                        // 1-based line number for character index
+                        let n = 1;
+                        for (let k = 0; k < idx && k < text.length; k++) {
+                            if (text[k] === '\n') n++;
+                        }
+                        return n;
+                    };
+
+                    const lang = (language || '').toLowerCase();
+                    const isJsFamily = !lang || ['javascript', 'js', 'html', 'vue', 'typescript', 'ts'].includes(lang);
+
+                    // ---------- Vue major option blocks ----------
+                    if (isJsFamily) {
+                        const vueBlockRe = /(?:^|[\s;,])((?:async\s+)?(?:data|computed|methods|watch|components|filters|directives|mixins|setup))\s*(\(|:)/gm;
+                        let m;
+                        const seenBlocks = new Set();
+                        while ((m = vueBlockRe.exec(text)) !== null) {
+                            const name = m[1].replace(/^async\s+/, '');
+                            if (seenBlocks.has(name)) continue;
+                            // Find the opening { after the match
+                            let searchFrom = m.index + m[0].length - 1;
+                            // data() {  or  data: function() {  or  methods: {
+                            let open = -1;
+                            for (let j = searchFrom; j < Math.min(text.length, searchFrom + 80); j++) {
+                                if (text[j] === '{') { open = j; break; }
+                                if (text[j] === ';') break;
+                            }
+                            if (open < 0) continue;
+                            const close = findMatchingBrace(text, open);
+                            if (close < 0) continue;
+                            seenBlocks.add(name);
+                            const startLine = lineAt(open);
+                            const endLine = lineAt(close);
+                            pushSection({
+                                kind: name === 'methods' ? 'vue-block'
+                                    : name === 'computed' ? 'computed'
+                                    : name === 'data' ? 'data'
+                                    : 'vue-block',
+                                name,
+                                label: 'Vue · ' + name,
+                                start_line: startLine,
+                                end_line: endLine
+                            });
+
+                            // Inside methods: { ... } extract individual methods
+                            if (name === 'methods' || name === 'computed') {
+                                const body = text.slice(open + 1, close);
+                                const bodyOffset = open + 1;
+                                // methodName(...) {  or  methodName: function (...) {  or  methodName: (...) =>
+                                const methodRe = /(?:^|[\n\r,{])\s*(?:async\s+)?([A-Za-z_$][\w$]*)\s*(?:\(|:\s*(?:async\s+)?function\s*\(|:\s*(?:async\s*)?\()/g;
+                                let mm;
+                                while ((mm = methodRe.exec(body)) !== null) {
+                                    const methodName = mm[1];
+                                    if (['function', 'return', 'if', 'for', 'while', 'switch', 'catch', 'try'].includes(methodName)) continue;
+                                    // Find { after this match within a short window
+                                    const abs = bodyOffset + mm.index;
+                                    let mOpen = -1;
+                                    for (let j = abs; j < Math.min(text.length, abs + 120); j++) {
+                                        if (text[j] === '{') { mOpen = j; break; }
+                                        // arrow with concise body — skip
+                                        if (text[j] === '}' || text[j] === ';') break;
+                                    }
+                                    if (mOpen < 0) continue;
+                                    const mClose = findMatchingBrace(text, mOpen);
+                                    if (mClose < 0) continue;
+                                    pushSection({
+                                        kind: name === 'computed' ? 'computed' : 'method',
+                                        name: methodName,
+                                        label: name + '.' + methodName,
+                                        start_line: lineAt(mOpen),
+                                        end_line: lineAt(mClose)
+                                    });
+                                }
+                            }
+                        }
+
+                        // Lifecycle hooks: mounted() {, created() {, etc.
+                        const hookRe = /(?:^|[\s;,])((?:async\s+)?(?:beforeCreate|created|beforeMount|mounted|beforeUpdate|updated|beforeDestroy|destroyed|beforeUnmount|unmounted|activated|deactivated|errorCaptured|renderTracked|renderTriggered|serverPrefetch))\s*\(/gm;
+                        let h;
+                        const seenHooks = new Set();
+                        while ((h = hookRe.exec(text)) !== null) {
+                            const hookName = h[1].replace(/^async\s+/, '');
+                            if (seenHooks.has(hookName)) continue;
+                            let open = -1;
+                            for (let j = h.index; j < Math.min(text.length, h.index + 100); j++) {
+                                if (text[j] === '{') { open = j; break; }
+                            }
+                            if (open < 0) continue;
+                            const close = findMatchingBrace(text, open);
+                            if (close < 0) continue;
+                            seenHooks.add(hookName);
+                            pushSection({
+                                kind: 'hook',
+                                name: hookName,
+                                label: 'hook · ' + hookName,
+                                start_line: lineAt(open),
+                                end_line: lineAt(close)
+                            });
+                        }
+
+                        // Top-level functions & classes (outside the Vue methods we already captured)
+                        const fnRe = /(?:^|[\n\r])\s*(?:export\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/g;
+                        let f;
+                        while ((f = fnRe.exec(text)) !== null) {
+                            let open = -1;
+                            for (let j = f.index; j < Math.min(text.length, f.index + 200); j++) {
+                                if (text[j] === '{') { open = j; break; }
+                            }
+                            if (open < 0) continue;
+                            const close = findMatchingBrace(text, open);
+                            if (close < 0) continue;
+                            // Skip if this range is already fully inside an existing method section
+                            const sLine = lineAt(open);
+                            const eLine = lineAt(close);
+                            const already = sections.some(s =>
+                                (s.kind === 'method' || s.kind === 'function') &&
+                                s.start_line <= sLine && s.end_line >= eLine
+                            );
+                            if (already) continue;
+                            pushSection({
+                                kind: 'function',
+                                name: f[1],
+                                label: 'function ' + f[1],
+                                start_line: sLine,
+                                end_line: eLine
+                            });
+                        }
+
+                        const classRe = /(?:^|[\n\r])\s*(?:export\s+)?(?:default\s+)?class\s+([A-Za-z_$][\w$]*)/g;
+                        let c;
+                        while ((c = classRe.exec(text)) !== null) {
+                            let open = -1;
+                            for (let j = c.index; j < Math.min(text.length, c.index + 200); j++) {
+                                if (text[j] === '{') { open = j; break; }
+                            }
+                            if (open < 0) continue;
+                            const close = findMatchingBrace(text, open);
+                            if (close < 0) continue;
+                            pushSection({
+                                kind: 'class',
+                                name: c[1],
+                                label: 'class ' + c[1],
+                                start_line: lineAt(open),
+                                end_line: lineAt(close)
+                            });
+                        }
+
+                        // HTML tab regions: v-if="currentTab === 'xxx'"
+                        const tabRe = /v-if\s*=\s*["']currentTab\s*===\s*['"]([^'"]+)['"]["']/g;
+                        const tabHits = [];
+                        let t;
+                        while ((t = tabRe.exec(text)) !== null) {
+                            tabHits.push({ name: t[1], index: t.index, line: lineAt(t.index) });
+                        }
+                        for (let i = 0; i < tabHits.length; i++) {
+                            const startLine = tabHits[i].line;
+                            // End at next tab marker or a reasonable window / file end
+                            let endLine = i + 1 < tabHits.length
+                                ? Math.max(startLine, tabHits[i + 1].line - 1)
+                                : Math.min(lines.length, startLine + 400);
+                            // Don't let a tab region be absurdly large if it's the last one
+                            if (endLine - startLine > 800) endLine = startLine + 800;
+                            pushSection({
+                                kind: 'tab',
+                                name: tabHits[i].name,
+                                label: 'tab · ' + tabHits[i].name,
+                                start_line: startLine,
+                                end_line: endLine
+                            });
+                        }
+                    }
+
+                    // ---------- Python: def / class by indentation ----------
+                    if (lang === 'python' || lang === 'py') {
+                        const pyRe = /^( *)(async\s+)?(def|class)\s+([A-Za-z_][\w]*)/gm;
+                        const hits = [];
+                        let p;
+                        while ((p = pyRe.exec(text)) !== null) {
+                            hits.push({
+                                indent: p[1].length,
+                                kind: p[3] === 'class' ? 'class' : 'function',
+                                name: p[4],
+                                line: lineAt(p.index)
+                            });
+                        }
+                        for (let i = 0; i < hits.length; i++) {
+                            const h = hits[i];
+                            let endLine = lines.length;
+                            for (let j = i + 1; j < hits.length; j++) {
+                                if (hits[j].indent <= h.indent) {
+                                    endLine = hits[j].line - 1;
+                                    break;
+                                }
+                            }
+                            // Trim trailing blank lines
+                            while (endLine > h.line && !(lines[endLine - 1] || '').trim()) endLine--;
+                            pushSection({
+                                kind: h.kind,
+                                name: h.name,
+                                label: (h.kind === 'class' ? 'class ' : 'def ') + h.name,
+                                start_line: h.line,
+                                end_line: Math.max(h.line, endLine)
+                            });
+                        }
+                    }
+
+                    // Sort by start line, then larger blocks first for same start
+                    sections.sort((a, b) => {
+                        if (a.start_line !== b.start_line) return a.start_line - b.start_line;
+                        return (b.line_count || 0) - (a.line_count || 0);
+                    });
+
+                    return sections;
+                },
+                async detectCodeReviewSections() {
+                    const fullText = this.codeReviewForm.codeSnippet || '';
+                    if (!fullText.trim()) {
+                        alert('No code loaded yet. Upload a file, paste code, or aggregate a folder first.');
+                        return;
+                    }
+
+                    this.codeReviewSectionsBusy = true;
+                    this.codeReviewSectionsSourceText = fullText;
+                    try {
+                        let sections = [];
+
+                        if (this.codeReviewSectionsUseLocal) {
+                            sections = this.buildLocalCodeReviewSections(fullText, this.codeReviewForm.language);
+                        }
+
+                        // Optionally enrich / replace with backend if local found nothing or user disabled local
+                        if (!this.codeReviewSectionsUseLocal || sections.length === 0) {
+                            try {
+                                const res = await axios.post(this.apiUrl + '/code-review/sections', {
+                                    code_snippet: fullText,
+                                    language: this.codeReviewForm.language
+                                });
+                                const backendSections = (res.data && res.data.sections) || [];
+                                if (backendSections.length) {
+                                    // Normalize backend shape
+                                    sections = backendSections.map((s, idx) => ({
+                                        id: s.id || ('be-' + idx),
+                                        kind: s.kind || 'section',
+                                        name: s.name || '',
+                                        label: s.label || '',
+                                        start_line: s.start_line,
+                                        end_line: s.end_line,
+                                        line_count: s.line_count || (s.start_line && s.end_line ? s.end_line - s.start_line + 1 : 0),
+                                        preview: s.preview || '',
+                                        content: s.content || s.preview || ''
+                                    }));
+                                }
+                            } catch (beErr) {
+                                if (!sections.length) {
+                                    console.error('Backend section detect failed:', beErr);
+                                }
+                            }
+                        }
+
+                        // Attach plain-English titles / feature areas for a friendlier list
+                        this.codeReviewSections = this.enrichSectionsWithFriendlyLabels(sections);
+                        if (!sections.length) {
+                            alert('No discrete sections detected. Try another language setting or use the search-term focus.');
+                        }
+                    } catch (err) {
+                        console.error('Failed to detect code sections:', err);
+                        alert('Error detecting sections: ' + (err.response?.data?.detail || err.message));
+                    } finally {
+                        this.codeReviewSectionsBusy = false;
+                    }
+                },
+                focusCodeReviewOnSection(section) {
+                    if (!section) return;
+
+                    const src = this.codeReviewSectionsSourceText || this.codeReviewForm.codeSnippet || '';
+                    let text = section.content || '';
+
+                    // Prefer exact line slice from the snapshot taken at detect time
+                    if ((!text || text.length < 20) && section.start_line && section.end_line && src) {
+                        const lines = src.split(/\r?\n/);
+                        text = lines.slice(section.start_line - 1, section.end_line).join('\n');
+                    }
+                    if (!text) {
+                        text = section.preview || '';
+                    }
+                    if (!text) return;
+
+                    this.codeReviewForm.codeSnippet = text;
+                    this.clearCodeReviewFind();
+                    // Quiet success — the snippet change is visible in the box
+                    console.info('Focused on: ' + (section.title || section.name || section.kind));
+                },
+                _focusCodeReviewOnSection_legacyLog(section) {
+                    // kept only so older references don't break if any
+                    const kind = section.kind || 'section';
+                    const name = section.name ? ' "' + section.name + '"' : '';
+                    const range = (section.start_line && section.end_line)
+                        ? ' (L' + section.start_line + '–' + section.end_line + ')'
+                        : '';
+                    // Quiet success — no blocking alert; the snippet change is visible
+                    console.info('Focused on ' + kind + name + range);
+                },
+                async handleFolderUpload(event) {
+                    const fileList = event.target.files || [];
+                    const files = Array.from(fileList);
+                    if (!files.length) {
+                        return;
+                    }
+
+                    const allowedExts = [
+                        '.py', '.js', '.ts', '.go', '.sh', '.sql',
+                        '.java', '.cpp', '.c', '.html', '.htm', '.css', '.json', '.md'
+                    ];
+                    const excludedPaths = [
+                        'node_modules/', 'venv/', 'env/', '__pycache__/', '.git/', 'dist/', 'build/'
+                    ];
+                    const maxPerFileChars = 2000;
+                    const maxTotalChars = 20000;
+
+                    let totalChars = 0;
+                    const chunks = [];
+
+                    const sorted = files.slice().sort((a, b) => {
+                        const pa = (a.webkitRelativePath || a.name || '').toLowerCase();
+                        const pb = (b.webkitRelativePath || b.name || '').toLowerCase();
+                        return pa.localeCompare(pb);
+                    });
+
+                    for (const file of sorted) {
+                        const rel = file.webkitRelativePath || file.name || '';
+                        const lower = rel.toLowerCase();
+
+                        if (excludedPaths.some(excl => lower.includes(excl))) {
+                            continue;
+                        }
+                        if (!allowedExts.some(ext => lower.endsWith(ext))) {
+                            continue;
+                        }
+
+                        const text = await new Promise((resolve, reject) => {
+                            const reader = new FileReader();
+                            reader.onload = (e) => {
+                                const result = (e && e.target && e.target.result) || '';
+                                resolve(typeof result === 'string' ? result : '');
+                            };
+                            reader.onerror = reject;
+                            reader.readAsText(file);
+                        }).catch(() => '');
+
+                        if (!text || !text.trim()) {
+                            continue;
+                        }
+
+                        const snippet = text.slice(0, maxPerFileChars);
+                        const chunk = `File: ${rel}\n` + snippet.trim() + '\n\n';
+
+                        if (totalChars + chunk.length > maxTotalChars) {
+                            break;
+                        }
+
+                        chunks.push(chunk);
+                        totalChars += chunk.length;
+                    }
+
+                    if (!chunks.length) {
+                        alert('No supported text/code files found in selected folder');
+                        return;
+                    }
+
+                    this.codeReviewForm.codeSnippet = chunks.join('\n');
+                    this.codeReviewForm.uploadedFile = null;
+                    this.codeReviewSections = [];
+                    this.codeReviewSectionsSourceText = '';
+                    this.clearCodeReviewFind();
+                },
+                onCodeReviewDragOver(event) {
+                    if (!event.dataTransfer) {
+                        return;
+                    }
+                    event.dataTransfer.dropEffect = 'copy';
+                    this.codeReviewDragActive = true;
+                },
+                onCodeReviewDragLeave() {
+                    this.codeReviewDragActive = false;
+                },
+                onCodeReviewDrop(event) {
+                    this.codeReviewDragActive = false;
+                    const dt = event.dataTransfer;
+                    if (!dt || !dt.files || dt.files.length === 0) {
+                        return;
+                    }
+                    const file = dt.files[0];
+                    this.handleCodeReviewFile(file);
+                },
+                async submitCodeReview() {
+                    const hasText = this.codeReviewForm.codeSnippet && this.codeReviewForm.codeSnippet.trim().length > 0;
+                    const file = this.codeReviewForm.uploadedFile;
+                    const isZip = file && file.name && file.name.toLowerCase().endsWith('.zip');
+
+                    if (!hasText && !file) {
+                        alert('Please paste code or upload a file/project to review');
+                        return;
+                    }
+                    this.codeReviewRunning = true;
+                    try {
+                        let res;
+                        if (isZip) {
+                            const formData = new FormData();
+                            formData.append('file', file);
+                            const url = this.apiUrl + `/code-review/zip?language=${encodeURIComponent(this.codeReviewForm.language)}&model=${encodeURIComponent(this.codeReviewForm.model)}&instructions=${encodeURIComponent(this.codeReviewForm.instructions || '')}`;
+                            res = await axios.post(url, formData, {
+                                headers: { 'Content-Type': 'multipart/form-data' }
+                            });
+                        } else {
+                            res = await axios.post(this.apiUrl + '/code-review', {
+                                code_snippet: this.codeReviewForm.codeSnippet,
+                                language: this.codeReviewForm.language,
+                                model: this.codeReviewForm.model,
+                                instructions: this.codeReviewForm.instructions
+                            });
+                        }
+                        this.codeReviewResult = res.data;
+                        await this.loadCodeReviews();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    } finally {
+                        this.codeReviewRunning = false;
+                    }
+                },
+                async loadCodeReviews() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/code-reviews?limit=10');
+                        this.codeReviewsList = res.data || [];
+                    } catch (err) {
+                        console.error('Failed to load code reviews:', err);
+                    }
+                },
+                async loadFullCodeReview(reviewId) {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/code-reviews/' + reviewId);
+                        this.codeReviewResult = res.data;
+                    } catch (err) {
+                        alert('Error loading review: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                copyCodeReviewToClipboard() {
+                    if (!this.codeReviewResult || !this.codeReviewResult.review) {
+                        alert('No review to copy');
+                        return;
+                    }
+                    navigator.clipboard.writeText(this.codeReviewResult.review)
+                        .then(() => alert('Review copied to clipboard!'))
+                        .catch(err => alert('Failed to copy: ' + err.message));
+                },
+                checkHealth() {
+                    axios.get(this.apiUrl + '/health')
+                        .then(() => {
+                            this.apiHealthy = true;
+                            const el = document.getElementById('status');
+                            if (el) { el.textContent = '●'; el.style.color = '#4ade80'; }
+                        })
+                        .catch(() => {
+                            this.apiHealthy = false;
+                            const el = document.getElementById('status');
+                            if (el) { el.textContent = '●'; el.style.color = '#ef4444'; }
+                        });
+                }
+            },
+            mounted() {
+                this.loadTools();
+                this.loadJobs();
+                this.loadReports();
+                this.loadTriageData();
+                this.loadAnalysisCases();
+                this.loadRecentNotables();
+                this.loadDbStats();
+                this.loadRules();
+                this.loadPlaceholderAliases();
+                this.checkOllama();
+                this.checkHealth();
+                
+                // Poll for updates
+                setInterval(() => this.loadJobs(), 5000);
+                setInterval(() => this.loadReports(), 10000);
+                setInterval(() => this.checkHealth(), 15000);
+                setInterval(() => this.checkOllama(), 30000);
+                setInterval(() => this.loadDbStats(), 30000);
+                setInterval(() => this.loadRules(), 30000);
+            }
+        }).mount('#app');

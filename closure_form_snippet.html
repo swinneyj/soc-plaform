@@ -1,0 +1,43 @@
+                            <!-- Dynamic Field Inputs -->
+                            <div v-if="closureForm.ruleId && selectedRule" class="space-y-3">
+                                <p class="text-xs text-gray-400 font-semibold">Required Fields</p>
+                                <div v-for="field in selectedRule.required_closure_fields" :key="field">
+                                    <!-- Dropdown for justification -->
+                                    <div v-if="field === 'justification'">
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <select 
+                                            v-model="closureForm.fieldValues[field]"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-400 text-sm">
+                                            <option value="">-- Select justification --</option>
+                                            <option value="Approved by security team for authorized activity">Approved by security team for authorized activity</option>
+                                            <option value="Legitimate business process">Legitimate business process</option>
+                                            <option value="Test/training exercise">Test/training exercise</option>
+                                            <option value="Known false positive pattern">Known false positive pattern</option>
+                                            <option value="Misconfigured alert">Misconfigured alert</option>
+                                            <option value="Normal operational behavior">Normal operational behavior</option>
+                                        </select>
+                                    </div>
+                                    <!-- Regular text input for other fields -->
+                                    <div v-else>
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <input 
+                                            v-model="closureForm.fieldValues[field]"
+                                            type="text"
+                                            :placeholder="'Enter ' + field"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Disposition/Status Dropdown -->
+                            <div>
+                                <label class="text-sm text-gray-400">Disposition</label>
+                                <select v-model="closureForm.disposition" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                                    <option value="True Positive">True Positive - Suspicious Activity Confirmed</option>
+                                    <option value="Benign Positive">Benign Positive - Suspicious But Expected</option>
+                                    <option value="False Positive">False Positive - Incorrect Analytic Logic</option>
+                                    <option value="False Positive">False Positive - Inaccurate Data</option>
+                                    <option value="Other">Other</option>
+                                    <option value="Undetermined">Undetermined</option>
+                                </select>
+                            </div>

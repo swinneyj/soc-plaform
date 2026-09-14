@@ -1,0 +1,1770 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Platform</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <style>
+        [v-cloak] { display: none; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100" id="app">
+    <div class="min-h-screen flex flex-col">
+        <!-- Header -->
+        <header class="bg-gray-800 border-b border-gray-700 sticky top-0 z-50">
+            <div class="max-w-7xl mx-auto px-4 py-4">
+                <div class="flex items-center justify-between mb-4">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-blue-600 rounded flex items-center justify-center font-bold">S</div>
+                        <div>
+                            <h1 class="text-2xl font-bold">SOC Platform</h1>
+                            <p class="text-xs text-gray-400">Orchestration & Analysis with Local AI</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-sm text-gray-400">API: <span class="text-green-400 font-semibold" id="status">●</span></span>
+                        <span v-if="ollamaHealth.available" class="text-sm text-gray-400">Ollama: <span class="text-green-400 font-semibold">●</span></span>
+                        <span v-else class="text-sm text-gray-400">Ollama: <span class="text-red-400 font-semibold">●</span></span>
+                    </div>
+                </div>
+                <div class="flex space-x-4 overflow-x-auto">
+                    <button @click="currentTab = 'tools'" :class="currentTab === 'tools' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Tools</button>
+                    <button @click="currentTab = 'database'" :class="currentTab === 'database' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Database</button>
+                    <button @click="currentTab = 'analysis'" :class="currentTab === 'analysis' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">AI Analysis</button>
+                    <button @click="currentTab = 'closure'" :class="currentTab === 'closure' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Closure Notes</button>
+                    <button @click="currentTab = 'jobs'" :class="currentTab === 'jobs' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Jobs</button>
+                    <button @click="currentTab = 'reports'" :class="currentTab === 'reports' ? 'border-b-2 border-blue-400' : 'border-b-2 border-transparent'" class="px-3 py-2 text-sm hover:text-blue-400 transition">Reports</button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
+            <!-- Tools Tab -->
+            <div v-if="currentTab === 'tools'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Tools Catalog</h2>
+                    <p class="text-gray-400">{{ tools.length }} tools available • Filter and execute SOC tasks</p>
+                </div>
+
+                <!-- Search & Filter -->
+                <div class="bg-gray-800 p-4 rounded-lg border border-gray-700">
+                    <input 
+                        v-model="toolSearch" 
+                        type="text" 
+                        placeholder="Search tools..." 
+                        class="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                    <div class="mt-3 flex flex-wrap space-x-2 gap-2">
+                        <button 
+                            v-for="cat in categories" 
+                            :key="cat"
+                            @click="selectedCategory = selectedCategory === cat ? '' : cat"
+                            :class="selectedCategory === cat ? 'bg-blue-600' : 'bg-gray-700'"
+                            class="px-3 py-1 rounded text-sm hover:bg-blue-500 transition">
+                            {{ cat }}
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Tools Table -->
+                <div class="bg-gray-800 border border-gray-700 rounded-lg overflow-hidden">
+                    <table class="w-full text-sm">
+                        <thead class="bg-gray-900 border-b border-gray-700">
+                            <tr>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-300">Tool Name</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-300">Category</th>
+                                <th class="px-4 py-3 text-left font-semibold text-gray-300">Description</th>
+                                <th class="px-4 py-3 text-center font-semibold text-gray-300">Args</th>
+                                <th class="px-4 py-3 text-center font-semibold text-gray-300">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="tool in filteredTools" :key="tool.name" class="border-b border-gray-700 hover:bg-gray-750 transition">
+                                <td class="px-4 py-3">
+                                    <span class="text-blue-400 font-semibold">{{ tool.name }}</span>
+                                </td>
+                                <td class="px-4 py-3">
+                                    <span class="text-xs bg-gray-700 text-gray-300 px-2 py-1 rounded">{{ tool.category }}</span>
+                                </td>
+                                <td class="px-4 py-3 text-gray-400 max-w-xs truncate">{{ tool.description }}</td>
+                                <td class="px-4 py-3 text-center">
+                                    <span class="text-xs text-gray-400">{{ tool.arguments ? tool.arguments.length : 0 }}</span>
+                                </td>
+                                <td class="px-4 py-3 text-center">
+                                    <button 
+                                        @click="selectToolForExecution(tool)"
+                                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                        Run
+                                    </button>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    <div v-if="filteredTools.length === 0" class="text-center py-8 text-gray-400">
+                        No tools match your search
+                    </div>
+                </div>
+
+                <!-- Tool Execution Modal -->
+                <div v-if="selectedToolForExecution" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 max-w-md w-full mx-4">
+                        <div class="flex justify-between items-center mb-4">
+                            <h3 class="text-lg font-bold text-blue-400">{{ selectedToolForExecution.name }}</h3>
+                            <button @click="selectedToolForExecution = null" class="text-gray-400 hover:text-white text-2xl">&times;</button>
+                        </div>
+                        
+                        <p class="text-sm text-gray-400 mb-4">{{ selectedToolForExecution.description }}</p>
+                        
+                        <!-- Arguments -->
+                        <div v-if="selectedToolForExecution.arguments && selectedToolForExecution.arguments.length" class="space-y-3 mb-4">
+                            <div v-for="arg in selectedToolForExecution.arguments" :key="arg.flag">
+                                <label class="text-xs text-gray-400">{{ arg.name }}</label>
+                                <input 
+                                    v-model="toolArgs[selectedToolForExecution.name + '_' + arg.flag]" 
+                                    :type="arg.name.includes('file') || arg.name.includes('path') ? 'file' : 'text'"
+                                    :placeholder="arg.description"
+                                    class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-400">
+                            </div>
+                        </div>
+
+                        <div class="flex space-x-2">
+                            <button 
+                                @click="executeTool(selectedToolForExecution)"
+                                class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">
+                                Execute
+                            </button>
+                            <button 
+                                @click="selectedToolForExecution = null"
+                                class="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm font-semibold transition">
+                                Cancel
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Database Tab -->
+            <div v-if="currentTab === 'database'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Triage Database</h2>
+                    <p class="text-gray-400">Browse and query cases from the active database backend</p>
+                </div>
+
+                <div class="grid grid-cols-4 gap-4">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Total Cases</p>
+                        <p class="text-3xl font-bold text-blue-400">{{ dbStats.triage_cases }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Malicious</p>
+                        <p class="text-3xl font-bold text-red-400">{{ dbStats.verdict_breakdown?.malicious || 0 }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Suspicious</p>
+                        <p class="text-3xl font-bold text-yellow-400">{{ dbStats.verdict_breakdown?.suspicious || 0 }}</p>
+                    </div>
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                        <p class="text-gray-400 text-sm">Benign</p>
+                        <p class="text-3xl font-bold text-green-400">{{ dbStats.verdict_breakdown?.benign || 0 }}</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+                        <div>
+                            <h3 class="text-xl font-bold text-blue-400">Paste Splunk Notable</h3>
+                            <p class="text-sm text-gray-400">Paste Incident Review notable text here. The platform will sanitize it with the existing tokenizer and store the sanitized notable in the database.</p>
+                        </div>
+                        <textarea
+                            v-model="notablePasteText"
+                            placeholder="Paste the notable block here..."
+                            class="w-full h-56 px-4 py-3 bg-gray-900 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"></textarea>
+                        <p
+                            v-if="notablePasteSegmentEstimate > 1"
+                            class="text-xs text-amber-300 mt-1"
+                        >
+                            Detected {{ notablePasteSegmentEstimate }} notables in this paste; each will be saved separately.
+                        </p>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableRedactionEnabled"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Apply tokenizer redaction when saving</span>
+                        </label>
+                        <label class="flex items-center text-xs text-gray-300 space-x-2">
+                            <input
+                                type="checkbox"
+                                v-model="notableHistorical"
+                                class="form-checkbox h-3 w-3 text-amber-500 bg-gray-900 border-gray-600 rounded" />
+                            <span>Mark as closed historical notable</span>
+                        </label>
+                        <div class="flex items-center justify-between">
+                            <p v-if="notablePasteResult" class="text-xs text-gray-400">
+                                <span v-if="(notablePasteResult.segment_count || 1) === 1">
+                                    Saved event {{ notablePasteResult.event_id }} with {{ notablePasteResult.mapping_entries }} token mappings.
+                                </span>
+                                <span v-else>
+                                    Saved {{ notablePasteResult.segment_count }} notables (first event {{ notablePasteResult.event_id }}) with {{ notablePasteResult.mapping_entries }} total token mappings.
+                                </span>
+                            </p>
+                            <p v-else class="text-xs text-gray-500">Redaction stays local-first: sanitized text goes to the DB, mapping stays in Active_Workspace.</p>
+                            <button
+                                @click="savePastedNotable"
+                                :disabled="notablePasteSaving || !notablePasteText.trim()"
+                                class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
+                                {{ notablePasteSaving ? 'Saving...' : 'Save Pasted Notable' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+                        <div class="flex items-center justify-between">
+                            <div>
+                                <h3 class="text-xl font-bold text-blue-400">Recent Pasted Notables</h3>
+                                <p class="text-sm text-gray-400">Sanitized notable records saved from copy/paste workflow.</p>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <label class="flex items-center text-[11px] text-gray-300 space-x-1">
+                                    <input
+                                        type="checkbox"
+                                        v-model="showOpenNotablesOnly"
+                                        class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
+                                    <span>Show open pasted notables only</span>
+                                </label>
+                                <button @click="loadRecentNotables" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
+                            </div>
+                        </div>
+
+                        <div v-if="filteredRecentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
+                            No pasted notables saved yet.
+                        </div>
+
+                        <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <h4 class="font-bold text-blue-300">{{ notable.title || 'Untitled notable' }}</h4>
+                                    <p class="text-xs text-gray-400">{{ notable.correlation_search || 'No correlation search parsed' }}</p>
+                                </div>
+                                <div class="text-right text-xs text-gray-400">
+                                    <button
+                                        @click="deletePastedNotable(notable)"
+                                        class="text-gray-500 hover:text-red-400 mb-1 ml-2"
+                                        title="Remove this pasted notable from the recent list">
+                                        ✕
+                                    </button>
+                                    <p>{{ notable.urgency || 'n/a' }} urgency</p>
+                                    <p>{{ notable.status || 'n/a' }} status</p>
+                                </div>
+                            </div>
+                            <p v-if="notable.promoted_case_id" class="text-xs text-green-400">Promoted to triage as {{ notable.promoted_case_id }}</p>
+                            <div class="flex flex-wrap gap-2 text-xs text-gray-300">
+                                <span v-if="notable.historical" class="bg-gray-800 px-2 py-1 rounded border border-amber-500 text-amber-300">Historical (closed)</span>
+                                <span v-if="notable.disposition" class="bg-gray-800 px-2 py-1 rounded">Disposition: {{ notable.disposition }}</span>
+                                <span v-if="notable.host" class="bg-gray-800 px-2 py-1 rounded">Host: {{ notable.host }}</span>
+                                <span v-if="notable.destination" class="bg-gray-800 px-2 py-1 rounded">Destination: {{ notable.destination }}</span>
+                                <span v-if="notable.username || notable.user" class="bg-gray-800 px-2 py-1 rounded">User: {{ notable.username || notable.user }}</span>
+                            </div>
+                            <p class="text-xs text-gray-500">Saved: {{ new Date(notable.saved_at || notable.time).toLocaleString() }}</p>
+                            <div class="flex items-center justify-between gap-3">
+                                <button
+                                    @click="promoteNotableToTriage(notable)"
+                                    :disabled="notablePromotingId === notable.id || !!notable.promoted_case_id"
+                                    class="px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-700 rounded text-xs font-semibold transition">
+                                    {{ notable.promoted_case_id ? 'Already in Triage' : (notablePromotingId === notable.id ? 'Promoting...' : 'Promote to Triage') }}
+                                </button>
+                                <button
+                                    v-if="notable.promoted_case_id"
+                                    @click="jumpToTriageCase(notable.promoted_case_id)"
+                                    class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Open in Triage
+                                </button>
+                            </div>
+                            <details class="text-xs text-gray-300">
+                                <summary class="cursor-pointer text-blue-400">Show details</summary>
+                                <div class="mt-2 space-y-2">
+                                    <div v-if="notable.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div v-for="(value, key) in notable.fields" :key="key" class="flex flex-col">
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.sanitized_text }}</pre>
+                                    </div>
+                                    <div v-if="notable.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">{{ notable.history }}</pre>
+                                    </div>
+                                </div>
+                            </details>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="bg-gray-800 border border-gray-700 rounded-lg p-4">
+                    <div class="flex space-x-2 mb-4">
+                        <input 
+                            v-model="dbSearch" 
+                            type="text" 
+                            placeholder="Search case ID or rule..." 
+                            class="flex-1 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                        <select v-model="dbVerdictFilter" class="px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                            <option value="">All Verdicts</option>
+                            <option value="benign">Benign</option>
+                            <option value="suspicious">Suspicious</option>
+                            <option value="malicious">Malicious</option>
+                        </select>
+                        <label class="flex items-center text-xs text-gray-300 space-x-1">
+                            <input
+                                type="checkbox"
+                                v-model="triageFromPastedOnly"
+                                class="form-checkbox h-3 w-3 text-blue-500 bg-gray-800 border-gray-600 rounded" />
+                            <span>From pasted notables only</span>
+                        </label>
+                        <button @click="loadTriageData" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition">Refresh</button>
+                    </div>
+
+                    <div v-if="filteredTriageData.length === 0" class="text-gray-400 text-center py-8">
+                        No triage cases found. Run analysis or ingest Splunk data.
+                    </div>
+
+                    <div v-for="case_ in filteredTriageData" :key="case_.case_id" class="bg-gray-900 border border-gray-700 rounded p-4 mb-3">
+                        <div class="flex items-start justify-between mb-2">
+                            <div>
+                                <h4 class="font-bold text-blue-400">{{ case_.rule_name || case_.case_id }}</h4>
+                                <p class="text-xs text-gray-400">Case ID: {{ case_.case_id }}</p>
+                            </div>
+                            <div class="flex flex-col items-end space-y-1">
+                                <span :class="{
+                                    'bg-red-900 text-red-200': case_.verdict === 'malicious',
+                                    'bg-yellow-900 text-yellow-200': case_.verdict === 'suspicious',
+                                    'bg-green-900 text-green-200': case_.verdict === 'benign'
+                                }" class="px-3 py-1 rounded text-xs font-semibold">
+                                    {{ case_.verdict.toUpperCase() }}
+                                </span>
+                                <span
+                                    v-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="text-[10px] px-2 py-0.5 rounded bg-gray-800 text-blue-200 border border-blue-500"
+                                >
+                                    From pasted notable
+                                </span>
+                            </div>
+                        </div>
+                        <p class="text-sm text-gray-300 mb-2">{{ case_.analysis_summary }}</p>
+                        <div class="text-xs text-gray-400 flex space-x-4">
+                            <span>Confidence: {{ (case_.confidence_score * 100).toFixed(1) }}%</span>
+                            <span>Triaged: {{ new Date(case_.triaged_at).toLocaleString() }}</span>
+                        </div>
+                        <div class="mt-2 flex space-x-2">
+                            <button 
+                                @click="analyzeCase(case_)"
+                                class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                Analyze with AI
+                            </button>
+                            <button
+                                @click="deleteTriageCase(case_)"
+                                class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold transition">
+                                Delete case
+                            </button>
+                        </div>
+                        <details class="mt-2 text-xs text-gray-300">
+                            <summary
+                                class="cursor-pointer text-blue-400"
+                                @click.stop="loadTriageNotableDetails(case_)"
+                            >
+                                Show source notable details
+                            </summary>
+                            <div class="mt-2">
+                                <p v-if="triageNotableDetails[case_.case_id]?.loading">Loading...</p>
+                                <p v-else-if="triageNotableDetails[case_.case_id]?.error" class="text-red-400">
+                                    {{ triageNotableDetails[case_.case_id].error }}
+                                </p>
+                                <div
+                                    v-else-if="triageNotableDetails[case_.case_id]?.data"
+                                    class="space-y-2"
+                                >
+                                    <div class="flex items-center justify-between">
+                                        <div v-if="triageNotableDetails[case_.case_id].data.historical" class="text-amber-300">
+                                            Historical (closed pasted notable)
+                                        </div>
+                                        <button
+                                            @click="copyTriageNotableFields(case_)"
+                                            class="px-2 py-1 bg-gray-800 hover:bg-gray-700 rounded text-[10px] text-gray-200 border border-gray-600"
+                                        >
+                                            Copy fields
+                                        </button>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.fields">
+                                        <p class="text-gray-400 font-semibold mb-1">Parsed fields</p>
+                                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+                                            <div
+                                                v-for="(value, key) in triageNotableDetails[case_.case_id].data.fields"
+                                                :key="key"
+                                                class="flex flex-col"
+                                            >
+                                                <span class="text-gray-500 mr-1">{{ key }}:</span>
+                                                <span class="text-gray-200 break-words">{{ value }}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <p class="text-gray-400 font-semibold mb-1">Sanitized text</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.sanitized_text }}
+                                        </pre>
+                                    </div>
+                                    <div v-if="triageNotableDetails[case_.case_id].data.history">
+                                        <p class="text-gray-400 font-semibold mb-1">History / closure notes</p>
+                                        <pre class="mt-1 whitespace-pre-wrap bg-black bg-opacity-40 rounded p-3 max-h-40 overflow-y-auto">
+{{ triageNotableDetails[case_.case_id].data.history }}
+                                        </pre>
+                                    </div>
+                                </div>
+                            </div>
+                        </details>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Analysis Tab -->
+            <div v-if="currentTab === 'analysis'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">AI Analysis</h2>
+                    <p class="text-gray-400">Run your local Ollama models on security cases</p>
+                </div>
+
+                <div v-if="!ollamaHealth.available" class="bg-red-900 bg-opacity-30 border border-red-700 rounded-lg p-6 text-red-200">
+                    <p class="font-bold">⚠️ Ollama Service Not Available</p>
+                    <p class="text-sm mt-2">Start Ollama with: <code class="bg-black px-2 py-1 rounded">ollama serve</code></p>
+                </div>
+
+                <div v-else class="bg-gray-800 border border-gray-700 rounded-lg p-4 space-y-4">
+                    <div>
+                        <label class="text-sm text-gray-400">Case to Analyze</label>
+                        <input
+                            v-model="analysisCaseSearch"
+                            type="text"
+                            placeholder="Filter cases by ID, rule, verdict, or summary"
+                            class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500">
+                        <select 
+                            v-model="analysisCaseId"
+                            @change="onAnalysisCaseChanged"
+                            class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                            <option value="">-- Choose a case from the database --</option>
+                            <option v-for="case_ in filteredAnalysisCases" :key="case_.case_id" :value="case_.case_id">
+                                {{ case_.case_id }} - {{ case_.rule_name }} ({{ case_.verdict }})
+                            </option>
+                        </select>
+                        <p class="mt-2 text-xs text-gray-400">
+                            Showing {{ filteredAnalysisCases.length }} of {{ analysisCases.length }} cases for AI analysis.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label class="text-sm text-gray-400">Model</label>
+                        <select v-model="analysisModel" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                            <option v-for="model in ollamaHealth.models" :key="model" :value="model">
+                                {{ model }}
+                            </option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <label class="text-sm text-gray-400">Additional Context (Optional)</label>
+                        <textarea 
+                            v-model="analysisContext" 
+                            placeholder="Add context for the analysis..." 
+                            class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-24"></textarea>
+                    </div>
+
+                    <div v-if="analysisRule" class="mt-2">
+                        <div class="flex items-center justify-between mb-1">
+                            <p class="text-xs text-gray-400 font-semibold">Supportive SPL queries for this case's rule</p>
+                            <button
+                                type="button"
+                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-200"
+                                @click="openSupportiveEditor(analysisRule)"
+                            >
+                                Manage
+                            </button>
+                        </div>
+                        <div v-if="analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-2">
+                            <div v-for="q in analysisRule.supportive_queries" :key="q.id" class="bg-gray-900 border border-gray-700 rounded p-3">
+                                <p class="text-xs font-semibold text-blue-300 mb-1">{{ q.title }}</p>
+                                <p class="text-xs text-gray-400 mb-2" v-if="q.description">{{ q.description }}</p>
+                                <pre class="text-xs text-gray-200 bg-black bg-opacity-40 rounded p-2 whitespace-pre-wrap">{{ renderSupportiveQuery(q) }}</pre>
+                            </div>
+                            <p class="mt-2 text-[11px] text-gray-500">
+                                Run these queries in Splunk and store any results for this case before running AI analysis to give the model richer context.
+                            </p>
+                        </div>
+                        <p v-else class="text-[11px] text-amber-300 mt-1">
+                            No supportive queries defined yet for this rule. Use **Manage** to add some.
+                        </p>
+                    </div>
+
+                    <button 
+                        @click="runAnalysis"
+                        :disabled="analysisRunning"
+                        class="w-full px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
+                        {{ analysisRunning ? 'Running Analysis...' : 'Run Analysis' }}
+                    </button>
+                </div>
+
+                <div v-if="analysisResult" class="bg-gray-800 border border-gray-700 rounded-lg p-6">
+                    <h3 class="text-xl font-bold text-blue-400 mb-4">Analysis Result</h3>
+                    <p class="text-xs text-gray-400 mb-2" v-if="analysisResult.baseline_notables_count || analysisResult.supportive_results_count">
+                        Included
+                        <span class="font-semibold">{{ analysisResult.baseline_notables_count || 0 }}</span>
+                        closed baseline notables and
+                        <span class="font-semibold">{{ analysisResult.supportive_results_count || 0 }}</span>
+                        supportive query result{{ (analysisResult.supportive_results_count || 0) === 1 ? '' : 's' }} in this analysis.
+                    </p>
+                    <div class="bg-gray-900 rounded p-4 mb-4 max-h-96 overflow-y-auto">
+                        <p class="text-gray-300 whitespace-pre-wrap">{{ analysisResult.analysis }}</p>
+                    </div>
+                    <div class="text-xs text-gray-400 space-y-1">
+                        <p>Model: {{ analysisResult.model }}</p>
+                        <p>Case: {{ analysisResult.case_id }}</p>
+                    </div>
+                    <div class="mt-4">
+                        <button
+                            @click="goToClosureFromAnalysis"
+                            class="px-3 py-2 bg-green-600 hover:bg-green-700 rounded text-xs font-semibold transition">
+                            Move to Closure Notes for this Case
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Closure Notes Tab -->
+            <div v-if="currentTab === 'closure'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Closure Notes Generator</h2>
+                    <p class="text-gray-400">Generate formatted closure notes for security incidents</p>
+                </div>
+
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Form -->
+                    <div class="lg:col-span-2 space-y-4">
+                        <div class="bg-gray-800 border border-gray-700 rounded-lg p-6 space-y-4">
+                            <!-- Case Selector -->
+                            <div>
+                                <label class="text-sm text-gray-400">Select Case</label>
+                                <select v-model="closureForm.caseId" @change="onCaseSelected" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                                    <option value="">-- Choose a case --</option>
+                                    <option v-for="case_ in triageData" :key="case_.case_id" :value="case_.case_id">
+                                        {{ case_.case_id }} - {{ case_.rule_name }}
+                                    </option>
+                                </select>
+                            </div>
+
+                            <!-- Rule Selector -->
+                            <div>
+                                <label class="text-sm text-gray-400">Select Rule for Closure</label>
+                                <select v-model="closureForm.ruleId" @change="onRuleSelected" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500" :disabled="!closureForm.caseId">
+                                    <option value="">-- Choose a rule --</option>
+                                    <option v-for="rule in availableRules" :key="rule.rule_id" :value="rule.rule_id">
+                                        {{ rule.rule_name }} ({{ rule.severity }})
+                                    </option>
+                                </select>
+                                <p v-if="closureSuggestedRuleName || closureSuggestedDisposition" class="mt-1 text-[11px] text-gray-400">
+                                    Suggested rule from triage:
+                                    <span class="font-semibold">{{ closureSuggestedRuleName || 'none' }}</span>
+                                    • Suggested disposition:
+                                    <span class="font-semibold">{{ closureSuggestedDisposition || 'Undetermined' }}</span>
+                                </p>
+                            </div>
+
+                            <!-- Dynamic Field Inputs -->
+                            <div v-if="closureForm.ruleId && selectedRule" class="space-y-3">
+                                <p class="text-xs text-gray-400 font-semibold">Required Fields</p>
+                                <div v-for="field in selectedRule.required_closure_fields" :key="field">
+                                    <!-- Dropdown for justification -->
+                                    <div v-if="field === 'justification'">
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <select 
+                                            v-model="closureForm.fieldValues[field]"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-400 text-sm">
+                                            <option value="">-- Select justification --</option>
+                                            <option value="Approved by security team for authorized activity">Approved by security team for authorized activity</option>
+                                            <option value="Legitimate business process">Legitimate business process</option>
+                                            <option value="Test/training exercise">Test/training exercise</option>
+                                            <option value="Known false positive pattern">Known false positive pattern</option>
+                                            <option value="Misconfigured alert">Misconfigured alert</option>
+                                            <option value="Normal operational behavior">Normal operational behavior</option>
+                                        </select>
+                                    </div>
+                                    <!-- Regular text input for other fields -->
+                                    <div v-else>
+                                        <label class="text-sm text-gray-400">{{ field }}</label>
+                                        <input 
+                                            v-model="closureForm.fieldValues[field]"
+                                            type="text"
+                                            :placeholder="'Enter ' + field"
+                                            class="w-full mt-1 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-400 text-sm">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Disposition/Status Dropdown -->
+                            <div>
+                                <label class="text-sm text-gray-400">Disposition</label>
+                                <select v-model="closureForm.disposition" class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white focus:outline-none focus:border-blue-500">
+                                    <option value="True Positive">True Positive - Suspicious Activity Confirmed</option>
+                                    <option value="Benign Positive">Benign Positive - Suspicious But Expected</option>
+                                    <option value="False Positive">False Positive - Incorrect Analytic Logic</option>
+                                    <option value="Other">Other</option>
+                                    <option value="Undetermined">Undetermined</option>
+                                </select>
+                            </div>
+
+                            <!-- Analyst Notes -->
+                            <div>
+                                <label class="text-sm text-gray-400">Analyst Notes (Optional)</label>
+                                <textarea 
+                                    v-model="closureForm.analystNotes"
+                                    placeholder="Add any additional notes..."
+                                    class="w-full mt-2 px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 h-16 text-sm"></textarea>
+                            </div>
+
+                            <!-- Generate Button -->
+                            <button 
+                                @click="generateClosureNote"
+                                :disabled="!closureForm.caseId || !closureForm.ruleId || closureGenerating"
+                                class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition">
+                                {{ closureGenerating ? 'Generating...' : 'Generate Closure Note' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Preview -->
+                    <div class="lg:col-span-1">
+                        <div v-if="closureResult" class="bg-gray-800 border border-green-600 rounded-lg p-6 sticky top-24">
+                            <h3 class="text-lg font-bold text-green-400 mb-3">Generated Note</h3>
+                            <p class="text-xs text-gray-400 mb-2">Disposition: <span class="text-green-400 font-semibold">{{ closureResult.disposition }}</span></p>
+                            <div class="bg-gray-900 rounded p-3 text-xs font-mono overflow-y-auto max-h-96 mb-4 whitespace-pre-wrap text-gray-300">
+                                {{ closureResult.generated_note }}
+                            </div>
+                            <div class="space-y-2">
+                                <button 
+                                    @click="copyToClipboard"
+                                    class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Copy to Clipboard
+                                </button>
+                                <button 
+                                    @click="downloadClosureNote"
+                                    class="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">
+                                    Download as .txt
+                                </button>
+                            </div>
+                        </div>
+                        <div v-else class="bg-gray-800 border border-gray-700 rounded-lg p-6 text-center text-gray-400 text-sm">
+                            <p>Generate a closure note to preview it here</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Jobs Tab -->
+            <div v-if="currentTab === 'jobs'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Job History</h2>
+                    <p class="text-gray-400">Track tool executions and view results</p>
+                </div>
+
+                <div v-if="jobs.length === 0" class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-400">
+                    No jobs yet. Execute a tool to see results here.
+                </div>
+
+                <div v-for="job in jobs" :key="job.job_id" class="bg-gray-800 border border-gray-700 rounded-lg p-5">
+                    <div class="flex items-center justify-between mb-3">
+                        <div>
+                            <h3 class="text-lg font-bold">{{ job.tool_name }}</h3>
+                            <p class="text-xs text-gray-400">ID: {{ job.job_id.slice(0, 8) }}...</p>
+                        </div>
+                        <span :class="{
+                            'bg-yellow-900 text-yellow-200': job.status === 'pending' || job.status === 'running',
+                            'bg-green-900 text-green-200': job.status === 'completed',
+                            'bg-red-900 text-red-200': job.status === 'failed'
+                        }" class="px-3 py-1 rounded text-sm font-semibold">
+                            {{ job.status.toUpperCase() }}
+                        </span>
+                    </div>
+
+                    <div class="text-xs text-gray-400 space-y-1 mb-3">
+                        <p>Created: {{ new Date(job.created_at).toLocaleString() }}</p>
+                        <p v-if="job.completed_at">Completed: {{ new Date(job.completed_at).toLocaleString() }}</p>
+                    </div>
+
+                    <div v-if="job.stdout" class="bg-gray-900 rounded p-3 text-xs font-mono overflow-x-auto mb-3 max-h-40 overflow-y-auto">
+                        <pre>{{ job.stdout }}</pre>
+                    </div>
+
+                    <div v-if="job.stderr" class="bg-red-900 bg-opacity-20 border border-red-700 rounded p-3 text-xs font-mono overflow-x-auto text-red-200 mb-3">
+                        <pre>{{ job.stderr }}</pre>
+                    </div>
+
+                    <div class="text-xs text-gray-400">
+                        Exit Code: <span :class="job.exit_code === 0 ? 'text-green-400' : 'text-red-400'" class="font-bold">{{ job.exit_code }}</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Reports Tab -->
+            <div v-if="currentTab === 'reports'" class="space-y-6">
+                <div>
+                    <h2 class="text-3xl font-bold mb-2">Generated Reports</h2>
+                    <p class="text-gray-400">Download briefings and analysis results</p>
+                </div>
+
+                <div v-if="reports.length === 0" class="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center text-gray-400">
+                    No reports generated yet.
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div v-for="report in reports" :key="report.filename" class="bg-gray-800 border border-gray-700 rounded-lg p-5">
+                        <h3 class="text-lg font-bold text-blue-400">{{ report.filename }}</h3>
+                        <p class="text-xs text-gray-400 mt-2">
+                            {{ (report.size / 1024).toFixed(2) }} KB • {{ new Date(report.modified).toLocaleString() }}
+                        </p>
+                        <a :href="'/api/reports/' + report.filename" download :filename="report.filename" class="mt-4 inline-block bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded text-sm font-semibold transition">
+                            Download
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Supportive Query Editor Modal -->
+        <div
+            v-if="supportiveEditorOpen"
+            class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50"
+        >
+            <div class="bg-gray-900 border border-gray-700 rounded-lg p-5 max-w-3xl w-full mx-4 max-h-[80vh] overflow-y-auto">
+                <div class="flex items-center justify-between mb-3">
+                    <div>
+                        <h3 class="text-sm font-bold text-blue-300">Manage Supportive Queries</h3>
+                        <p class="text-[11px] text-gray-400" v-if="supportiveEditorRuleId">
+                            Rule ID: <span class="font-mono">{{ supportiveEditorRuleId }}</span>
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        class="text-gray-400 hover:text-white text-xl"
+                        @click="closeSupportiveEditor"
+                    >
+                        &times;
+                    </button>
+                </div>
+
+                <p v-if="supportiveEditorError" class="text-xs text-red-400 mb-2">
+                    {{ supportiveEditorError }}
+                </p>
+
+                <div class="space-y-3">
+                    <div
+                        v-for="(q, idx) in supportiveEditorQueries"
+                        :key="q.localKey || q.id || idx"
+                        class="border border-gray-700 rounded p-3 bg-gray-800"
+                    >
+                        <div class="flex items-center justify-between mb-2">
+                            <p class="text-[11px] text-gray-400">
+                                Query {{ idx + 1 }}
+                            </p>
+                            <button
+                                type="button"
+                                class="text-[11px] text-red-300 hover:text-red-400"
+                                @click="removeSupportiveQuery(idx, q)"
+                                :disabled="supportiveEditorBusy"
+                            >
+                                Remove
+                            </button>
+                        </div>
+                        <div class="space-y-2">
+                            <div>
+                                <label class="text-[11px] text-gray-400">Title</label>
+                                <input
+                                    v-model="q.title"
+                                    type="text"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                    :disabled="supportiveEditorBusy"
+                                />
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-gray-400">Description (optional)</label>
+                                <input
+                                    v-model="q.description"
+                                    type="text"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100"
+                                    :disabled="supportiveEditorBusy"
+                                />
+                            </div>
+                            <div>
+                                <label class="text-[11px] text-gray-400">SPL Query</label>
+                                <textarea
+                                    v-model="q.spl_query"
+                                    rows="3"
+                                    class="w-full mt-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-[11px] text-gray-100 font-mono whitespace-pre-wrap"
+                                    :disabled="supportiveEditorBusy"
+                                ></textarea>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-2">
+                        <button
+                            type="button"
+                            class="px-3 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] text-gray-100"
+                            @click="addSupportiveQueryRow"
+                            :disabled="supportiveEditorBusy"
+                        >
+                            + Add Query
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mt-4 flex items-center justify-end space-x-2">
+                    <button
+                        type="button"
+                        class="px-3 py-1 bg-gray-800 hover:bg-gray-700 rounded text-xs text-gray-200"
+                        @click="closeSupportiveEditor"
+                        :disabled="supportiveEditorBusy"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        class="px-3 py-1 bg-blue-600 hover:bg-blue-700 rounded text-xs text-white"
+                        @click="saveSupportiveQueries"
+                        :disabled="supportiveEditorBusy"
+                    >
+                        {{ supportiveEditorBusy ? 'Saving...' : 'Save Changes' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
+            <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
+                <p>SOC Platform v1.1.0 • Local AI • <a href="/docs" class="text-blue-400 hover:text-blue-300">API Docs</a></p>
+            </div>
+        </footer>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script>
+        const { createApp } = Vue;
+
+        createApp({
+            data() {
+                return {
+                    currentTab: 'tools',
+                    tools: [],
+                    jobs: [],
+                    reports: [],
+                    toolSearch: '',
+                    selectedCategory: '',
+                    toolArgs: {},
+                    apiUrl: '/api',
+                    
+                    // Database
+                    triageData: [],
+                    analysisCases: [],
+                    recentNotables: [],
+                    dbStats: { triage_cases: 0, verdict_breakdown: {} },
+                    dbSearch: '',
+                    dbVerdictFilter: '',
+                    triageFromPastedOnly: false,
+                    deleteAnalysisWithCase: false,
+                    triageNotableDetails: {},
+                    showOpenNotablesOnly: false,
+                    notablePasteText: '',
+                    notableRedactionEnabled: true,
+                    notableHistorical: false,
+                    notablePasteSaving: false,
+                    notablePasteResult: null,
+                    notablePromotingId: null,
+                    
+                    // Analysis
+                    ollamaHealth: { available: false, models: [] },
+                    analysisCaseSearch: '',
+                    analysisCaseId: '',
+                    analysisModel: '',
+                    analysisContext: '',
+                    analysisRunning: false,
+                    analysisResult: null,
+                    analysisSourceNotable: null,
+
+                    // Closure Notes
+                    availableRules: [],
+                    selectedRule: null,
+                    closureSourceNotable: null,
+                    closureSuggestedRuleName: '',
+                    closureSuggestedDisposition: '',
+                    supportiveEditorOpen: false,
+                    supportiveEditorBusy: false,
+                    supportiveEditorQueries: [],
+                    supportiveEditorRuleId: '',
+                    supportiveEditorError: '',
+                    closureForm: {
+                        caseId: '',
+                        ruleId: '',
+                        fieldValues: {},
+                        analystNotes: '',
+                        disposition: 'Undetermined'
+                    },
+                    closureResult: null,
+                    closureGenerating: false,
+                    selectedToolForExecution: null
+                };
+            },
+            computed: {
+                categories() {
+                    const cats = new Set(this.tools.map(t => t.category));
+                    return Array.from(cats).sort();
+                },
+                filteredTools() {
+                    return this.tools.filter(tool => {
+                        const matchSearch = !this.toolSearch || tool.name.toLowerCase().includes(this.toolSearch.toLowerCase()) || 
+                                          tool.description.toLowerCase().includes(this.toolSearch.toLowerCase());
+                        const matchCategory = !this.selectedCategory || tool.category === this.selectedCategory;
+                        return matchSearch && matchCategory;
+                    });
+                },
+                filteredTriageData() {
+                    const searchTerm = this.dbSearch.trim().toLowerCase();
+
+                    return this.triageData.filter(case_ => {
+                        const verdict = (case_.verdict || '').toLowerCase();
+                        const matchesVerdict = !this.dbVerdictFilter || verdict === this.dbVerdictFilter.toLowerCase();
+
+                        if (!matchesVerdict) {
+                            return false;
+                        }
+
+                        if (this.triageFromPastedOnly) {
+                            const id = (case_.case_id || '').toUpperCase();
+                            if (!id.startsWith('NOTABLE-')) {
+                                return false;
+                            }
+                        }
+
+                        if (!searchTerm) {
+                            return true;
+                        }
+
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
+                },
+                filteredAnalysisCases() {
+                    const searchTerm = this.analysisCaseSearch.trim().toLowerCase();
+
+                    if (!searchTerm) {
+                        return this.analysisCases;
+                    }
+
+                    return this.analysisCases.filter(case_ => {
+                        const haystack = [
+                            case_.case_id,
+                            case_.rule_name,
+                            case_.verdict,
+                            case_.analysis_summary
+                        ]
+                            .filter(Boolean)
+                            .join(' ')
+                            .toLowerCase();
+
+                        return haystack.includes(searchTerm);
+                    });
+                },
+                analysisRule() {
+                    if (!this.analysisCaseId) {
+                        return null;
+                    }
+
+                    const case_ = this.analysisCases.find(c => c.case_id === this.analysisCaseId);
+                    if (!case_) {
+                        return null;
+                    }
+
+                    const caseRule = (case_.rule_name || '').toLowerCase().trim();
+                    if (!caseRule) {
+                        return null;
+                    }
+
+                    // Prefer exact name match first
+                    let rule = this.availableRules.find(
+                        r => (r.rule_name || '').toLowerCase().trim() === caseRule
+                    );
+                    if (rule) {
+                        return rule;
+                    }
+
+                    // Fallback: many ES rules are wrapped like
+                    // "Endpoint - <Rule Name> - Rule". Use a relaxed
+                    // contains-based match so cases with that wrapped
+                    // name still map to the underlying correlation rule.
+                    rule = this.availableRules.find(r => {
+                        const name = (r.rule_name || '').toLowerCase().trim();
+                        return !!name && (caseRule.includes(name) || name.includes(caseRule));
+                    });
+
+                    return rule || null;
+                },
+                filteredRecentNotables() {
+                    if (!this.showOpenNotablesOnly) {
+                        return this.recentNotables;
+                    }
+
+                    return this.recentNotables.filter(n => !n.historical);
+                },
+                notablePasteSegmentEstimate() {
+                    const text = (this.notablePasteText || '').replace(/\r\n/g, '\n');
+                    if (!text.trim()) {
+                        return 0;
+                    }
+
+                    const lines = text.split('\n');
+                    // Match only the top-of-card "Notable" heading (capital N)
+                    const notablePattern = /^\s*Notable\s*$/;
+                    let countNotable = 0;
+
+                    for (const line of lines) {
+                        if (notablePattern.test(line)) {
+                            countNotable++;
+                        }
+                    }
+
+                    if (countNotable >= 2) {
+                        return countNotable;
+                    }
+
+                    // Fallback: approximate based on Title/Correlation Search labels
+                    const headingPattern = /^\s*(Title|Correlation Search)\b/i;
+                    let countHeadings = 0;
+                    for (const line of lines) {
+                        if (headingPattern.test(line)) {
+                            countHeadings++;
+                        }
+                    }
+
+                    if (countHeadings <= 0) {
+                        return 1;
+                    }
+                    return countHeadings;
+                }
+            },
+            methods: {
+                async loadTools() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/tools');
+                        this.tools = res.data;
+                    } catch (err) {
+                        console.error('Failed to load tools:', err);
+                    }
+                },
+                async loadJobs() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/jobs');
+                        this.jobs = res.data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                    } catch (err) {
+                        console.error('Failed to load jobs:', err);
+                    }
+                },
+                async loadReports() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/reports');
+                        this.reports = res.data;
+                    } catch (err) {
+                        console.error('Failed to load reports:', err);
+                    }
+                },
+                onAnalysisCaseChanged() {
+                    this.analysisSourceNotable = null;
+
+                    const caseId = this.analysisCaseId;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.analysisSourceNotable = res.data;
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for analysis case:', err);
+                            this.analysisSourceNotable = null;
+                        });
+                },
+                async loadTriageData() {
+                    try {
+                        const params = { limit: 50 };
+                        if (this.dbSearch.trim()) {
+                            params.search = this.dbSearch.trim();
+                        }
+                        if (this.dbVerdictFilter) {
+                            params.verdict = this.dbVerdictFilter;
+                        }
+
+                        const res = await axios.get(this.apiUrl + '/db/triage', { params });
+                        this.triageData = res.data;
+                    } catch (err) {
+                        console.error('Failed to load triage data:', err);
+                        this.triageData = [];
+                    }
+                },
+                async loadAnalysisCases() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
+                            params: { limit: 1000 }
+                        });
+                        this.analysisCases = res.data;
+                    } catch (err) {
+                        console.error('Failed to load analysis cases:', err);
+                        this.analysisCases = [];
+                    }
+                },
+                async loadDbStats() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/stats');
+                        this.dbStats = res.data;
+                    } catch (err) {
+                        console.error('Failed to load DB stats:', err);
+                    }
+                },
+                async loadRecentNotables() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables', { params: { limit: 20 } });
+                        this.recentNotables = res.data;
+                    } catch (err) {
+                        console.error('Failed to load recent pasted notables:', err);
+                        this.recentNotables = [];
+                    }
+                },
+                async savePastedNotable() {
+                    if (!this.notablePasteText.trim()) {
+                        alert('Paste a notable before saving');
+                        return;
+                    }
+
+                    this.notablePasteSaving = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/notables/paste', {
+                            raw_text: this.notablePasteText,
+                            redaction_enabled: this.notableRedactionEnabled,
+                            historical: this.notableHistorical
+                        });
+                        this.notablePasteResult = res.data;
+                        this.notablePasteText = '';
+                        this.loadRecentNotables();
+                        this.loadDbStats();
+                        const count = res.data.segment_count || 1;
+                        if (count > 1) {
+                            alert('Saved ' + count + ' notables from this paste');
+                        } else {
+                            alert('Pasted notable saved and sanitized successfully');
+                        }
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    } finally {
+                        this.notablePasteSaving = false;
+                    }
+                },
+                async deletePastedNotable(notable) {
+                    if (!confirm('Remove this pasted notable from the recent list? This will not delete any triage cases created from it.')) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/notables', {
+                            params: { delete_event_id: notable.id }
+                        });
+                        this.recentNotables = res.data;
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async promoteNotableToTriage(notable) {
+                    this.notablePromotingId = notable.id;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                        await this.loadRecentNotables();
+                        await this.loadTriageData();
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                        const caseId = res.data.case_id;
+                        if (caseId) {
+                            alert('Notable promoted to triage as ' + caseId);
+                        }
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    } finally {
+                        this.notablePromotingId = null;
+                    }
+                },
+                jumpToTriageCase(caseId) {
+                    this.dbSearch = caseId;
+                    this.currentTab = 'database';
+                    this.loadTriageData();
+                },
+                async deleteTriageCase(case_) {
+                    if (!confirm('Delete this triage case from the database?')) {
+                        return;
+                    }
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage', {
+                            params: {
+                                delete_case_id: case_.case_id,
+                                delete_analysis: this.deleteAnalysisWithCase
+                            }
+                        });
+                        this.triageData = res.data;
+                        await this.loadAnalysisCases();
+                        await this.loadDbStats();
+                    } catch (err) {
+                        alert('Error: ' + (err.response?.data?.detail || err.message));
+                    }
+                },
+                async loadTriageNotableDetails(case_) {
+                    const caseId = case_.case_id;
+                    const existing = this.triageNotableDetails[caseId];
+
+                    if (existing && (existing.loading || existing.data)) {
+                        return;
+                    }
+
+                    this.triageNotableDetails[caseId] = { loading: true, error: null, data: null };
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable');
+                        this.triageNotableDetails[caseId] = { loading: false, error: null, data: res.data };
+                    } catch (err) {
+                        this.triageNotableDetails[caseId] = {
+                            loading: false,
+                            error: err.response?.data?.detail || err.message,
+                            data: null
+                        };
+                    }
+                },
+                async loadRules() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/rules');
+                        this.availableRules = res.data;
+                    } catch (err) {
+                        console.error('Failed to load rules:', err);
+                        this.availableRules = [];
+                    }
+                },
+                async openSupportiveEditor(rule) {
+                    if (!rule || !rule.rule_id) {
+                        return;
+                    }
+
+                    this.supportiveEditorRuleId = rule.rule_id;
+                    this.supportiveEditorError = '';
+                    this.supportiveEditorBusy = false;
+                    this.supportiveEditorQueries = [];
+
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/supportive-queries', {
+                            params: { rule_id: this.supportiveEditorRuleId }
+                        });
+                        // Clone the array so edits don't mutate the live rule copy
+                        this.supportiveEditorQueries = (res.data || []).map(q => ({
+                            id: q.id,
+                            rule_id: q.rule_id,
+                            title: q.title,
+                            description: q.description || '',
+                            spl_query: q.spl_query,
+                        }));
+                    } catch (err) {
+                        console.error('Failed to load supportive queries for rule:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to load supportive queries.';
+                        this.supportiveEditorQueries = [];
+                    }
+
+                    if (this.supportiveEditorQueries.length === 0) {
+                        // Seed with an empty row to make the editor less blank
+                        this.supportiveEditorQueries.push({
+                            id: null,
+                            rule_id: this.supportiveEditorRuleId,
+                            title: '',
+                            description: '',
+                            spl_query: '',
+                            localKey: 'new-0',
+                        });
+                    } else {
+                        // Ensure each row has a stable local key
+                        this.supportiveEditorQueries = this.supportiveEditorQueries.map((q, index) => ({
+                            ...q,
+                            localKey: q.id ? `db-${q.id}` : `new-${index}`,
+                        }));
+                    }
+
+                    this.supportiveEditorOpen = true;
+                },
+                closeSupportiveEditor() {
+                    if (this.supportiveEditorBusy) {
+                        return;
+                    }
+                    this.supportiveEditorOpen = false;
+                    this.supportiveEditorQueries = [];
+                    this.supportiveEditorRuleId = '';
+                    this.supportiveEditorError = '';
+                },
+                addSupportiveQueryRow() {
+                    const index = this.supportiveEditorQueries.length;
+                    this.supportiveEditorQueries.push({
+                        id: null,
+                        rule_id: this.supportiveEditorRuleId,
+                        title: '',
+                        description: '',
+                        spl_query: '',
+                        localKey: `new-${index}`,
+                    });
+                },
+                async removeSupportiveQuery(index, q) {
+                    if (this.supportiveEditorBusy) {
+                        return;
+                    }
+
+                    const row = this.supportiveEditorQueries[index];
+                    if (!row) {
+                        return;
+                    }
+
+                    // If this row has not been persisted yet, just remove it locally
+                    if (!row.id) {
+                        this.supportiveEditorQueries.splice(index, 1);
+                        return;
+                    }
+
+                    const confirmed = window.confirm('Delete this supportive query from the database?');
+                    if (!confirmed) {
+                        return;
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+                    try {
+                        await axios.delete(this.apiUrl + '/db/supportive-queries/' + row.id);
+                        this.supportiveEditorQueries.splice(index, 1);
+                        // Refresh rules so Analysis/Closure tabs reflect the change
+                        await this.loadRules();
+                    } catch (err) {
+                        console.error('Failed to delete supportive query:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to delete query.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
+                async saveSupportiveQueries() {
+                    if (!this.supportiveEditorRuleId) {
+                        return;
+                    }
+
+                    // Basic validation: every non-empty row needs title and SPL
+                    const rowsToApply = this.supportiveEditorQueries.filter(q =>
+                        (q.title && q.title.trim()) || (q.spl_query && q.spl_query.trim())
+                    );
+
+                    for (const q of rowsToApply) {
+                        if (!q.title || !q.title.trim() || !q.spl_query || !q.spl_query.trim()) {
+                            this.supportiveEditorError = 'Each query must have at least a title and SPL query.';
+                            return;
+                        }
+                    }
+
+                    this.supportiveEditorBusy = true;
+                    this.supportiveEditorError = '';
+
+                    try {
+                        // Persist each row individually; this is fine for the
+                        // small, analyst-driven counts typical of supportive queries.
+                        for (const q of rowsToApply) {
+                            const payload = {
+                                rule_id: this.supportiveEditorRuleId,
+                                title: q.title.trim(),
+                                description: (q.description || '').trim(),
+                                spl_query: q.spl_query.trim(),
+                            };
+
+                            if (q.id) {
+                                await axios.put(this.apiUrl + '/db/supportive-queries/' + q.id, payload);
+                            } else {
+                                const res = await axios.post(this.apiUrl + '/db/supportive-queries', payload);
+                                q.id = res.data.id;
+                            }
+                        }
+
+                        await this.loadRules();
+
+                        // If the currently selected rule matches, refresh its
+                        // reference so the updated queries show up immediately.
+                        if (this.selectedRule && this.selectedRule.rule_id === this.supportiveEditorRuleId) {
+                            this.selectedRule = this.availableRules.find(r => r.rule_id === this.supportiveEditorRuleId) || this.selectedRule;
+                        }
+
+                        this.closeSupportiveEditor();
+                    } catch (err) {
+                        console.error('Failed to save supportive queries:', err);
+                        this.supportiveEditorError = err.response?.data?.detail || err.message || 'Failed to save queries.';
+                    } finally {
+                        this.supportiveEditorBusy = false;
+                    }
+                },
+                async checkOllama() {
+                    try {
+                        const res = await axios.get(this.apiUrl + '/db/ollama/health');
+                        this.ollamaHealth = res.data;
+                        if (this.ollamaHealth.models.length > 0) {
+                            this.analysisModel = this.ollamaHealth.models[0];
+                        }
+                    } catch (err) {
+                        this.ollamaHealth = { available: false, models: [] };
+                    }
+                },
+                async executeTool(tool) {
+                    const args = {};
+                    if (tool.arguments) {
+                        for (const arg of tool.arguments) {
+                            const key = tool.name + '_' + arg.flag;
+                            if (this.toolArgs[key]) {
+                                args[arg.flag.replace('--', '')] = this.toolArgs[key];
+                            }
+                        }
+                    }
+
+                    try {
+                        const res = await axios.post(this.apiUrl + '/execute', {
+                            tool_name: tool.name,
+                            arguments: args,
+                            silent: false
+                        });
+                        this.currentTab = 'jobs';
+                        this.loadJobs();
+                        alert('Tool execution queued: ' + res.data.job_id.slice(0, 8));
+                    } catch (err) {
+                        alert('Error: ' + err.response?.data?.detail || err.message);
+                    }
+                },
+                async analyzeCase(case_) {
+                    this.analysisCaseId = case_.case_id;
+                    this.currentTab = 'analysis';
+                    this.onAnalysisCaseChanged();
+                },
+                async runAnalysis() {
+                    if (!this.analysisCaseId || !this.analysisModel) {
+                        alert('Please select a case ID and model');
+                        return;
+                    }
+
+                    this.analysisRunning = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/analyze', {
+                            case_id: this.analysisCaseId,
+                            model: this.analysisModel,
+                            context: this.analysisContext
+                        });
+                        this.analysisResult = res.data;
+                    } catch (err) {
+                        alert('Error: ' + err.response?.data?.detail || err.message);
+                    } finally {
+                        this.analysisRunning = false;
+                    }
+                },
+                renderSupportiveQuery(q) {
+                    const text = (q.spl_query || '').toString();
+                    if (!this.analysisSourceNotable || !this.analysisSourceNotable.fields) {
+                        return text;
+                    }
+
+                    const fields = this.analysisSourceNotable.fields || {};
+
+                    // Aliases for common investigative placeholders. These map
+                    // friendly names like $process$ onto one or more parsed
+                    // notable fields.
+                    const aliasMap = {
+                        host: ['host', 'destination_nt_hostname', 'destination', 'destination_ip'],
+                        dest: ['destination', 'destination_ip', 'host'],
+                        user: ['user', 'username', 'user_identity'],
+                        account: ['user', 'username', 'user_identity'],
+                        process: ['process', 'image', 'file_name', 'value'],
+                    };
+
+                    const placeholderRegex = /\$([A-Za-z0-9_]+)\$/g;
+
+                    const resolveValue = (name) => {
+                        const lower = name.toLowerCase();
+                        let value = '';
+
+                        // First, try alias mappings like host/dest/user/process.
+                        if (aliasMap[lower]) {
+                            for (const key of aliasMap[lower]) {
+                                if (fields[key]) {
+                                    value = fields[key];
+                                    break;
+                                }
+                            }
+                        }
+
+                        // If no alias hit, try direct field name matches.
+                        if (!value) {
+                            if (Object.prototype.hasOwnProperty.call(fields, name)) {
+                                value = fields[name];
+                            } else {
+                                // Case-insensitive field name match.
+                                const keys = Object.keys(fields);
+                                for (const key of keys) {
+                                    if (key.toLowerCase() === lower) {
+                                        value = fields[key];
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        return value;
+                    };
+
+                    return text.replace(placeholderRegex, (match, name) => {
+                        const value = resolveValue(name);
+                        return value ? value : match;
+                    });
+                },
+                goToClosureFromAnalysis() {
+                    if (!this.analysisCaseId) {
+                        alert('Select a case to analyze first');
+                        return;
+                    }
+
+                    this.currentTab = 'closure';
+                    this.closureForm.caseId = this.analysisCaseId;
+                    this.onCaseSelected();
+                },
+                onCaseSelected() {
+                    this.closureForm.ruleId = '';
+                    this.closureForm.fieldValues = {};
+                    this.selectedRule = null;
+                     this.closureSuggestedRuleName = '';
+                     this.closureSuggestedDisposition = '';
+
+                    // Load source notable details for this case so we can
+                    // prepopulate closure fields (e.g., host, user) from
+                    // the parsed notable fields.
+                    const caseId = this.closureForm.caseId;
+                    this.closureSourceNotable = null;
+                    if (!caseId) {
+                        return;
+                    }
+
+                    // Suggest a default disposition based on the triage verdict.
+                    const triageCase = this.triageData.find(c => c.case_id === caseId);
+                    if (triageCase) {
+                        const verdict = (triageCase.verdict || '').toLowerCase();
+                        if (verdict === 'malicious') {
+                            this.closureForm.disposition = 'True Positive';
+                            this.closureSuggestedDisposition = 'True Positive';
+                        } else if (verdict === 'benign') {
+                            this.closureForm.disposition = 'Benign Positive';
+                            this.closureSuggestedDisposition = 'Benign Positive';
+                        } else {
+                            this.closureForm.disposition = 'Undetermined';
+                            this.closureSuggestedDisposition = 'Undetermined';
+                        }
+                    } else {
+                        this.closureForm.disposition = 'Undetermined';
+                        this.closureSuggestedDisposition = 'Undetermined';
+                    }
+
+                    axios
+                        .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
+                        .then(res => {
+                            this.closureSourceNotable = res.data;
+
+                            // Choose the most appropriate rule for closure based on
+                            // the triage case's rule_name when none is selected yet.
+                            if (!this.closureForm.ruleId && triageCase && this.availableRules.length) {
+                                const triageRuleName = (triageCase.rule_name || '').toLowerCase().trim();
+                                let matchingRule = this.availableRules.find(
+                                    r => (r.rule_name || '').toLowerCase().trim() === triageRuleName
+                                );
+                                if (!matchingRule && triageRuleName) {
+                                    matchingRule = this.availableRules.find(r => {
+                                        const name = (r.rule_name || '').toLowerCase().trim();
+                                        return !!name && (triageRuleName.includes(name) || name.includes(triageRuleName));
+                                    });
+                                }
+                                if (matchingRule) {
+                                    this.closureForm.ruleId = matchingRule.rule_id;
+                                    this.closureSuggestedRuleName = matchingRule.rule_name;
+                                    this.onRuleSelected();
+                                }
+                            }
+                        })
+                        .catch(err => {
+                            console.error('Failed to load source notable for closure form:', err);
+                            this.closureSourceNotable = null;
+                        });
+                },
+                onRuleSelected() {
+                    this.selectedRule = this.availableRules.find(r => r.rule_id === this.closureForm.ruleId) || null;
+                    this.closureForm.fieldValues = {};
+                    if (this.selectedRule) {
+                        const sourceFields = (this.closureSourceNotable && this.closureSourceNotable.fields) || {};
+
+                        const aliasMap = {
+                            host: ['host', 'destination_nt_hostname', 'destination'],
+                            destination: ['destination', 'destination_ip'],
+                            user: ['user', 'username', 'user_identity'],
+                            account: ['user', 'username', 'user_identity'],
+                        };
+
+                        for (const field of this.selectedRule.required_closure_fields) {
+                            let value = '';
+
+                            // Direct match on field name
+                            if (Object.prototype.hasOwnProperty.call(sourceFields, field)) {
+                                value = sourceFields[field];
+                            } else {
+                                // Fallback to simple aliases for common closure fields
+                                const aliases = aliasMap[field] || [];
+                                for (const key of aliases) {
+                                    if (sourceFields[key]) {
+                                        value = sourceFields[key];
+                                        break;
+                                    }
+                                }
+                            }
+
+                            // Leave fields like 'justification' empty when there
+                            // is no meaningful value in the source notable.
+                            this.closureForm.fieldValues[field] = value || '';
+                        }
+                    }
+                },
+                async generateClosureNote() {
+                    const missingFields = this.selectedRule.required_closure_fields.filter(f => !this.closureForm.fieldValues[f]);
+                    if (missingFields.length > 0) {
+                        alert('Please fill in all required fields: ' + missingFields.join(', '));
+                        return;
+                    }
+
+                    this.closureGenerating = true;
+                    try {
+                        const res = await axios.post(this.apiUrl + '/db/closure-note', {
+                            rule_id: this.closureForm.ruleId,
+                            case_id: this.closureForm.caseId,
+                            field_values: this.closureForm.fieldValues,
+                            analyst_notes: this.closureForm.analystNotes,
+                            disposition: this.closureForm.disposition
+                        });
+                        this.closureResult = res.data;
+                    } catch (err) {
+                        alert('Error: ' + err.response?.data?.detail || err.message);
+                    } finally {
+                        this.closureGenerating = false;
+                    }
+                },
+                copyToClipboard() {
+                    navigator.clipboard.writeText(this.closureResult.generated_note);
+                    alert('Closure note copied to clipboard!');
+                },
+                downloadClosureNote() {
+                    const element = document.createElement('a');
+                    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(this.closureResult.generated_note));
+                    element.setAttribute('download', this.closureForm.caseId + '_closure_note.txt');
+                    element.style.display = 'none';
+                    document.body.appendChild(element);
+                    element.click();
+                    document.body.removeChild(element);
+                },
+                copyTriageNotableFields(case_) {
+                    const caseId = case_.case_id;
+                    const details = this.triageNotableDetails[caseId];
+
+                    if (!details || !details.data || !details.data.fields) {
+                        alert('No source-notable fields loaded yet for this case');
+                        return;
+                    }
+
+                    const fields = details.data.fields;
+                    const lines = Object.entries(fields).map(([key, value]) => `${key}: ${value}`);
+                    const text = lines.join('\n');
+
+                    if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                        alert('Clipboard access is not available in this browser context');
+                        return;
+                    }
+
+                    navigator.clipboard.writeText(text)
+                        .then(() => {
+                            alert('Source notable fields copied to clipboard');
+                        })
+                        .catch(err => {
+                            console.error('Failed to copy fields:', err);
+                            alert('Failed to copy fields to clipboard');
+                        });
+                },
+                selectToolForExecution(tool) {
+                    this.selectedToolForExecution = tool;
+                },
+                checkHealth() {
+                    axios.get(this.apiUrl + '/health')
+                        .then(() => {
+                            document.getElementById('status').textContent = '●';
+                            document.getElementById('status').style.color = '#4ade80';
+                        })
+                        .catch(() => {
+                            document.getElementById('status').textContent = '●';
+                            document.getElementById('status').style.color = '#ef4444';
+                        });
+                }
+            },
+            mounted() {
+                this.loadTools();
+                this.loadJobs();
+                this.loadReports();
+                this.loadTriageData();
+                this.loadAnalysisCases();
+                this.loadRecentNotables();
+                this.loadDbStats();
+                this.loadRules();
+                this.checkOllama();
+                this.checkHealth();
+                
+                // Poll for updates
+                setInterval(() => this.loadJobs(), 5000);
+                setInterval(() => this.loadReports(), 10000);
+                setInterval(() => this.checkHealth(), 15000);
+                setInterval(() => this.checkOllama(), 30000);
+                setInterval(() => this.loadDbStats(), 30000);
+                setInterval(() => this.loadRules(), 30000);
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+{
+	"name": "SOC Platform Container",
+	"build": {
+		"context": "..",
+		"dockerfile": "../Dockerfile"
+	},
+	"features": {
+		"ghcr.io/devcontainers/features/git:1": {}
+	},
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"GitHub.copilot",
+				"GitHub.copilot-chat"
+			]
+		}
+	}
+}

@@ -1,0 +1,4 @@
+﻿{
+  "code_snippet": "def hello():\n    print('hello world')\n    x = eval(input())\n    return x",
+  "language": "python"
+}

@@ -1,0 +1,31 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+.env
+.env.local
+.DS_Store
+*.log
+
+# Docker build artifacts
+.docker/
+
+# Data that shouldn't ship in image (keep volumes separate)
+Data/Archive/*
+Data/Reports/*
+Data/Logs/*
+Data/Active_Workspace/*
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+Thumbs.db
+.AppleDouble

@@ -1,0 +1,468 @@
+[
+    {
+        "name": "Playbook_Runner",
+        "file_name": "playbook_runner.py",
+        "ext": ".py",
+        "path": "Tools/playbook_runner/playbook_runner.py",
+        "category": "Core Orchestration",
+        "description": "Executes pre-defined JSON sequences of SOC tools (Playbooks) for rapid automated workflows.",
+        "arguments": [
+            {
+                "flag": "--playbook",
+                "name": "JSON Playbook",
+                "description": "Name of the JSON playbook in the Playbooks folder (e.g., ai_analysis_pipeline.json)",
+                "required": false
+            },
+            {
+                "flag": "--target",
+                "name": "Dynamic Target",
+                "description": "File or folder path injected into playbook steps (used for {{DYNAMIC_TARGET}})",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Tool_Indexer",
+        "file_name": "tool_indexer.py",
+        "ext": ".py",
+        "path": "Tools/tool_indexer/tool_indexer.py",
+        "category": "Core Orchestration",
+        "description": "Scans the toolkit and updates the Commander Registry."
+    },
+    {
+        "name": "Data_Ingestor_Pipeline",
+        "file_name": "data_ingestor_pipeline.py",
+        "ext": ".py",
+        "path": "Tools/data_ingestor_pipeline/data_ingestor_pipeline.py",
+        "category": "Data Sanitization",
+        "description": "Unified pipeline for ingesting files (or folders), sanitizing PII/PHI using pseudo-NLP, scrubbing network IOCs, and formatting data.",
+        "arguments": [
+            {
+                "flag": "--target",
+                "name": "Target File or Folder",
+                "description": "Path to the file or folder to sanitize",
+                "required": false
+            },
+            {
+                "flag": "--mode",
+                "name": "Processing Mode",
+                "description": "1 (Logs), 2 (OSINT), or 3 (Comprehensive)",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "base64_decoder",
+        "file_name": "base64_decoder.py",
+        "ext": ".py",
+        "path": "Tools/base64_decoder/base64_decoder.py",
+        "category": "Intel Collection",
+        "description": "Extracts, cleans, and decodes Base64 payloads from raw text or files. Ideal for de-obfuscating PowerShell payloads or malicious scripts.",
+        "arguments": [
+            {
+                "flag": "--target",
+                "name": "Target File or Text",
+                "description": "File containing Base64 or a raw Base64 string",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "cve_intel_fetcher",
+        "file_name": "cve_intel_fetcher.py",
+        "ext": ".py",
+        "path": "Tools/cve_intel_fetcher/cve_intel_fetcher.py",
+        "category": "Intel Collection",
+        "description": "Instantly queries the NIST NVD database for a specific CVE to return its CVSS score, summary, and exploit status.",
+        "arguments": [
+            {
+                "flag": "--cve",
+                "name": "CVE ID",
+                "description": "The specific CVE identifier to query (e.g., CVE-2023-12345)",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "IOC_Extractor",
+        "file_name": "ioc_extractor.py",
+        "ext": ".py",
+        "path": "Tools/ioc_extractor/ioc_extractor.py",
+        "category": "Intel Collection",
+        "description": "High-fidelity extractor that pulls IPs, MACs, URLs, and Hashes from files. Defangs outputs for safe playbook automation.",
+        "arguments": [
+            {
+                "flag": "--target",
+                "name": "Target File or Folder",
+                "description": "Path to the file or folder to scan",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "pki_cert_decoder",
+        "file_name": "pki_cert_decoder.py",
+        "ext": ".py",
+        "path": "Tools/pki_cert_decoder/pki_cert_decoder.py",
+        "category": "Intel Collection",
+        "description": "Decodes and analyzes X.509 certificates (.pem, .cer, .der, or raw base64) locally without external network calls.",
+        "arguments": [
+            {
+                "flag": "--cert",
+                "name": "Certificate File",
+                "description": "Path to the certificate file to analyze",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "Threat_Intel_Fetcher",
+        "file_name": "threat_intel_fetcher.py",
+        "ext": ".py",
+        "path": "Tools/threat_intel_fetcher/threat_intel_fetcher.py",
+        "category": "Intel Collection",
+        "description": "Aggregates live intel from CISA KEV, CISA Advisories, and Abuse.ch into a single comprehensive daily bundle. Ready for playbook automation.",
+        "arguments": [
+            {
+                "flag": "--compare_dir",
+                "name": "Compare Directory",
+                "description": "Directory containing Extracted IOC CSVs to cross-reference",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "AI_Analyst_Engine",
+        "file_name": "ai_analyst_engine.py",
+        "ext": ".py",
+        "path": "Tools/ai_analyst_engine/ai_analyst_engine.py",
+        "category": "Reporting",
+        "description": "Fuses an AI Skill from the Knowledge Base with raw evidence to generate a structured analysis prompt.",
+        "arguments": [
+            {
+                "flag": "--evidence",
+                "name": "Evidence File",
+                "description": "Path to the file containing raw logs or data to analyze",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "AI_Response_Rehydrator",
+        "file_name": "ai_response_rehydrator.py",
+        "ext": ".py",
+        "path": "Tools/ai_analyst_engine/ai_response_rehydrator.py",
+        "category": "Reporting",
+        "description": "Replaces placeholder tokens (e.g., HOST_1, IPV4_1) in an AI response with real values from the sanitizer mapping file.",
+        "arguments": [
+            {
+                "flag": "--response",
+                "name": "AI Response File",
+                "description": "Path to the AI model output to rehydrate",
+                "required": true
+            },
+            {
+                "flag": "--map",
+                "name": "Mapping File",
+                "description": "Optional path to the .map.json produced by the sanitizer",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Automated_Reporter",
+        "file_name": "automated_reporter.py",
+        "ext": ".py",
+        "path": "Tools/automated_reporter/automated_reporter.py",
+        "category": "Reporting",
+        "description": "Compiles text summaries and sanitized intelligence into a standardized, shareable HTML SOC briefing document.",
+        "arguments": [
+            {
+                "flag": "--mode",
+                "name": "Input Mode",
+                "description": "1 for File, 2 for Paste",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Case_Bundle_Builder",
+        "file_name": "case_bundle_builder.py",
+        "ext": ".py",
+        "path": "Tools/case_bundle_builder/case_bundle_builder.py",
+        "category": "Reporting",
+        "description": "Builds a consolidated incident case bundle from a folder of exports.",
+        "arguments": [
+            {
+                "flag": "--source_dir",
+                "name": "Source Directory",
+                "description": "Folder containing raw exports for this case",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "mde_triage_aggregator",
+        "file_name": "mde_triage_aggregator.py",
+        "ext": ".py",
+        "path": "Tools/mde_triage_aggregator/mde_triage_aggregator.py",
+        "category": "Reporting",
+        "description": "Designed EXCLUSIVELY for raw Microsoft Defender (MDE) CSV exports. Use this to deduplicate incident storms, prune false positive noise, and format High-Severity alerts for shift handoff.",
+        "arguments": [
+            {
+                "flag": "--file",
+                "name": "CSV File",
+                "description": "Path to the raw MDE Incident or Alert CSV export",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "Splunk_Notable_AI_Helper",
+        "file_name": "splunk_notable_ai_helper.py",
+        "ext": ".py",
+        "path": "Tools/ai_analyst_engine/splunk_notable_ai_helper.py",
+        "category": "Reporting",
+        "description": "Guided helper that takes a sanitized Splunk ES Incident Review notable export and builds an AI prompt asking for SPL, disposition, and a two-sentence closing comment.",
+        "arguments": [
+            {
+                "flag": "--evidence",
+                "name": "Evidence File",
+                "description": "Path to the sanitized notable text or export (optional; will prompt if omitted)",
+                "required": false
+            },
+            {
+                "flag": "--detection-science",
+                "name": "Detection Science File",
+                "description": "Path to detection science / supportive rules JSON/MD (optional)",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "splunk_notable_parser",
+        "file_name": "splunk_notable_parser.py",
+        "ext": ".py",
+        "path": "Tools/splunk_notable_parser/splunk_notable_parser.py",
+        "category": "Reporting",
+        "description": "Parses raw Splunk exports using aggressive Regex to extract actionable IOCs (IPs, Emails, Hashes) hidden within unstructured log data.",
+        "arguments": [
+            {
+                "flag": "--file",
+                "name": "Splunk CSV/TXT File",
+                "description": "Path to the raw Splunk export",
+                "required": true
+            }
+        ]
+    },
+    {
+        "name": "AI_Context_Exporter",
+        "file_name": "ai_context_exporter.py",
+        "ext": ".py",
+        "path": "Tools/ai_context_exporter/ai_context_exporter.py",
+        "category": "System Utilities",
+        "description": "Bundles source code, configs, and directory structure into a single text file for AI context sharing."
+    },
+    {
+        "name": "AI_Skill_Browser",
+        "file_name": "ai_skill_browser.py",
+        "ext": ".py",
+        "path": "Tools/ai_skill_browser/ai_skill_browser.py",
+        "category": "System Utilities",
+        "description": "Interactive browser for SOC AI SKILL files stored in the Knowledge Base."
+    },
+    {
+        "name": "AI_Skill_Harvester",
+        "file_name": "ai_skill_harvester.py",
+        "ext": ".py",
+        "path": "Tools/ai_skill_harvester/ai_skill_harvester.py",
+        "category": "System Utilities",
+        "description": "Scans the user Downloads directory for scattered AI SKILL.md files, centralizes them, and generates an index."
+    },
+    {
+        "name": "Dir_Mapper",
+        "file_name": "dir_mapper.py",
+        "ext": ".py",
+        "path": "Tools/dir_mapper/dir_mapper.py",
+        "category": "System Utilities",
+        "description": "Generates a comprehensive, indented file and folder map of the Downloads directory and saves it to the root platform folder."
+    },
+    {
+        "name": "Git_Sync_Manager",
+        "file_name": "git_sync.py",
+        "ext": ".py",
+        "path": "Tools/git_sync/git_sync.py",
+        "category": "SYSTEM UTILITIES",
+        "description": "Interactive Git utility to safely pull updates, stash changes, and push code to the central repo."
+    },
+    {
+        "name": "Maintenance_Suite",
+        "file_name": "maintenance_suite.py",
+        "ext": ".py",
+        "path": "Tools/maintenance_suite/maintenance_suite.py",
+        "category": "System Utilities",
+        "description": "Interactive hub for cleaning the workspace, generating AI context exports, or backing up the platform."
+    },
+    {
+        "name": "Platform_Blueprint",
+        "file_name": "platform_blueprint.py",
+        "ext": ".py",
+        "path": "Tools/platform_blueprint/platform_blueprint.py",
+        "category": "System Utilities",
+        "description": "Scans the SOC platform to map all folder paths, files, metadata, and source code into a single document."
+    },
+    {
+        "name": "Platform_Health_Check",
+        "file_name": "platform_health_check.py",
+        "ext": ".py",
+        "path": "Tools/platform_health_check/platform_health_check.py",
+        "category": "System Utilities",
+        "description": "Validates Commander registry, tool scripts, and playbook references for basic integrity."
+    },
+    {
+        "name": "Splunk_Env_Profile_Builder",
+        "file_name": "splunk_env_profile_builder.py",
+        "ext": ".py",
+        "path": "Tools/global_config/splunk_env_profile_builder.py",
+        "category": "System Utilities",
+        "description": "Scans a local folder of Splunk index/sourcetype metadata and refreshes splunk_env_profile.json with role\u2192SPL fragments.",
+        "arguments": [
+            {
+                "flag": "--source_dir",
+                "name": "Source Directory",
+                "description": "Folder containing ROLE-marked index/sourcetype reference files",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Splunk_Env_Profile_Editor",
+        "file_name": "splunk_env_profile_editor.py",
+        "ext": ".py",
+        "path": "Tools/global_config/splunk_env_profile_editor.py",
+        "category": "System Utilities",
+        "description": "Interactive editor for splunk_env_profile.json role\u2192SPL fragments (indexes/sourcetypes)."
+    },
+    {
+        "name": "System_Downloads_Mapper",
+        "file_name": "system_downloads_mapper.py",
+        "ext": ".py",
+        "path": "Tools/system_downloads_mapper/system_downloads_mapper.py",
+        "category": "System Utilities",
+        "description": "Scans your actual Windows User Downloads folder and generates a complete file map saved to the SOC root."
+    },
+    {
+        "name": "text_reformatter",
+        "file_name": "text_reformatter.py",
+        "ext": ".py",
+        "path": "Tools/text_reformatter/text_reformatter.py",
+        "category": "System Utilities",
+        "description": "Reflows garbled text with hard-wrapped lines into cleaner paragraphs for AI analysis.",
+        "arguments": [
+            {
+                "flag": "--target",
+                "name": "Target Text File",
+                "description": "Path to the text file to reflow",
+                "required": true
+            },
+            {
+                "flag": "--width",
+                "name": "Line Width",
+                "description": "Desired wrap width (default 100)",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Text_Sanitizer_Pipeline",
+        "file_name": "text_sanitizer_pipeline.py",
+        "ext": ".py",
+        "path": "Tools/text_sanitizer_pipeline/text_sanitizer_pipeline.py",
+        "category": "System Utilities",
+        "description": "Reflows garbled text and sanitizes IPs, MACs, and common PII/PHI before opening in Notepad.",
+        "arguments": [
+            {
+                "flag": "--target",
+                "name": "Target Text File",
+                "description": "Path to the text file to sanitize directly",
+                "required": false
+            },
+            {
+                "flag": "--mode",
+                "name": "Input Mode",
+                "description": "1 (Paste), 2 (File Drag & Drop)",
+                "required": false
+            },
+            {
+                "flag": "--width",
+                "name": "Line Width",
+                "description": "Desired wrap width (default 100)",
+                "required": false
+            }
+        ]
+    },
+    {
+        "name": "Tool_Packager",
+        "file_name": "tool_packager.py",
+        "ext": ".py",
+        "path": "Tools/tool_packager/tool_packager.py",
+        "category": "System Utilities",
+        "description": "Compresses the SOC platform into a ZIP, injecting a resilient launcher and dynamically generated README."
+    },
+    {
+        "name": "Workspace_Cleaner",
+        "file_name": "workspace_cleaner.py",
+        "ext": ".py",
+        "path": "Tools/workspace_cleaner/workspace_cleaner.py",
+        "category": "System Utilities",
+        "description": "Organizes legacy tools into archives, consolidates paperwork, and safely removes empty directories."
+    },
+    {
+        "name": "bulk_rule_matcher",
+        "file_name": "bulk_rule_matcher.py",
+        "ext": ".py",
+        "path": "Tools/bulk_rule_matcher/bulk_rule_matcher.py",
+        "category": "Uncategorized",
+        "description": "No description provided."
+    },
+    {
+        "name": "closure_notes_generator",
+        "file_name": "closure_notes_generator.py",
+        "ext": ".py",
+        "path": "Tools/closure_notes_generator/closure_notes_generator.py",
+        "category": "Uncategorized",
+        "description": "No description provided."
+    },
+    {
+        "name": "es_rules_importer",
+        "file_name": "es_rules_importer.py",
+        "ext": ".py",
+        "path": "Tools/es_rules_importer/es_rules_importer.py",
+        "category": "Uncategorized",
+        "description": "No description provided."
+    },
+    {
+        "name": "filecheck",
+        "file_name": "filecheck.py",
+        "ext": ".py",
+        "path": "Tools/filecheck/filecheck.py",
+        "category": "Uncategorized",
+        "description": "Reliably counts lines, searches for phrases, and hashes a file (Interactive)."
+    },
+    {
+        "name": "splunk_csv_ingestor",
+        "file_name": "splunk_csv_ingestor.py",
+        "ext": ".py",
+        "path": "Tools/splunk_csv_ingestor/splunk_csv_ingestor.py",
+        "category": "Uncategorized",
+        "description": "No description provided."
+    },
+    {
+        "name": "splunk_folder_watcher",
+        "file_name": "splunk_folder_watcher.py",
+        "ext": ".py",
+        "path": "Tools/splunk_folder_watcher/splunk_folder_watcher.py",
+        "category": "Uncategorized",
+        "description": "No description provided."
+    }
+]

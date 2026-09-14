@@ -1,0 +1,6 @@
+{
+  "NOTABLE_INDEX": "notable",
+  "SSH_KEY_EVENT_SEARCH": "index=nix (sourcetype=linux_audit OR sourcetype=linux_secure)",
+  "LINUX_AUTH_SEARCH": "index=nix sourcetype=linux_secure",
+  "LINUX_AUDIT_SEARCH": "index=nix sourcetype=linux_audit"
+}

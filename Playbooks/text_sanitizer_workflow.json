@@ -1,0 +1,11 @@
+{
+  "name": "Text Sanitizer Workflow",
+  "description": "Paste or drag/drop text, sanitize IPs/PII/PHI, and open a clean copy in Notepad for AI use.",
+  "steps": [
+    {
+      "name": "Sanitize & Reflow Text",
+      "tool": "Text_Sanitizer_Pipeline",
+      "args": "--target {{DYNAMIC_TARGET}}"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "threat_intel_ai_pipeline",
+  "description": "Fetches live threat intelligence and runs AI analysis plus HTML briefing using the latest intel bundle.",
+  "enabled": true,
+  "steps": [
+    {
+      "name": "Phase 1: Fetch Threat Intel",
+      "tool": "Threat_Intel_Fetcher",
+      "args": "--silent"
+    },
+    {
+      "name": "Phase 2: Build AI Analysis Prompt from Latest Intel",
+      "tool": "AI_Analyst_Engine",
+      "args": "--evidence Data/Reports/SOC_Intel_Briefing_latest.txt"
+    },
+    {
+      "name": "Phase 3: Generate HTML Briefing from Latest AI Prompt",
+      "tool": "Automated_Reporter",
+      "args": "--file Data/Active_Workspace/AI_Prompt_latest.txt --silent"
+    }
+  ]
+}

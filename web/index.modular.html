@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SOC Platform (Modular)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <style>
+        [v-cloak] { display: none; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
+        .fade-enter, .fade-leave-to { opacity: 0; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100" id="app" v-cloak>
+    <div class="min-h-screen flex flex-col">
+        <header-nav
+            :current-tab="currentTab"
+            :ollama-health="ollamaHealth"
+            :api-healthy="apiHealthy"
+            @change-tab="changeTab"
+        ></header-nav>
+
+        <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
+            <!-- Tools -->
+            <tools-tab
+                v-if="currentTab === 'tools'"
+                :tools="tools"
+                :tool-search="toolSearch"
+                :selected-category="selectedCategory"
+                :tool-args="toolArgs"
+                :selected-tool-for-execution="selectedToolForExecution"
+                :regression-result="regressionResult"
+                :regression-running="regressionRunning"
+                @update:tool-search="toolSearch = $event"
+                @update:selected-category="selectedCategory = $event"
+                @select-tool="selectToolForExecution"
+                @close-tool-modal="closeToolModal"
+                @execute-tool="executeTool"
+                @change-tab="changeTab"
+                @run-regression="runToolRegression"
+            ></tools-tab>
+
+            <!-- Database -->
+            <database-tab
+                v-if="currentTab === 'database'"
+                :db-stats="dbStats"
+                :operations-stats="operationsStats"
+                :notable-paste-text="notablePasteText"
+                :notable-paste-segment-estimate="notablePasteSegmentEstimate"
+                :notable-redaction-enabled="notableRedactionEnabled"
+                :notable-historical="notableHistorical"
+                :notable-paste-saving="notablePasteSaving"
+                :notable-paste-result="notablePasteResult"
+                :show-open-notables-only="showOpenNotablesOnly"
+                :filtered-recent-notables="filteredRecentNotables"
+                :historical-notables-visible="historicalNotablesVisible"
+                :historical-notables="historicalNotables"
+                :filtered-triage-data="filteredTriageData"
+                :db-search="dbSearch"
+                :db-verdict-filter="dbVerdictFilter"
+                :triage-from-pasted-only="triageFromPastedOnly"
+                :delete-analysis-with-case="deleteAnalysisWithCase"
+                :selected-notable-ids="selectedNotableIds"
+                :selected-triage-case-ids="selectedTriageCaseIds"
+                :triage-notable-details="triageNotableDetails"
+                @change-tab="changeTab"
+                @update:notable-paste-text="notablePasteText = $event"
+                @update:notable-redaction-enabled="notableRedactionEnabled = $event"
+                @update:notable-historical="notableHistorical = $event"
+                @save-pasted-notable="savePastedNotable"
+                @load-historical-notables="loadHistoricalNotables"
+                @update:historical-notables-visible="historicalNotablesVisible = $event"
+                @load-recent-notables="loadRecentNotables"
+                @delete-pasted-notable="deletePastedNotable"
+                @delete-selected-pasted-notables="deleteSelectedPastedNotables"
+                @promote-notable-to-triage="promoteNotableToTriage"
+                @promote-all-open-pasted-notables="promoteAllOpenPastedNotables"
+                @update:selected-notable-ids="selectedNotableIds = $event"
+                @update:show-open-notables-only="showOpenNotablesOnly = $event"
+                @update:db-search="dbSearch = $event"
+                @update:db-verdict-filter="dbVerdictFilter = $event"
+                @update:triage-from-pasted-only="triageFromPastedOnly = $event"
+                @update:selected-triage-case-ids="selectedTriageCaseIds = $event"
+                @update:delete-analysis-with-case="deleteAnalysisWithCase = $event"
+                @load-triage-data="loadTriageData"
+                @load-db-stats="loadDbStats"
+                @delete-triage-case="deleteTriageCase"
+                @delete-selected-triage-cases="deleteSelectedTriageCases"
+                @load-triage-notable-details="loadTriageNotableDetails"
+                @copy-triage-notable-fields="copyTriageNotableFields"
+                @analyze-case="analyzeCase"
+                @load-closed-notable-details="loadClosedNotableDetails"
+                @delete-closed-notable="deleteClosedNotable"
+                @delete-selected-closed-notables="deleteSelectedClosedNotables"
+            ></database-tab>
+
+            <!-- Analysis -->
+            <analysis-tab
+                v-if="currentTab === 'analysis'"
+                :ollama-health="ollamaHealth"
+                :analysis-case-search="analysisCaseSearch"
+                :analysis-case-id="analysisCaseId"
+                :analysis-cases="analysisCases"
+                :filtered-analysis-cases="filteredAnalysisCases"
+                :analysis-model="analysisModel"
+                :analysis-context="analysisContext"
+                :analysis-running="analysisRunning"
+                :analysis-status="analysisStatus"
+                :phase2-status="phase2Status"
+                :analysis-result="analysisResult"
+                :analysis-source-notable="analysisSourceNotable"
+                :analysis-rule="analysisRule"
+                :show-phase1-analysis="showPhase1Analysis"
+                :phase2-model="phase2Model"
+                :follow-up-phase="followUpPhase"
+                :phase2-result="phase2Result"
+                :investigation-state="investigationState"
+                :evidence-finding-options="evidenceFindingOptions"
+                :supportive-manual-results="supportiveManualResults"
+                :supportive-finding-types="supportiveFindingTypes"
+                :enrichment-manual-results="enrichmentManualResults"
+                :enrichment-finding-types="enrichmentFindingTypes"
+                :phase2-manual-results="phase2ManualResults"
+                :phase2-finding-types="phase2FindingTypes"
+                :phase2-resolution-types="phase2ResolutionTypes"
+                :phase2-resolution-questions="phase2ResolutionQuestions"
+                :phase2-edited-queries="phase2EditedQueries"
+                :supportive-playbook-available="supportivePlaybookAvailable"
+                :supportive-draft-busy="supportiveDraftBusy"
+                :supportive-draft-error="supportiveDraftError"
+                :supportive-import-busy="supportiveImportBusy"
+                :supportive-import-error="supportiveImportError"
+                :supportive-editor-open="supportiveEditorOpen"
+                :supportive-editor-busy="supportiveEditorBusy"
+                :supportive-editor-queries="supportiveEditorQueries"
+                :supportive-editor-rule-id="supportiveEditorRuleId"
+                :supportive-editor-error="supportiveEditorError"
+                :placeholder-alias-editor-open="placeholderAliasEditorOpen"
+                :placeholder-alias-editor-busy="placeholderAliasEditorBusy"
+                :placeholder-alias-list="placeholderAliasList"
+                :placeholder-alias-editor-error="placeholderAliasEditorError"
+                :placeholder-alias-suggestions="placeholderAliasSuggestions"
+                :placeholder-alias-suggestions-busy="placeholderAliasSuggestionsBusy"
+                :new-alias-form="newAliasForm"
+                :editing-alias-id="editingAliasId"
+                :render-supportive-query-fn="renderSupportiveQuery"
+                :render-phase2-query-fn="renderPhase2Query"
+                :has-unresolved-placeholders-fn="hasUnresolvedPlaceholders"
+                :get-supportive-key-fn="getSupportiveKey"
+                :get-enrichment-key-fn="getEnrichmentKey"
+                :get-phase2-key-fn="getPhase2Key"
+                :get-phase2-template-fn="getPhase2Template"
+                :format-loop-status-fn="formatLoopStatus"
+                :format-disposition-label-fn="formatDispositionLabel"
+                :format-finding-label-fn="formatFindingLabel"
+                @update:analysis-case-search="analysisCaseSearch = $event"
+                @update:analysis-case-id="analysisCaseId = $event"
+                @update:analysis-model="analysisModel = $event"
+                @update:analysis-context="analysisContext = $event"
+                @update:phase2-model="phase2Model = $event"
+                @update:follow-up-phase="followUpPhase = $event"
+                @update:show-phase1-analysis="showPhase1Analysis = $event"
+                @on-analysis-case-changed="onAnalysisCaseChanged"
+                @run-analysis="runAnalysis"
+                @run-phase2-analysis="runPhase2Analysis"
+                @cancel-analysis="cancelAnalysis"
+                @save-analysis-state="saveAnalysisState"
+                @copy-analysis-result="copyAnalysisResult"
+                @go-to-closure-from-analysis="goToClosureFromAnalysis"
+                @open-placeholder-alias-editor="openPlaceholderAliasEditor"
+                @open-supportive-editor="openSupportiveEditor"
+                @generate-supportive-playbook-draft="generateSupportivePlaybookDraft"
+                @import-supportive-results="importSupportiveResults"
+                @close-supportive-editor="closeSupportiveEditor"
+                @add-supportive-query="addSupportiveQueryRow"
+                @remove-supportive-query="removeSupportiveQuery"
+                @save-supportive-queries="saveSupportiveQueries"
+                @save-supportive-evidence="saveSupportiveEvidence"
+                @save-phase2-evidence="savePhase2Evidence"
+                @close-placeholder-alias-editor="closePlaceholderAliasEditor"
+                @save-placeholder-alias="savePlaceholderAlias"
+                @edit-placeholder-alias="editPlaceholderAlias"
+                @delete-placeholder-alias="deletePlaceholderAlias"
+                @load-placeholder-alias-suggestions="loadPlaceholderAliasSuggestions"
+                @toggle-alias-field-candidate="toggleAliasFieldCandidate"
+                @copy-supportive-spl="copySupportiveSPL"
+                @copy-enrichment-spl="copyEnrichmentSPL"
+                @copy-phase2-spl="copyPhase2SPL"
+                @promote-phase2-query="promotePhase2Query"
+                @on-phase2-template-input="onPhase2TemplateInput"
+                @update-supportive-manual="({key, value}) => supportiveManualResults = { ...supportiveManualResults, [key]: value }"
+                @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
+                @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
+                @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
+                @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
+                @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
+                @update-phase2-resolution="({key, value}) => { phase2ResolutionTypes = { ...phase2ResolutionTypes, [key]: value }; if (value === 'not_resolved') { const next = { ...phase2ResolutionQuestions }; delete next[key]; phase2ResolutionQuestions = next; } }"
+                @update-phase2-resolution-question="({key, value}) => phase2ResolutionQuestions = { ...phase2ResolutionQuestions, [key]: value }"
+                @delete-evidence="deleteEvidence"
+                @delete-evidence-batch="deleteEvidenceBatch"
+                @delete-all-evidence="deleteAllEvidence"
+            ></analysis-tab>
+
+            <!-- Closure -->
+            <closure-tab
+                v-if="currentTab === 'closure'"
+                :triage-data="triageData"
+                :available-rules="availableRules"
+                :selected-rule="selectedRule"
+                :closure-form="closureForm"
+                :closure-result="closureResult"
+                :closure-generating="closureGenerating"
+                :closure-suggested-rule-name="closureSuggestedRuleName"
+                :closure-suggested-disposition="closureSuggestedDisposition"
+                @update:closure-form="closureForm = $event"
+                @select-case="onCaseSelected"
+                @select-rule="onRuleSelected"
+                @generate-closure-note="generateClosureNote"
+                @copy-closure-note="copyToClipboard"
+                @download-closure-note="downloadClosureNote"
+            ></closure-tab>
+
+            <!-- Jobs -->
+            <jobs-tab
+                v-if="currentTab === 'jobs'"
+                :jobs="jobs"
+                :selected-job-ids="selectedJobIds"
+                @update:selected-job-ids="selectedJobIds = $event"
+                @delete-job="deleteJob"
+                @delete-selected-jobs="deleteSelectedJobs"
+                @clear-jobs="clearJobs"
+            ></jobs-tab>
+
+            <!-- Reports -->
+            <reports-tab
+                v-if="currentTab === 'reports'"
+                :reports="reports"
+            ></reports-tab>
+
+            <!-- Code Review -->
+            <code-review-tab
+                v-if="currentTab === 'code-review'"
+                :code-review-form="codeReviewForm"
+                :code-review-models="codeReviewModels"
+                :code-review-running="codeReviewRunning"
+                :code-review-result="codeReviewResult"
+                :code-reviews-list="codeReviewsList"
+                :code-review-drag-active="codeReviewDragActive"
+                :code-review-sections="codeReviewSections"
+                :code-review-sections-busy="codeReviewSectionsBusy"
+                :code-review-sections-filter="codeReviewSectionsFilter"
+                :code-review-sections-code-only="codeReviewSectionsCodeOnly"
+                :code-review-sections-features-only="codeReviewSectionsFeaturesOnly"
+                :code-review-sections-min-lines="codeReviewSectionsMinLines"
+                :code-review-sections-use-local="codeReviewSectionsUseLocal"
+                :code-review-sections-show-advanced="codeReviewSectionsShowAdvanced"
+                :code-review-search-term="codeReviewSearchTerm"
+                :code-review-find-term="codeReviewFindTerm"
+                :code-review-find-case-sensitive="codeReviewFindCaseSensitive"
+                :code-review-find-matches="codeReviewFindMatches"
+                :code-review-find-index="codeReviewFindIndex"
+                :filtered-code-review-sections="filteredCodeReviewSections"
+                :grouped-code-review-sections="groupedCodeReviewSections"
+                :ollama-health="ollamaHealth"
+                @update:code-review-form="codeReviewForm = $event"
+                @update:code-review-search-term="codeReviewSearchTerm = $event"
+                @update:code-review-sections-filter="codeReviewSectionsFilter = $event"
+                @update:code-review-sections-code-only="codeReviewSectionsCodeOnly = $event"
+                @update:code-review-sections-features-only="codeReviewSectionsFeaturesOnly = $event"
+                @update:code-review-sections-min-lines="codeReviewSectionsMinLines = $event"
+                @update:code-review-sections-use-local="codeReviewSectionsUseLocal = $event"
+                @update:code-review-sections-show-advanced="codeReviewSectionsShowAdvanced = $event"
+                @update:code-review-find-term="codeReviewFindTerm = $event"
+                @update:code-review-find-case-sensitive="codeReviewFindCaseSensitive = $event"
+                @submit-code-review="submitCodeReview"
+                @detect-code-review-sections="detectCodeReviewSections"
+                @focus-code-review-on-section="focusCodeReviewOnSection"
+                @focus-code-review-section="focusCodeReviewSection"
+                @handle-file-upload="handleFileUpload"
+                @handle-folder-upload="handleFolderUpload"
+                @on-code-review-drag-over="onCodeReviewDragOver"
+                @on-code-review-drag-leave="onCodeReviewDragLeave"
+                @on-code-review-drop="onCodeReviewDrop"
+                @run-code-review-find="runCodeReviewFind"
+                @clear-code-review-find="clearCodeReviewFind"
+                @code-review-find-next="codeReviewFindNext"
+                @code-review-find-prev="codeReviewFindPrev"
+                @copy-code-review-to-clipboard="copyCodeReviewToClipboard"
+                @load-full-code-review="loadFullCodeReview"
+                @on-code-review-find-keydown="onCodeReviewFindKeydown"
+                @on-code-review-textarea-keydown="onCodeReviewTextareaKeydown"
+            ></code-review-tab>
+        </main>
+
+        <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
+            <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
+                <p>SOC Platform v1.1.0 • Local AI • Modular shell • <a href="/docs" class="text-blue-400 hover:text-blue-300">API Docs</a></p>
+                <p class="text-xs mt-1 text-gray-500">Testing: index.modular.html (live site remains index.html)</p>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Vue -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+
+    <!-- utils (pure helpers) -->
+    <script src="utils/keys.js?v=9"></script>
+    <script src="utils/queryRender.js?v=9"></script>
+    <script src="utils/selection.js?v=9"></script>
+    <script src="utils/pocSummary.js?v=9"></script>
+    <script src="utils/codeSections.js?v=9"></script>
+    <script src="utils/ruleResolver.js?v=9"></script>
+
+    <!-- modules (API + domain) -->
+    <script src="modules/api.js?v=9"></script>
+    <script src="modules/database.js?v=17"></script>
+    <script src="modules/analysis.js?v=9"></script>
+    <script src="modules/tools.js?v=11"></script>
+    <script src="modules/closure.js?v=9"></script>
+    <script src="modules/codeReview.js?v=9"></script>
+
+    <!-- components (UI) -->
+    <script src="components/HeaderNav.js?v=9"></script>
+    <script src="components/ToolsTab.js?v=11"></script>
+    <script src="components/DatabaseTab.js?v=26"></script>
+    <script src="components/AnalysisTab.js?v=9"></script>
+    <script src="components/ClosureTab.js?v=9"></script>
+    <script src="components/JobsTab.js?v=15"></script>
+    <script src="components/ReportsTab.js?v=9"></script>
+    <script src="components/CodeReviewTab.js?v=9"></script>
+
+    <!-- root app (full logic from live, with component registration) -->
+    <script src="app.modular.js?v=11"></script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+
+services:
+  # API Service: FastAPI REST service for programmatic access
+  api-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soc-platform:latest
+    environment:
+      - SOC_PLATFORM_ROOT=/app
+      - LOG_LEVEL=INFO
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - DATABASE_URL=${COMPOSE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-soc_platform}}
+    # Ensure containers can resolve the host's Ollama service on Linux
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${API_HOST_PORT:-8000}:8000"
+    volumes:
+      - ./:/app
+    working_dir: /app
+    command: python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      redis:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-soc_platform}
+      - POSTGRES_USER=${POSTGRES_USER:-soc_platform}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "${POSTGRES_HOST_PORT:-5433}:5432"
+    networks:
+      default:
+        aliases:
+          - postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc_platform} -d ${POSTGRES_DB:-soc_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis: Job queue for async tool execution
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+  postgres-data:

@@ -1,0 +1,24 @@
+{
+    "name": "Intelligence Ingest Pipeline",
+    "description": "Batch cleans raw transcripts, hands them to the compiler, and archives the workspace.",
+    "global_inputs": [
+        "raw_intel_folder"
+    ],
+    "steps": [
+        {
+            "script": "Parse_Transcript.py",
+            "function": "batch_clean_transcripts",
+            "args": ["raw_intel_folder"]
+        },
+        {
+            "script": "Compile_and_Sieve.py.txt",
+            "function": "playbook_compile_and_sieve",
+            "args": ["Output_Dir"]
+        },
+        {
+            "script": "Archive_Workspace.py",
+            "function": "archive_files",
+            "args": ["raw_intel_folder"]
+        }
+    ]
+}

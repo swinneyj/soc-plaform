@@ -1,0 +1,126 @@
+{
+  "description": "Known Splunk indexes/sourcetypes grounded from real correlation searches and environment usage.",
+  "updated": "2026-09-09",
+  "sources": [
+    {
+      "index": "nix",
+      "sourcetypes": [
+        "(raw auditd lines: type=SYSCALL|PATH|EXECVE|PROCTITLE)",
+        "linux:secure-style sshd messages if present"
+      ],
+      "common_fields": [
+        "host",
+        "file_path",
+        "command",
+        "exe",
+        "success",
+        "syscall_name",
+        "auid",
+        "uid",
+        "euid",
+        "session_id",
+        "tty",
+        "nametype",
+        "audit_id",
+        "audit_key"
+      ],
+      "use_for": [
+        "Linux auditd file and process activity",
+        "SSH authorized_keys create/modify/delete (linux_ssh_key_creation rule family)"
+      ],
+      "notes": "Confirmed primary index from Endpoint - Linux Possible ssh Key File Creation drilldown (index=nix only)."
+    },
+    {
+      "index": "network",
+      "sourcetypes": [
+        "*"
+      ],
+      "common_fields": [
+        "host",
+        "user",
+        "process",
+        "dest_ip",
+        "dest_hostname",
+        "dest_port",
+        "src_ip"
+      ],
+      "use_for": [
+        "Egress context for other rule families"
+      ]
+    },
+    {
+      "index": "Windows",
+      "sourcetypes": [
+        "WinNetMon",
+        "XmlWinEventLog",
+        "XmlWinEventLog:Microsoft-Windows-Sysmon/Operational",
+        "WinEventLog:Microsoft-Windows-Sysmon/Operational"
+      ],
+      "common_fields": [
+        "host",
+        "Computer",
+        "User",
+        "UserName",
+        "ProcessName",
+        "Image",
+        "CommandLine",
+        "ParentImage",
+        "RemoteAddress",
+        "RemotePort",
+        "Direction",
+        "EventCode"
+      ],
+      "use_for": [
+        "LotL outbound (WinNetMon + Sysmon join)",
+        "Windows process lineage and network connects"
+      ],
+      "notes": "LotL: WinNetMon Direction=outbound primary. Sysmon often lands as sourcetype=XmlWinEventLog with EventCode 1/3 (not only the long Operational sourcetype). host may be UPPERCASE short name; Computer may be FQDN \u2014 use case-insensitive match on host/Computer."
+    },
+    {
+      "index": "wineventlog",
+      "sourcetypes": [
+        "WinEventLog:Security"
+      ],
+      "common_fields": [
+        "host",
+        "user",
+        "EventCode",
+        "Logon_Type",
+        "src_ip"
+      ],
+      "use_for": [
+        "Windows authentication"
+      ]
+    },
+    {
+      "index": "f5_bigip",
+      "sourcetypes": [
+        "f5:bigip:ltm:ssl:error"
+      ],
+      "common_fields": [
+        "src_ip",
+        "dest_ip",
+        "src_port",
+        "dest_port"
+      ],
+      "use_for": [
+        "F5 TLS handshake failures"
+      ]
+    }
+  ],
+  "placeholder_conventions": {
+    "host": "Primary affected host. Notable often uses destination; alias map resolves host/destination/destination_ip.",
+    "user": "UserName from WinNetMon / User from Sysmon; notable renames to user.",
+    "destination": "Same as host for this Linux SSH key rule (rule renames host as dest).",
+    "process": "LOLBin path/name from notable (ProcessName/Image). Rule renames ProcessName as process.",
+    "dest_ip": "RemoteAddress from WinNetMon; notable may expose dest_ip after rename."
+  },
+  "rule_index_map": {
+    "linux_ssh_key_creation": [
+      "nix"
+    ],
+    "lotl_outbound_connection": [
+      "Windows"
+    ]
+  }
+}

@@ -1,0 +1,33 @@
+﻿.venv/
+venv/
+__pycache__/
+*.pyc
+
+.env
+
+splunk-es-backup-toolkit/rules.sqlite
+splunk-es-backup-toolkit/triage.db
+*.db
+*.sqlite
+*.sql
+local-backups/
+
+Data/
+Splunk_Exports/
+
+soc-platform/
+soc-platform.tar
+
+splunk-es-backup-toolkit.old/
+
+*.log
+*.tmp
+.DS_Store
+
+# Modularization archives (kept locally, not committed)
+web/Old_archive/
+scripts/_archive_oneoffs/
+web/Old/app.js-pre-modular-monolith.bak
+
+# Freebuff local state (never commit)
+.freebuff/

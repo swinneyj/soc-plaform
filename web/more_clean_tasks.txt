@@ -1,0 +1,23 @@
+The two optional polish ideas
+1. Move more pure helpers into utils/
+Some small functions that only do string/array math (no this, no API) still live inside the domain modules (e.g. key builders, a few formatters).
+
+Today: They work fine inside modules/analysis.js, etc.
+Polish: Move them into utils/ so modules stay “business only” and helpers are easy to unit-test alone.
+Why optional: No user-facing change; only organization.
+
+2. Switch modules to ES import
+Right now scripts load with classic <script src="..."> and attach to window (window.API, window.DatabaseMethods, …).
+
+Today: Works in any static server, no build step.
+Polish: Use import / export (and maybe Vite later) so dependencies are explicit and you avoid globals.
+Why optional: Requires changing how files load (and often a small build tool). Bigger change for little day-to-day gain while the app stays a simple static front end.
+
+
+Bottom line
+
+Must-have modularization: Done.
+Optional polish: Only if you want stricter purity or a modern module system later.
+You do not need either for the site to run or for easier troubleshooting.
+
+If you want to stop here, stop. If you want one of those polish items next, say which.

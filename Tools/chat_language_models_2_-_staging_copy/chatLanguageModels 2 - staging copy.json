@@ -1,0 +1,138 @@
+[
+	{
+		"name": "Capra",
+		"vendor": "customendpoint",
+		"apiKey": "${input:chat.lm.secret.4243e3c4}",
+		"apiType": "messages",
+		"models": [
+			{
+				"id": "claude-sonnet-5",
+				"name": "Claude Sonnet 5 - Capra",
+				"url": "https://api.capra.flankspeed.us.navy.mil/server/anthropic/v1/messages",
+				"apiType": "messages",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 200000,
+				"maxOutputTokens": 32768,
+				"thinking": true,
+				"supportsReasoningEffort": [
+					"low",
+					"medium",
+					"high",
+					"xhigh",
+					"max"
+				]
+			},
+			{
+				"id": "gpt-5.1-gov",
+				"name": "GPT 5.1 (Gov Reasoning) - Capra",
+				"url": "https://api.capra.flankspeed.us.navy.mil/server/openai/v1/responses",
+				"apiType": "responses",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 272000,
+				"maxOutputTokens": 128000,
+				"thinking": true,
+				"supportsReasoningEffort": [
+					"low",
+					"medium",
+					"high"
+				],
+				"reasoningEffortFormat": "responses"
+			},
+			{
+				"id": "gpt-5.4-gov",
+				"name": "GPT 5.4 (Gov Reasoning) - Capra",
+				"url": "https://api.capra.flankspeed.us.navy.mil/server/openai/v1/responses",
+				"apiType": "responses",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 272000,
+				"maxOutputTokens": 128000,
+				"thinking": true,
+				"supportsReasoningEffort": [
+					"low",
+					"medium",
+					"high"
+				],
+				"reasoningEffortFormat": "responses"
+			}
+		],
+		"settings": {
+			"claude-opus-4-8": {
+				"reasoningEffort": "high"
+			},
+			"gpt-5.4-gov": {
+				"reasoningEffort": "high"
+			}
+		},
+		"settings": {
+				"claude-opus-4-8": {
+					"reasoningEffort": "high"
+				}
+			},
+			"settings": {
+					"claude-sonnet-5": {
+						"reasoningEffort": "high"
+					}
+				}
+	},
+	{
+		"name": "GenAI",
+		"vendor": "customendpoint",
+		"apiKey": "${input:chat.lm.secret.64ac1d03}",
+		"apiType": "chat-completions",
+		"models": [
+			{
+				"id": "gemini-2.5-flash",
+				"name": "gemini-2.5-flash",
+				"url": "https://api.genai.mil/v1/chat/completions",
+				"apiType": "chat-completions",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 128000,
+				"maxOutputTokens": 32768
+			},
+			{
+				"id": "gemini-2.5-pro",
+				"name": "gemini-2.5-pro",
+				"url": "https://api.genai.mil/v1/chat/completions",
+				"apiType": "chat-completions",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 128000,
+				"maxOutputTokens": 32768
+			},
+			{
+				"id": "gemini-3.5-flash",
+				"name": "gemini-3.5-flash",
+				"url": "https://api.genai.mil/v1/chat/completions",
+				"apiType": "chat-completions",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 128000,
+				"maxOutputTokens": 32768
+			},
+			{
+				"id": "gemini-3.1-pro-preview",
+				"name": "gemini-3.1-pro-preview",
+				"url": "https://api.genai.mil/v1/chat/completions",
+				"apiType": "chat-completions",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 128000,
+				"maxOutputTokens": 32768
+			},
+			{
+				"id": "gemini-3-flash-preview",
+				"name": "gemini-3-flash-preview",
+				"url": "https://api.genai.mil/v1/chat/completions",
+				"apiType": "chat-completions",
+				"toolCalling": true,
+				"vision": true,
+				"maxInputTokens": 128000,
+				"maxOutputTokens": 32768
+			}
+		]
+	}
+]
