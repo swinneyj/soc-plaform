@@ -61,6 +61,16 @@ export DATABASE_URL='postgresql+psycopg://<db-user>:<db-password>@localhost:5432
 ./scripts/restart_api.sh
 ~~~
 
+## Running the tests
+
+The regression suite (46 tests, no database or Ollama required) guards the evidence ledger, closure gate, model resolution, and Phase 3+ query generation:
+
+~~~bash
+.venv/bin/python -m pytest
+~~~
+
+**Before adopting any external snapshot or history rewrite, run this first** — it fails in under a second if the regression fixes have been overwritten.
+
 ## Investigation workflow
 
 ~~~text
