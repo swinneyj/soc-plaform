@@ -440,5 +440,11 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 setInterval(() => this.loadRules(), 30000);
                 setInterval(() => this.loadTriageData(), 30000);
                 setInterval(() => this.loadRecentNotables(), 30000);
+                // Keep unfinished analysis work resumable across browsers.
+                setInterval(() => {
+                    if (this.analysisCaseId && !this.analysisRunning && this.persistAnalysisDraft) {
+                        this.persistAnalysisDraft();
+                    }
+                }, 15000);
             }
         }).mount('#app');

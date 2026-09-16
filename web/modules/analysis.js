@@ -1501,6 +1501,18 @@
             }
         },
 
+        async persistAnalysisDraft() {
+            if (!this.analysisCaseId) return;
+            try {
+                await axios.put(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/analysis-draft', {
+                    snapshot: this._analysisDraftSnapshot()
+                });
+                this._storeAnalysisStateSnapshot();
+            } catch (err) {
+                console.warn('Failed to autosave analysis draft:', err);
+            }
+        },
+
         loadAnalysisState(caseId) {
             if (!caseId) {
                 return;
