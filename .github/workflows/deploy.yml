@@ -30,4 +30,28 @@ jobs:
         run: vercel build --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy Project to Vercel
-        run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }} | tee deploy_url.txt
+
+      - name: Smoke test deployment
+        run: |
+          DEPLOY_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | tail -1)
+          if [ -z "$DEPLOY_URL" ]; then
+            echo "::error::Could not determine deployment URL from Vercel output"
+            exit 1
+          fi
+          echo "Smoke testing $DEPLOY_URL/api/health"
+          STATUS=000
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$DEPLOY_URL/api/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              break
+            fi
+            echo "Attempt $i: /api/health returned $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Smoke test failed: /api/health returned $STATUS after 10 attempts"
+            exit 1
+          fi
+          BODY=$(curl -s --max-time 15 "$DEPLOY_URL/api/health")
+          echo "Smoke test passed: /api/health returned 200 ($BODY)"
