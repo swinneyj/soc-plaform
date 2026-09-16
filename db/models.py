@@ -203,9 +203,6 @@ class ToolRun(Base):
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
     completed_at = Column(DateTime)
 
-# Create tables
-Base.metadata.create_all(bind=engine)
-
 def get_db():
     """Dependency for FastAPI to get DB session."""
     db = SessionLocal()

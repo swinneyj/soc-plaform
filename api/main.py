@@ -55,8 +55,14 @@ NL2 = chr(10) + chr(10)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Create any missing tables on application startup."""
-    from db.models import Base, engine
-    Base.metadata.create_all(bind=engine)
+    # Database connectivity is optional for the hosted shell and health
+    # routes.  In Vercel, importing the models must not make startup fail
+    # just because DATABASE_URL is absent or temporarily unreachable.
+    try:
+        from db.models import Base, engine
+        Base.metadata.create_all(bind=engine)
+    except Exception as exc:
+        app.state.database_startup_error = str(exc)
     yield
 
 app = FastAPI(
