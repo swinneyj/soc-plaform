@@ -4863,6 +4863,10 @@ def analyze_case(request: AnalyzeRequest):
             temperature=0.1,
             options={"num_predict": 320},
         )
+        # Report the tag actually used after auto-resolution so API consumers
+        # and the audit trail reflect reality, not the (possibly empty)
+        # requested value.
+        model = result.get("model") or model
 
         if not result["success"]:
             raise HTTPException(status_code=500, detail=result["error"])
