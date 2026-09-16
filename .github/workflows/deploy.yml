@@ -7,6 +7,8 @@ on:
     branches:
       - main
       - dev
+      - dev-dalton
+      - dev-justin
 
 jobs:
   Deploy-Production:
