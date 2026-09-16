@@ -20,13 +20,22 @@ def get_default_postgres_url() -> str:
 DATABASE_URL = os.environ.get("DATABASE_URL", get_default_postgres_url())
 
 
+def normalize_database_url(database_url: str) -> str:
+    """Use the psycopg driver for standard Neon/Postgres URLs."""
+    if database_url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + database_url[len("postgresql://"):]
+    if database_url.startswith("postgres://"):
+        return "postgresql+psycopg://" + database_url[len("postgres://"):]
+    return database_url
+
+
 def create_database_engine(database_url: str):
     """Create a SQLAlchemy engine for the configured runtime database.
 
     The supported runtime backend is PostgreSQL. Other drivers are not
     configured or tested here.
     """
-    return create_engine(database_url)
+    return create_engine(normalize_database_url(database_url), pool_pre_ping=True)
 
 
 engine = create_database_engine(DATABASE_URL)
