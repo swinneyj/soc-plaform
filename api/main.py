@@ -46,8 +46,14 @@ from services.investigation_state import (
 from services.analysis_service import (
     build_analysis_prompt_intro,
     format_evidence_ledger_entries,
+    normalize_phase2_text as _normalize_phase2_text,
     sanitize_analysis_text as _sanitize_analysis_text,
 )
+
+# _normalize_rule_match_text is the same normalization as
+# normalize_phase2_text (lowercase, non-alphanumerics -> spaces); the old
+# byte-identical twin here is retired in favor of the single service copy.
+_normalize_rule_match_text = _normalize_phase2_text
 
 NL = chr(10)
 NL2 = chr(10) + chr(10)
@@ -221,11 +227,6 @@ def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
             phase2_queries = []
 
     return phase2_queries
-
-
-def _normalize_phase2_text(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
-    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _looks_like_spl_query(query_text: str) -> bool:
@@ -402,76 +403,14 @@ def _ground_phase2_queries(
     )
 
 
-def _format_grounded_phase2_section(phase2_queries: List[Dict[str, Any]]) -> str:
-    lines = ["### Supportive Query Recommendations (Phase 2 SPL)"]
-    if not phase2_queries:
-        lines.append("Use the grounded Phase 2 cards below to run follow-up SPL after reviewing the current hypothesis.")
-        return "\n\n".join(lines)
-
-    lines.append("Use the grounded Phase 2 cards below for follow-up SPL. Recommended checks:")
-    for idx, query in enumerate(phase2_queries[:3], 1):
-        title = (query.get("title") or f"Phase 2 Query {idx}").strip()
-        description = (query.get("description") or "Run this query to collect follow-up evidence.").strip()
-        lines.append(f"{idx}. {title}: {description}")
-    return "\n\n".join(lines)
-
-
-def _format_state_label(value: str) -> str:
-    raw = (value or "").strip().lower()
-    if not raw:
-        return "Undetermined"
-    if raw == "false_positive":
-        return "False Positive"
-    return " ".join(part.capitalize() for part in raw.split("_"))
-
-
-def _format_state_verdict_section(investigation_state: Dict[str, Any]) -> str:
-    disposition = _format_state_label(investigation_state.get("provisional_disposition") or "undetermined")
-    status = _format_state_label(investigation_state.get("loop_status") or "collecting_evidence")
-    confidence = float(investigation_state.get("disposition_confidence") or 0.0)
-    blockers = investigation_state.get("closure_blockers") or []
-
-    lines = ["### Triage Verdict", ""]
-    lines.append(f"Current evidence-driven disposition: {disposition}.")
-    lines.append(f"Investigation loop status: {status} ({confidence * 100:.0f}% confidence).")
-    if blockers:
-        lines.append("")
-        lines.append("Closure remains blocked by:")
-        for item in blockers[:4]:
-            lines.append(f"- {item}")
-    return "\n".join(lines).strip()
-
-
-def _format_state_closure_section(investigation_state: Dict[str, Any]) -> str:
-    disposition = _format_state_label(investigation_state.get("provisional_disposition") or "undetermined")
-    status = (investigation_state.get("loop_status") or "collecting_evidence").strip().lower()
-    next_actions = investigation_state.get("recommended_next_actions") or []
-    blockers = investigation_state.get("closure_blockers") or []
-
-    lines = ["### Structured Closure Notes", ""]
-    if status != "ready_for_closure":
-        lines.append("Closure note generation is deferred until the investigation state is closure-ready.")
-        lines.append(f"Current disposition: {disposition}.")
-        if blockers:
-            lines.append("")
-            lines.append("Outstanding blockers:")
-            for item in blockers[:4]:
-                lines.append(f"- {item}")
-        if next_actions:
-            lines.append("")
-            lines.append("Next best actions before closure:")
-            for item in next_actions[:4]:
-                title = (item.get("title") or "Next action").strip()
-                description = (item.get("description") or "").strip()
-                if description:
-                    lines.append(f"- {title}: {description}")
-                else:
-                    lines.append(f"- {title}")
-        return "\n".join(lines).strip()
-
-    lines.append(f"Closure-ready disposition: {disposition}.")
-    lines.append("Use the saved evidence timeline and required closure fields to generate the final operator note.")
-    return "\n".join(lines).strip()
+# NOTE: the investigation-state formatting helpers (_format_state_label,
+# _format_state_verdict_section, _format_state_closure_section) and the
+# grounded Phase 2 section formatter live ONLY in the services layer now:
+#   - services/investigation_state.py (state label/verdict/closure sections)
+#   - services/analysis_service.py (format_grounded_phase2_section, used by
+#     sanitize_analysis_text)
+# Earlier copies here had drifted (wording, bold markers) and are deleted.
+# Do not reintroduce inline copies — import from the service or extend it.
 
 
 def _load_supportive_results_for_case(db, case_id: str) -> List[Dict[str, Any]]:
@@ -2689,11 +2628,6 @@ def derive_triage_confidence(disposition: str) -> float:
     if "false positive" in normalized or "true positive" in normalized or "benign" in normalized:
         return 0.8
     return 0.6
-
-
-def _normalize_rule_match_text(value: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", (value or "").strip().lower())
-    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _resolve_correlation_rule(db, correlation_model, anchor_text: str):
@@ -5041,8 +4975,10 @@ def analyze_case(request: AnalyzeRequest):
                 raw_obj["ai_verdict_source"] = "per_card"
                 row.raw_result = json.dumps(raw_obj, ensure_ascii=False)
                 verdict_rows_updated += 1
-        if verdict_rows_updated:
-            db.commit()
+        # Commit unconditionally: the AnalysisResult and InvestigationState
+        # writes above must persist even when no per-card verdicts were
+        # applied (e.g. empty ledger).
+        db.commit()
 
         return {
             "case_id": case_id,
