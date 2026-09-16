@@ -31,3 +31,11 @@ web/Old/app.js-pre-modular-monolith.bak
 
 # Freebuff local state (never commit)
 .freebuff/
+
+# Backup / scratch files (Justin's snapshot habit — never commit these)
+*.bak
+*.bak*
+* - Copy*
+* - copy*
+*.orig
+*~

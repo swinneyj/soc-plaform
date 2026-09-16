@@ -38,7 +38,7 @@ Reason:
 Before running any scripts, each analyst should have:
 
 - Docker Desktop installed and running (containers must be able to start).
-- Ollama installed and running (`ollama serve`), with at least `llama3.1:8b` pulled.
+- Ollama installed and running (`ollama serve`), with at least `llama3.1:latest` pulled. The platform auto-resolves the model at request time — set `OLLAMA_MODEL` in `.env` to pin a specific tag.
 - Reachable shared PostgreSQL dump at
 	`Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql`.
 - A local `.env` file in the repo root (copy `.env.example` to `.env`) with:
