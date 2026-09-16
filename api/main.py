@@ -4591,6 +4591,7 @@ def analyze_case(request: AnalyzeRequest):
             except Exception:
                 raw = r.raw_result
             supportive_results.append({
+                "id": r.id,
                 "query_title": r.query_title,
                 "source_system": r.source_system,
                 "raw_result": raw,
@@ -4861,7 +4862,9 @@ def analyze_case(request: AnalyzeRequest):
             composite_prompt,
             model=model,
             temperature=0.1,
-            options={"num_predict": 320},
+            # Section 4 (Per-Evidence Assessment) adds a per-entry line each;
+            # 320 tokens truncated it mid-sentence, losing later verdicts.
+            options={"num_predict": 640},
         )
         # Report the tag actually used after auto-resolution so API consumers
         # and the audit trail reflect reality, not the (possibly empty)
@@ -4998,7 +5001,42 @@ def analyze_case(request: AnalyzeRequest):
             confidence=float(investigation_state.get("disposition_confidence") or 0.0),
         ))
         _upsert_investigation_state(db, InvestigationState, investigation_state)
-        db.commit()
+
+        # Persist the model's per-card verdicts onto the evidence rows so the
+        # ledger itself carries the AI judgment (survives later reloads and is
+        # shown in the UI without re-running analysis). NOTE: db was closed()
+        # before the model call, so supportive_rows are detached ORM objects —
+        # mutating them would be silently lost. Re-query the rows fresh so
+        # they belong to the live session.
+        timeline_by_id = {
+            entry.get("id"): entry
+            for entry in (investigation_state.get("evidence_summary") or {}).get("timeline") or []
+            if entry.get("id") is not None
+        }
+        verdict_rows_updated = 0
+        if timeline_by_id:
+            live_rows = db.query(SupportiveQueryResult).filter(
+                SupportiveQueryResult.case_id == case_id
+            ).all()
+            for row in live_rows:
+                entry = timeline_by_id.get(row.id)
+                if not entry or entry.get("ai_verdict_source") != "per_card":
+                    continue
+                try:
+                    raw_obj = json.loads(row.raw_result) if row.raw_result else {}
+                except Exception:
+                    raw_obj = {"result_text": row.raw_result} if row.raw_result else {}
+                if not isinstance(raw_obj, dict):
+                    continue
+                if raw_obj.get("ai_finding_type") == entry.get("finding_type") and raw_obj.get("ai_verdict_rationale") == entry.get("ai_verdict_rationale"):
+                    continue
+                raw_obj["ai_finding_type"] = entry.get("finding_type")
+                raw_obj["ai_verdict_rationale"] = entry.get("ai_verdict_rationale") or ""
+                raw_obj["ai_verdict_source"] = "per_card"
+                row.raw_result = json.dumps(raw_obj, ensure_ascii=False)
+                verdict_rows_updated += 1
+        if verdict_rows_updated:
+            db.commit()
 
         return {
             "case_id": case_id,
@@ -5014,6 +5052,7 @@ def analyze_case(request: AnalyzeRequest):
             "detection_science_applied": bool(detection_rule),
             "baseline_notables_count": len(historical_baselines),
             "supportive_results_count": len(supportive_results),
+            "per_card_verdicts_applied": int((investigation_state.get("evidence_summary") or {}).get("per_card_verdicts_applied") or 0),
             "investigation_evidence_count": len(supportive_results),
             "supportive_playbook_available": bool(supportive_query_defs),
             "supportive_rule_id": supportive_rule_id or (case.rule_id or ""),

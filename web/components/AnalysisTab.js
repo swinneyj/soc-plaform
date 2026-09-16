@@ -985,6 +985,11 @@ window.AnalysisTab = {
                                             }"
                                         >{{ formatFindingLabel(item.finding_type) }}</span>
                                         <span
+                                            v-if="item.ai_verdict_source === 'per_card'"
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold bg-indigo-950 text-indigo-200 border-indigo-800"
+                                            :title="item.ai_verdict_rationale || 'Model-assessed verdict for this entry'"
+                                        >AI ASSESSMENT</span>
+                                        <span
                                             v-if="item.result_status"
                                             class="text-[10px] px-1.5 py-0.2 rounded border font-semibold"
                                             :class="{
@@ -1006,6 +1011,7 @@ window.AnalysisTab = {
                                 </button>
                             </div>
                             <p v-if="item.summary" class="text-xs text-gray-300 mt-2 font-mono whitespace-pre-wrap">{{ item.summary }}</p>
+                            <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 mt-1 italic">AI: {{ item.ai_verdict_rationale }}</p>
                         </div>
                     </div>
                 </div>
@@ -1185,7 +1191,8 @@ window.AnalysisTab = {
                         <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
                         <span class="text-[10px] uppercase text-gray-400">{{ item.result_status || 'success' }}</span>
                     </div>
-                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span></p>
+                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span> <span v-if="item.ai_verdict_source === 'per_card'" class="ml-1 text-[10px] px-1 rounded bg-indigo-950 text-indigo-200 border border-indigo-800" :title="item.ai_verdict_rationale || 'Model-assessed'">AI</span></p>
+                    <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 italic">AI: {{ item.ai_verdict_rationale }}</p>
                     <p class="text-xs text-gray-300 whitespace-pre-wrap">{{ item.summary || 'Saved result; no observation summary recorded.' }}</p>
                 </div>
             </div>

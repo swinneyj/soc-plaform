@@ -221,11 +221,18 @@ def build_analysis_prompt_intro(has_prior_analysis: bool) -> str:
     """
     intro = (
         "Analyze the case using the detection science, raw notable, and saved SPL evidence below.\n\n"
-        "Return exactly these three sections:\n"
+        "Return exactly these four sections:\n"
         "1. Initial Thoughts\n"
         "2. Key Questions\n"
-        "3. Investigative Analysis\n\n"
-        "Stay under 250 words. Use concise evidence-based language. List no more than three key questions. "
+        "3. Investigative Analysis\n"
+        "4. Per-Evidence Assessment\n\n"
+        "The Per-Evidence Assessment must contain exactly one line per numbered entry "
+        "in the INVESTIGATION EVIDENCE section below, quoting that entry's bracketed "
+        "index AND title, in the format:\n"
+        "[2] Change ticket check — direction=supports — one-sentence rationale grounded in that entry\n"
+        "Do not assess notable fields individually and do not renumber the entries. "
+        "Judge each entry only on its own observed result.\n\n"
+        "Stay under 250 words per section. Use concise evidence-based language. List no more than three key questions. "
         "Do not generate SPL, JSON, a verdict score, or closure notes. Distinguish observed facts from inference.\n"
     )
     if has_prior_analysis:

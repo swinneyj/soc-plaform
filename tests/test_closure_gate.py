@@ -34,9 +34,14 @@ def build_state(analysis_text, items, case_verdict="", previous_state=None,
     )
 
 
+_EVIDENCE_ID_COUNTER = {"next": 1}
+
+
 def evidence(title="Q", status="success", result_text="Substantive observed rows here"):
+    item_id = _EVIDENCE_ID_COUNTER["next"]
+    _EVIDENCE_ID_COUNTER["next"] += 1
     return {
-        "id": 1,
+        "id": item_id,
         "query_title": title,
         "source_system": "supportive_manual",
         "raw_result": {
@@ -215,6 +220,107 @@ class TestLoopStatusTransitions:
         state = build_state(MALICIOUS_ANALYSIS, items, previous_state=prior)
         assert q not in state["unresolved_questions"]
         assert q in state["evidence_summary"]["resolved_questions"]
+
+
+class TestPerCardVerdicts:
+    """Phase 2: the model's Per-Evidence Assessment judges each evidence
+    entry individually. Per-card verdicts override the global text heuristic;
+    the heuristic remains the fallback for entries the model didn't cover."""
+
+    def _assessed_analysis(self, lines):
+        assessment = "\n".join(lines)
+        return (
+            "### Initial Thoughts\nCertutil outbound transfer supports the hypothesis "
+            "of unauthorized tool staging.\n\n"
+            "### Investigative Analysis\nThe evidence indicates malicious activity "
+            "consistent with compromise.\n\n"
+            "### Per-Evidence Assessment\n" + assessment + "\n\n"
+            "### Triage Verdict\nMalicious — true positive.\n"
+        )
+
+    def test_parser_extracts_direction_and_rationale(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=supports — Outbound certutil transfer to a raw IP indicates malicious staging.",
+            "[2] direction=refutes — Rows show only approved change tickets.",
+            "[3] direction=neutral — No signal either way in these rows.",
+        ])
+        parsed = isvc._parse_per_evidence_assessments(analysis)
+        assert parsed[1] == {
+            "direction": "supports",
+            "rationale": "Outbound certutil transfer to a raw IP indicates malicious staging.",
+        }
+        assert parsed[2]["direction"] == "refutes"
+        assert parsed[3]["direction"] == "neutral"
+
+    def test_parser_ignores_malformed_lines(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=banana — nonsense",
+            "not a verdict line at all",
+            "[2] direction=refutes — clean line",
+        ])
+        parsed = isvc._parse_per_evidence_assessments(analysis)
+        assert set(parsed) == {2}
+        assert parsed[2]["direction"] == "refutes"
+
+    def test_per_card_verdict_overrides_global_heuristic(self):
+        # Global heuristic reads "malicious activity" → supports. The per-card
+        # verdict says entry 1 refutes. Scoring must use the per-card value.
+        analysis = self._assessed_analysis([
+            "[1] direction=refutes — Rows show only approved change activity.",
+        ])
+        items = [evidence("Q1")]
+        state = build_state(analysis, items)
+        timeline = state["evidence_summary"]["timeline"]
+        assert len(timeline) == 1
+        assert timeline[0]["finding_type"] == "refutes"
+        assert timeline[0]["ai_verdict_source"] == "per_card"
+        assert timeline[0]["ai_verdict_rationale"].startswith("Rows show")
+
+    def test_fallback_to_text_heuristic_without_per_card_section(self):
+        state = build_state(MALICIOUS_ANALYSIS, [evidence("Q1"), evidence("Q2")])
+        timeline = state["evidence_summary"]["timeline"]
+        assert all(entry["ai_verdict_source"] == "analysis_text" for entry in timeline)
+        assert all(entry["ai_verdict_rationale"] == "" for entry in timeline)
+        assert state["evidence_summary"]["per_card_verdicts_applied"] == 0
+
+    def test_mixed_coverage_applies_only_assessed_entries(self):
+        # Model assessed entry 1 only; entry 2 falls back to the heuristic.
+        analysis = self._assessed_analysis([
+            "[1] direction=neutral — Inconclusive rows.",
+        ])
+        items = [evidence("Q1"), evidence("Q2")]
+        state = build_state(analysis, items)
+        timeline = state["evidence_summary"]["timeline"]
+        id1, id2 = items[0]["id"], items[1]["id"]
+        sources = {entry["id"]: entry["ai_verdict_source"] for entry in timeline}
+        findings = {entry["id"]: entry["finding_type"] for entry in timeline}
+        assert sources[id1] == "per_card"
+        assert findings[id1] == "neutral"
+        assert sources[id2] == "analysis_text"
+        assert findings[id2] == "supports"  # heuristic: malicious-activity language
+        assert state["evidence_summary"]["per_card_verdicts_applied"] == 1
+
+    def test_conflicting_per_card_verdicts_block_closure(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=supports — Outbound transfer to raw IP.",
+            "[2] direction=refutes — Approved change tickets only.",
+        ])
+        items = [evidence("Q1"), evidence("Q2")]
+        state = build_state(analysis, items)
+        assert state["provisional_disposition"] == "suspicious"
+        assert any("Conflicting evidence" in b for b in state["closure_blockers"])
+        assert state["loop_status"] != "ready_for_closure"
+
+    def test_per_card_refutes_flips_no_results_to_refuting_evidence(self):
+        # A no_results entry is only substantive when the verdict direction
+        # is refutes; a per-card refutes verdict must trigger that path.
+        analysis = self._assessed_analysis([
+            "[1] direction=refutes — No matching rows means the activity never ran.",
+        ])
+        items = [evidence("Q1", status="no_results", result_text="")]
+        state = build_state(analysis, items)
+        assert state["evidence_summary"]["by_finding"]["refutes"] == 1
+        assert state["evidence_summary"]["substantive_items"] == 1
 
 
 if __name__ == "__main__":

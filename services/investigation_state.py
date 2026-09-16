@@ -41,6 +41,11 @@ CANONICAL_HEADINGS = {
     "findings": "investigative analysis",
     "evidence evaluation": "investigative analysis",
     "investigation": "investigative analysis",
+    # 4. Per-Evidence Assessment (one verdict line per numbered ledger entry)
+    "per-evidence assessment": "per-evidence assessment",
+    "per evidence assessment": "per-evidence assessment",
+    "evidence assessment": "per-evidence assessment",
+    "per-card assessment": "per-evidence assessment",
     # 4. Supportive Query Recommendations (Phase 2 SPL)
     "supportive query recommendations (phase 2 spl)": "supportive query recommendations (phase 2 spl)",
     "supportive query recommendations": "supportive query recommendations (phase 2 spl)",
@@ -97,10 +102,12 @@ def _normalize_heading_candidate(line: str) -> str:
     cleaned = (line or "").strip()
     # Remove markdown header prefixes like ### or ##
     cleaned = re.sub(r"^#+\s*", "", cleaned)
+    # Remove markdown bold/italic formatting FIRST, so numbered bold
+    # headings like "**4. Per-Evidence Assessment**" lose their asterisks
+    # before the numbering pass runs.
+    cleaned = re.sub(r"^[\*_]+|[\*_]+$", "", cleaned)
     # Remove numbering like 1., 2), [1], etc.
     cleaned = re.sub(r"^(?:\[\d+\]|\d+[\.\)]|\([0-9]+\))\s*", "", cleaned)
-    # Remove markdown bold/italic formatting
-    cleaned = re.sub(r"^[\*_]+|[\*_]+$", "", cleaned)
     # Strip trailing punctuation, colons, hyphens
     cleaned = cleaned.strip(" 	:.-_")
     return cleaned.lower()
@@ -252,6 +259,99 @@ def _infer_direction_from_analysis(analysis_text: str) -> str:
     return "neutral"
 
 
+def _parse_per_evidence_assessments(analysis_text: str, expected_titles: Optional[List[str]] = None) -> Dict[int, Dict[str, str]]:
+    """Parse the Per-Evidence Assessment section into per-card verdicts.
+
+    The prompt asks the model to quote each entry's bracketed index AND
+    title. Small local models often renumber their own list, so lines are
+    mapped to entries by title match first (index used only as a fallback
+    when the title is absent). Returns a mapping of entry index (1-based,
+    ledger order) -> {direction, rationale}. Unmatched lines are dropped;
+    unmatched entries fall back to the global text heuristic.
+    """
+    sections = _extract_analysis_sections(analysis_text or "")
+    section_text = sections.get("per-evidence assessment", "")
+    if not section_text:
+        return {}
+
+    titles = [str(t or "").strip() for t in (expected_titles or [])]
+    norm_titles = {
+        re.sub(r"\s+", " ", t.lower()).strip(): idx
+        for idx, t in enumerate(titles, 1)
+        if t
+    }
+
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().lower()
+
+    assessments: Dict[int, Dict[str, str]] = {}
+    # Two acceptable line shapes:
+    #   A) "[2] direction=supports — rationale..."  (index + keyword + text)
+    #   B) "[2] Title — direction=supports — rationale..." or any line whose
+    #      direction keyword appears after a title/lead-in.
+    # Tolerant of "2.", "2)", "Entry 2:", "=", ":", dashes/em-dashes.
+    line_pattern = re.compile(
+        r"^(?:entry\s*)?\[?(\d{1,3})\]?[).:]?\s*"
+        r"(?:direction\s*[=:]\s*(supports?|refutes?|neutral)\b[\s\-—:]*(.*)"
+        r"|(.*))$",
+        re.IGNORECASE | re.DOTALL,
+    )
+    direction_word_pattern = re.compile(
+        r"direction\s*[=:]\s*(supports?|refutes?|neutral)\b",
+        re.IGNORECASE,
+    )
+
+    def _canonical(word: str) -> str:
+        word = word.strip().lower()
+        if word.startswith("support"):
+            return "supports"
+        if word.startswith("refut"):
+            return "refutes"
+        return "neutral"
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = line_pattern.match(stripped)
+        if not match:
+            continue
+
+        stated_index = int(match.group(1))
+        rationale = ""
+        if match.group(2):
+            direction = _canonical(match.group(2))
+            rationale = (match.group(3) or "").strip()
+        else:
+            # Direction keyword appears after a lead-in (e.g. the title);
+            # rationale is whatever follows the keyword.
+            rest = match.group(4) or ""
+            dir_match = direction_word_pattern.search(rest)
+            if not dir_match:
+                continue
+            direction = _canonical(dir_match.group(1))
+            rationale = rest[dir_match.end():].lstrip(" —-:").strip()
+
+        # Resolve the target entry: title match wins; stated index only as
+        # a fallback when no title in the line matches any ledger entry.
+        idx = None
+        for t_norm, t_idx in norm_titles.items():
+            if t_norm and t_norm in _norm(stripped):
+                idx = t_idx
+                break
+        if idx is None:
+            if titles:
+                if 1 <= stated_index <= len(titles):
+                    idx = stated_index
+            elif 1 <= stated_index <= 99:
+                # No titles available to validate against: trust the index.
+                idx = stated_index
+
+        if idx is not None:
+            assessments[idx] = {"direction": direction, "rationale": rationale[:400]}
+    return assessments
+
+
 def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
     """Extract a clean observation summary from raw result payload.
 
@@ -361,6 +461,18 @@ def _build_investigation_state(
     current_hypothesis = initial_thoughts or (case.analysis_summary or "").strip()
     provisional_disposition = _infer_disposition_label(verdict_text, case.verdict)
 
+    # Per-card AI verdicts: the model judges each numbered evidence entry in
+    # its Per-Evidence Assessment section. Lines are mapped to entries by
+    # title (models renumber freely); entries without a per-card verdict
+    # fall back to the global text-derived direction.
+    per_card_assessments = _parse_per_evidence_assessments(
+        analysis_text,
+        expected_titles=[
+            (item.get("query_title") if isinstance(item, dict) else "") or ""
+            for item in supportive_results
+        ],
+    )
+
     evidence_by_finding = {"supports": 0, "refutes": 0, "neutral": 0}
     evidence_by_status = {
         "success": 0,
@@ -384,6 +496,7 @@ def _build_investigation_state(
     evidence_by_source: Dict[str, int] = {}
     evidence_timeline = []
     titles_with_saved_results = set()
+    per_card_verdicts_applied = 0
 
     substantive_evidence_count = 0
     pending_evidence_count = 0
@@ -410,8 +523,29 @@ def _build_investigation_state(
         evidence_by_status[result_status] = evidence_by_status.get(result_status, 0) + 1
 
         # Legacy analyst-entered finding_type is kept in raw_result for audit
-        # only; scoring always uses the AI-derived direction.
-        finding_type = ai_evidence_direction
+        # only; scoring always uses an AI-derived direction: the per-card
+        # verdict from the model's Per-Evidence Assessment when available,
+        # otherwise the global analysis-text heuristic.
+        item_index = None
+        for pos, entry in enumerate(supportive_results, 1):
+            if entry is item:
+                item_index = pos
+                break
+        if item_index is None:
+            item_id = item.get("id")
+            if item_id is not None:
+                for pos, entry in enumerate(supportive_results, 1):
+                    if entry.get("id") == item_id:
+                        item_index = pos
+                        break
+        per_card = per_card_assessments.get(item_index) if item_index else None
+        if per_card:
+            finding_type = per_card["direction"]
+            per_card_verdicts_applied += 1
+            per_card_rationale = per_card["rationale"]
+        else:
+            finding_type = ai_evidence_direction
+            per_card_rationale = ""
 
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:
@@ -476,6 +610,8 @@ def _build_investigation_state(
                 "source_system": source_system,
                 "result_status": result_status,
                 "finding_type": finding_type,
+                "ai_verdict_source": "per_card" if per_card else "analysis_text",
+                "ai_verdict_rationale": per_card_rationale,
                 "summary": observation_summary or "Pending analyst observation",
                 "has_substantive_observation": has_substantive,
                 "created_at": item.get("created_at"),
@@ -653,6 +789,7 @@ def _build_investigation_state(
         "by_finding": evidence_by_finding,
         "by_status": evidence_by_status,
         "by_source_system": evidence_by_source,
+        "per_card_verdicts_applied": per_card_verdicts_applied,
         "resolved_questions": sorted(explicitly_resolved_questions),
         "recent_titles": evidence_timeline[-5:],
         "timeline": evidence_timeline,
