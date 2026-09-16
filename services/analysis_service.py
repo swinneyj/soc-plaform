@@ -208,145 +208,61 @@ def sanitize_analysis_text(response_text: str, phase2_queries: List[Dict[str, An
     return cleaned.strip()
 
 
-def assemble_analysis_prompt(
-    case,
-    detection_rule,
-    source_notable_payload: Optional[Dict[str, Any]],
-    historical_baselines: List[Dict[str, Any]],
-    supportive_results: List[Dict[str, Any]],
-    supportive_query_defs: List[Any],
-    previous_state_payload: Dict[str, Any],
-    prior_analysis: str,
-    analysis_stage: str,
-    catalog_text: str,
-    prior_closures: List[Dict[str, Any]],
-    context: str,
-) -> str:
-    """Assemble the complete, detection-science grounded analysis prompt."""
-    prompt_intro = (
-        f"Analyze the security incident using the provided Detection Science, raw notable data, supportive query findings, and supportive SPL/KQL templates.{NL2}"
-        f"Your response MUST be strictly structured into the following 6 sections in order:{NL}"
-        f"1. Initial Thoughts{NL}"
-        f"2. Key Questions{NL}"
-        f"3. Investigative Analysis{NL}"
-        f"4. Supportive Query Recommendations (Phase 2 SPL){NL}"
-        f"5. Triage Verdict{NL}"
-        f"6. Structured Closure Notes{NL2}"
-        f"EVIDENCE EVALUATION RULES:{NL}"
-        f"- Explicitly distinguish the status of every investigative check:{NL}"
-        f"  * 'Success': The query returned substantive security logs.{NL}"
-        f"  * 'No results': 0 events returned. If looking for lateral movement or persistence, this is valid negative/benign evidence refuting an active breach.{NL}"
-        f"  * 'Data source unavailable': The target index or telemetry is missing/uncollected. This is an active investigation blocker; do NOT assume safety.{NL}"
-        f"  * 'Query failed': Syntax error or timeout. Treat as an unresolved blocker.{NL}"
-        f"  * 'Benign result': Confirmed legitimate administrative activity, strongly supporting a Benign Positive or False Positive disposition.{NL}"
-        f"- Do NOT propose invented queries, indexes, or field names outside the provided supportive templates and catalog.{NL}"
-        f"- In Section 4, recommend 1 to 3 checks matched by exact title from the supportive queries below.{NL2}"
-    )
 
-    if prior_analysis:
-        prompt_intro += (
-            f"A PREVIOUS ANALYSIS is included below. Treat it as a working hypothesis to test against newest evidence.{NL}"
-            f"You MUST explicitly address each previous open question: evaluate whether current evidence resolves it, refutes it, or if it remains unanswered.{NL}"
-            f"Tighten the likely disposition and propose only confirmatory or falsifying follow-up queries.{NL2}"
+
+def build_analysis_prompt_intro(has_prior_analysis: bool) -> str:
+    """Single source of truth for the live analysis prompt instructions.
+
+    Used by api/main.py when assembling the /db/analyze prompt. This replaces
+    the drifted 6-section copy that used to live here — the live prompt asks
+    for exactly three sections and forbids model-generated SPL/JSON, because
+    verdicts, grounded Phase 2 cards, and closure gating are computed by
+    deterministic platform logic after the model call.
+    """
+    intro = (
+        "Analyze the case using the detection science, raw notable, and saved SPL evidence below.\n\n"
+        "Return exactly these three sections:\n"
+        "1. Initial Thoughts\n"
+        "2. Key Questions\n"
+        "3. Investigative Analysis\n\n"
+        "Stay under 250 words. Use concise evidence-based language. List no more than three key questions. "
+        "Do not generate SPL, JSON, a verdict score, or closure notes. Distinguish observed facts from inference.\n"
+    )
+    if has_prior_analysis:
+        intro += (
+            "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
+            "Reassess it against the newest evidence and state what remains unresolved.\n"
         )
+    return intro
 
-    prompt_intro += (
-        f"Additionally, you MUST append a machine-readable JSON block with your recommended queries at the very end:{NL}"
-        f"PHASE2_QUERIES_JSON_START{NL}"
-        f'[ {{"title": "<exact template title>", "spl": "<query text>", "description": "<rationale>"}} ]{NL}'
-        f"PHASE2_QUERIES_JSON_END{NL}"
-    )
 
-    prompt_parts = [
-        "You are an expert SOC Analyst triaging a security incident with rigorous evidence-based reasoning.",
-        prompt_intro,
-    ]
+def format_evidence_ledger_entries(supportive_results: List[Dict[str, Any]]) -> List[str]:
+    """Format saved evidence rows for the INVESTIGATION EVIDENCE prompt block.
 
-    if detection_rule:
-        prompt_parts.append(f"{NL2}=== DETECTION SCIENCE & CORRELATION LOGIC ===")
-        prompt_parts.append(f"Rule ID: {detection_rule.rule_id}")
-        prompt_parts.append(f"Rule Name: {detection_rule.rule_name}")
-        prompt_parts.append(f"Description / Threat Hypothesis: {detection_rule.description}")
-        prompt_parts.append(f"Category: {detection_rule.category} | Severity: {detection_rule.severity}")
-        if detection_rule.drilldown_fields:
-            prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
-        if detection_rule.required_closure_fields:
-            prompt_parts.append(f"Mandatory Closure Fields: {detection_rule.required_closure_fields}")
-
-    prompt_parts.append(f"{NL2}=== CURRENT CASE ===")
-    prompt_parts.append(f"Case ID: {case.case_id} | Rule: {case.rule_name} | Initial Verdict: {case.verdict}")
-    prompt_parts.append(f"Summary: {case.analysis_summary}")
-
-    if previous_state_payload:
-        prompt_parts.append(f"{NL2}=== INVESTIGATION LOOP STATE ===")
-        prompt_parts.append(f"Loop Status: {previous_state_payload.get('loop_status')}")
-        prompt_parts.append(f"Iteration Count: {previous_state_payload.get('iteration_count')}")
-        prompt_parts.append(f"Current Working Hypothesis: {previous_state_payload.get('current_hypothesis')}")
-        prompt_parts.append(f"Provisional Disposition: {previous_state_payload.get('provisional_disposition')}")
-        prompt_parts.append(f"Confidence: {previous_state_payload.get('disposition_confidence')}")
-        unresolved = previous_state_payload.get("unresolved_questions") or []
-        if unresolved:
-            prompt_parts.append("Prior Unresolved Questions to Address:")
-            for item in unresolved[:5]:
-                prompt_parts.append(f"- {item}")
-        blockers = previous_state_payload.get("closure_blockers") or []
-        if blockers:
-            prompt_parts.append("Current Closure Blockers:")
-            for item in blockers[:5]:
-                prompt_parts.append(f"- {item}")
-
-    if prior_analysis:
-        prompt_parts.append(f"{NL2}=== PREVIOUS ANALYSIS HYPOTHESIS ===")
-        prompt_parts.append(f"Analysis Stage: {analysis_stage}")
-        prompt_parts.append(prior_analysis)
-
-    if source_notable_payload:
-        prompt_parts.append(f"{NL2}=== SOURCE NOTABLE EVIDENCE ===")
-        if source_notable_payload.get("fields"):
-            for k, v in list(source_notable_payload["fields"].items())[:25]:
-                prompt_parts.append(f"- {k}: {v}")
-        if source_notable_payload.get("sanitized_text"):
-            prompt_parts.append(f"{NL}Raw Sanitized Notable Logs:{NL}{source_notable_payload['sanitized_text']}")
-
-    if historical_baselines:
-        prompt_parts.append(f"{NL2}=== COMPARABLE HISTORICAL CASES ===")
-        for idx, b in enumerate(historical_baselines[:3], 1):
-            prompt_parts.append(f"[Baseline #{idx}] Fields: {json.dumps(b.get('fields', {}))} | History: {b.get('history')}")
-
-    if supportive_results:
-        prompt_parts.append(f"{NL2}=== INVESTIGATION EVIDENCE LEDGER ===")
-        for idx, res in enumerate(supportive_results, 1):
-            raw = res.get("raw_result") or {}
-            if not isinstance(raw, dict):
-                raw = {"result_text": str(raw)}
-            status = raw.get("result_status") or "success"
-            direction = raw.get("finding_type") or "neutral"
-            obs = raw.get("analyst_summary") or raw.get("result_text") or "Recorded"
-            prompt_parts.append(
-                f"[{idx}] {res.get('query_title')} ({res.get('source_system', 'splunk')}){NL}"
-                f"    Status: {status.upper()} | Direction: {direction.upper()}{NL}"
-                f"    Observation: {obs[:240]}"
-            )
-
-    if supportive_query_defs:
-        prompt_parts.append(f"{NL2}=== AUTHORIZED SUPPORTIVE QUERY TEMPLATES ===")
-        prompt_parts.append("In Section 4, you MUST recommend follow-up checks by title from this list:")
-        for idx, q in enumerate(supportive_query_defs, 1):
-            desc = getattr(q, "description", "") or ""
-            spl = getattr(q, "spl_query", "") or ""
-            prompt_parts.append(f"[{idx}] {q.title}: {desc}{NL}Query: {spl}")
-
-    if catalog_text:
-        prompt_parts.append(f"{NL2}{catalog_text}")
-
-    if prior_closures:
-        prompt_parts.append(f"{NL2}=== PRIOR CLOSURE EXAMPLES ===")
-        for idx, note in enumerate(prior_closures[:3], 1):
-            prompt_parts.append(
-                f"[Closure #{idx}] Disposition: {note.get('disposition')} | Summary: {note.get('generated_note', '')[:200]}"
-            )
-
-    if context:
-        prompt_parts.append(f"{NL2}=== ANALYST CONTEXT & NOTES ==={NL}{context}")
-
-    return NL.join(prompt_parts)
+    Each entry includes its collection status (success / no_results /
+    query_failed / data_source_unavailable / not_run) so the model can weigh
+    execution facts, not just analyst prose. Evidence direction is
+    intentionally NOT included: the platform derives it from the model's own
+    analysis text, so feeding it an analyst-entered direction would defeat
+    the AI-derived scoring model.
+    """
+    blocks: List[str] = []
+    for idx, res in enumerate(supportive_results, 1):
+        raw_result = res.get("raw_result")
+        if isinstance(raw_result, dict):
+            query_text = (raw_result.get("query_text") or "").strip()
+            result_text = (raw_result.get("result_text") or "").strip()
+            analyst_summary = (raw_result.get("analyst_summary") or "").strip()
+            result_status = (raw_result.get("result_status") or "success").strip()
+            block = [f"[{idx}] {res['query_title']} ({res['source_system']})"]
+            block.append(f"Collection Status: {result_status}")
+            if query_text:
+                block.append(f"Query Used:\n{query_text[:1200]}")
+            if result_text:
+                block.append(f"Observed Result:\n{result_text[:1800]}")
+            if analyst_summary:
+                block.append(f"Analyst Takeaway:\n{analyst_summary[:800]}")
+            blocks.append("\n".join(block))
+        else:
+            blocks.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(raw_result)}")
+    return blocks

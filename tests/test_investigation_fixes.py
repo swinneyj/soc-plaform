@@ -337,5 +337,44 @@ class TestModelResolution:
         assert client.resolve_model("").startswith("llama3.1")
 
 
+# ---------------------------------------------------------------------------
+# 5. Shared analysis prompt builders (single source of truth)
+# ---------------------------------------------------------------------------
+
+class TestSharedPromptBuilders:
+    def test_intro_requests_three_sections_and_bans_spl(self):
+        from services.analysis_service import build_analysis_prompt_intro
+        intro = build_analysis_prompt_intro(has_prior_analysis=False)
+        for token in ["1. Initial Thoughts", "2. Key Questions",
+                      "3. Investigative Analysis", "Do not generate SPL"]:
+            assert token in intro
+        assert "PHASE2_QUERIES_JSON_START" not in intro
+
+    def test_intro_prior_analysis_clause(self):
+        from services.analysis_service import build_analysis_prompt_intro
+        without = build_analysis_prompt_intro(False)
+        with_prior = build_analysis_prompt_intro(True)
+        assert "PREVIOUS ANALYSIS" not in without
+        assert "PREVIOUS ANALYSIS" in with_prior
+
+    def test_evidence_entries_include_status_exclude_direction(self):
+        """The ledger block carries collection status but never an analyst
+        direction — direction is AI-derived downstream."""
+        from services.analysis_service import format_evidence_ledger_entries
+        items = [evidence_item("Q1", status="no_results", result_text="")]
+        blocks = format_evidence_ledger_entries(items)
+        assert len(blocks) == 1
+        assert "Collection Status: no_results" in blocks[0]
+        assert "Direction" not in blocks[0]
+
+    def test_evidence_entries_handle_non_dict_raw(self):
+        from services.analysis_service import format_evidence_ledger_entries
+        items = [{"query_title": "Q1", "source_system": "splunk",
+                  "raw_result": "legacy string blob"}]
+        blocks = format_evidence_ledger_entries(items)
+        assert len(blocks) == 1
+        assert "legacy string blob" in blocks[0]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

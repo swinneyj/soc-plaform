@@ -43,7 +43,11 @@ from services.investigation_state import (
     _upsert_investigation_state,
     _apply_investigation_state_to_analysis_text,
 )
-from services.analysis_service import sanitize_analysis_text as _sanitize_analysis_text
+from services.analysis_service import (
+    build_analysis_prompt_intro,
+    format_evidence_ledger_entries,
+    sanitize_analysis_text as _sanitize_analysis_text,
+)
 
 NL = chr(10)
 NL2 = chr(10) + chr(10)
@@ -4767,20 +4771,7 @@ def analyze_case(request: AnalyzeRequest):
         # 3. Ask Ollama only for the reasoning that benefits from an LLM.
         # Verdict/confidence, grounded Phase 2 cards, and closure gating are
         # calculated by deterministic platform logic after this call.
-        prompt_intro = (
-            "Analyze the case using the detection science, raw notable, and saved SPL evidence below.\n\n"
-            "Return exactly these three sections:\n"
-            "1. Initial Thoughts\n"
-            "2. Key Questions\n"
-            "3. Investigative Analysis\n\n"
-            "Stay under 250 words. Use concise evidence-based language. List no more than three key questions. "
-            "Do not generate SPL, JSON, a verdict score, or closure notes. Distinguish observed facts from inference.\n"
-        )
-        if prior_analysis:
-            prompt_intro += (
-                "A PREVIOUS ANALYSIS is included below. Treat it as the current working hypothesis, not as ground truth. "
-                "Reassess it against the newest evidence and state what remains unresolved.\n"
-            )
+        prompt_intro = build_analysis_prompt_intro(has_prior_analysis=bool(prior_analysis))
 
         prompt_parts = [
             "You are an expert SOC Analyst triaging a security incident.",
@@ -4860,24 +4851,7 @@ def analyze_case(request: AnalyzeRequest):
 
         if prompt_supportive_results:
             prompt_parts.append("\n\n=== INVESTIGATION EVIDENCE ===")
-            for idx, res in enumerate(prompt_supportive_results, 1):
-                raw_result = res.get("raw_result")
-                if isinstance(raw_result, dict):
-                    query_text = (raw_result.get("query_text") or "").strip()
-                    result_text = (raw_result.get("result_text") or "").strip()
-                    analyst_summary = (raw_result.get("analyst_summary") or "").strip()
-                    result_status = (raw_result.get("result_status") or "success").strip()
-                    block = [f"[{idx}] {res['query_title']} ({res['source_system']})"]
-                    block.append(f"Collection Status: {result_status}")
-                    if query_text:
-                        block.append(f"Query Used:\n{query_text[:1200]}")
-                    if result_text:
-                        block.append(f"Observed Result:\n{result_text[:1800]}")
-                    if analyst_summary:
-                        block.append(f"Analyst Takeaway:\n{analyst_summary[:800]}")
-                    prompt_parts.append("\n".join(block))
-                else:
-                    prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(raw_result)}")
+            prompt_parts.extend(format_evidence_ledger_entries(prompt_supportive_results))
 
         if context:
             prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context[:1000]}")
