@@ -690,7 +690,16 @@ def _upsert_investigation_state(db, model_cls, state_payload: Dict[str, Any]):
     record.unresolved_questions = json.dumps(state_payload.get("unresolved_questions") or [], ensure_ascii=False)
     record.closure_blockers = json.dumps(state_payload.get("closure_blockers") or [], ensure_ascii=False)
     record.recommended_next_actions = json.dumps(state_payload.get("recommended_next_actions") or [], ensure_ascii=False)
-    record.evidence_summary = json.dumps(state_payload.get("evidence_summary") or {}, ensure_ascii=False)
+    evidence_summary = dict(state_payload.get("evidence_summary") or {})
+    # Preserve an unfinished UI draft while rebuilding the durable evidence
+    # summary after a new result is saved.
+    try:
+        previous_summary = _parse_json_object(record.evidence_summary)
+        if previous_summary.get("_draft_state") is not None and "_draft_state" not in evidence_summary:
+            evidence_summary["_draft_state"] = previous_summary["_draft_state"]
+    except Exception:
+        pass
+    record.evidence_summary = json.dumps(evidence_summary, ensure_ascii=False)
     record.last_analysis_stage = state_payload.get("last_analysis_stage") or "initial"
     return record
 

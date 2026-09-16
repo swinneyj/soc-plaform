@@ -464,6 +464,9 @@
             try {
                 const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
                 this.investigationState = res.data || this._emptyInvestigationState(caseId);
+                if (res.data && res.data.draft_state) {
+                    this._applyAnalysisDraft(res.data.draft_state);
+                }
             } catch (err) {
                 console.error('Failed to load investigation state:', err);
                 this.investigationState = this._emptyInvestigationState(caseId);
@@ -1454,15 +1457,44 @@
             window.localStorage.setItem(key, JSON.stringify(snapshot));
         },
 
-        saveAnalysisState() {
+        _analysisDraftSnapshot() {
+            return {
+                analysisContext: this.analysisContext,
+                analysisModel: this.analysisModel,
+                phase2Model: this.phase2Model,
+                followUpPhase: this.followUpPhase,
+                supportiveManualResults: this.supportiveManualResults,
+                supportiveFindingTypes: this.supportiveFindingTypes,
+                enrichmentManualResults: this.enrichmentManualResults,
+                enrichmentFindingTypes: this.enrichmentFindingTypes,
+                phase2EditedQueries: this.phase2EditedQueries,
+                phase2ManualResults: this.phase2ManualResults,
+                phase2FindingTypes: this.phase2FindingTypes,
+                phase2ResolutionTypes: this.phase2ResolutionTypes,
+                phase2ResolutionQuestions: this.phase2ResolutionQuestions,
+                analysisResult: this.analysisResult,
+                phase2Result: this.phase2Result,
+            };
+        },
+
+        _applyAnalysisDraft(snapshot) {
+            if (!snapshot) return;
+            Object.keys(this._analysisDraftSnapshot()).forEach(key => {
+                if (snapshot[key] !== undefined && snapshot[key] !== null) this[key] = snapshot[key];
+            });
+        },
+
+        async saveAnalysisState() {
             if (!this.analysisCaseId) {
                 alert('Select a case before saving analysis state');
                 return;
             }
 
             try {
+                const snapshot = this._analysisDraftSnapshot();
+                await axios.put(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/analysis-draft', { snapshot });
                 this._storeAnalysisStateSnapshot();
-                alert('Analysis state saved for case ' + this.analysisCaseId);
+                alert('Analysis state saved to the shared database for case ' + this.analysisCaseId);
             } catch (err) {
                 console.error('Failed to save analysis state:', err);
                 alert('Failed to save analysis state: ' + (err.message || err));
