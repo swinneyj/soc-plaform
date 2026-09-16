@@ -42,20 +42,30 @@ def get_platform_root():
     # ``Tools/<tool>`` instead of the platform root on Windows and POSIX hosts.
     return str(pathlib.Path(__file__).resolve().parents[2])
 
-def get_reports_dir():
-    """Returns and ensures the existence of the platform Reports directory."""
-    path = os.path.join(get_platform_root(), "Reports")
-    os.makedirs(path, exist_ok=True)
+def _ensure_dir(path):
+    """Create a directory if possible, tolerating read-only filesystems.
+
+    Serverless platforms (e.g. Vercel) mount the deployment as read-only,
+    so os.makedirs raises OSError even for directories included in the
+    bundle. Callers only need a usable path: if creation fails but the
+    directory already exists, return it; if it genuinely cannot exist,
+    return it anyway so listing endpoints can degrade to an empty result
+    instead of a 500. Writes will fail naturally at write time.
+    """
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError:
+        pass
     return path
+
+def get_reports_dir():
+    """Returns the platform Reports directory, creating it when possible."""
+    return _ensure_dir(os.path.join(get_platform_root(), "Reports"))
 
 def get_archive_dir():
-    """Returns and ensures the existence of the platform Archive directory."""
-    path = os.path.join(get_platform_root(), "Archive")
-    os.makedirs(path, exist_ok=True)
-    return path
+    """Returns the platform Archive directory, creating it when possible."""
+    return _ensure_dir(os.path.join(get_platform_root(), "Archive"))
 
 def get_logs_dir():
-    """Returns and ensures the existence of the platform Logs directory."""
-    path = os.path.join(get_platform_root(), "Logs")
-    os.makedirs(path, exist_ok=True)
-    return path
+    """Returns the platform Logs directory, creating it when possible."""
+    return _ensure_dir(os.path.join(get_platform_root(), "Logs"))
