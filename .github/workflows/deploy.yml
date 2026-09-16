@@ -1,0 +1,77 @@
+name: Vercel Production Deployment
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+on:
+  push:
+    branches:
+      - main
+      - dev
+      - dev-dalton
+      - dev-justin
+
+jobs:
+  Deploy-Production:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Project Code
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel Environment Information
+        run: vercel pull --yes --environment=production --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Project Artifacts
+        run: vercel build --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy Project to Vercel
+        run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }} | tee deploy_url.txt
+
+      - name: Smoke test deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          # 1) Prefer a stable public domain if vercel printed one (e.g. an
+          #    "Aliased" line). Ephemeral per-deployment URLs are excluded.
+          TARGET_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | grep -v 'swinneyjs-projects' | tail -1)
+
+          # 2) Otherwise query the Vercel API for the project's public
+          #    production domains. Unique deployment URLs are SSO-protected
+          #    (Deployment Protection), so they cannot be health-checked here.
+          if [ -z "$TARGET_URL" ]; then
+            echo "No stable domain in deploy output; querying Vercel API for project domains..."
+            TARGET_URL=$(curl -s --max-time 20 \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_ORG_ID" \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); ds=[x['name'] for x in d.get('domains',[]) if x.get('verified')]; print('https://'+ds[0] if ds else '')" 2>/dev/null || true)
+          fi
+
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::Could not determine a public deployment URL (deploy output had no stable domain and the Vercel API returned no verified project domains)"
+            cat deploy_url.txt || true
+            exit 1
+          fi
+
+          echo "Smoke testing $TARGET_URL/api/health"
+          STATUS=000
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$TARGET_URL/api/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              break
+            fi
+            echo "Attempt $i: /api/health returned $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Smoke test failed: /api/health returned $STATUS after 10 attempts"
+            exit 1
+          fi
+          BODY=$(curl -s --max-time 15 "$TARGET_URL/api/health")
+          echo "Smoke test passed: /api/health returned 200 ($BODY)"
