@@ -33,18 +33,29 @@ jobs:
         run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }} | tee deploy_url.txt
 
       - name: Smoke test deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          # The "Aliased" line in vercel deploy output is the public production
-          # domain. Unique deployment URLs are SSO-protected when Deployment
-          # Protection is enabled, so we must test the alias, not the deployment.
-          TARGET_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | sort -u | sed -n 's/.*\(soc-plaform-[a-z-]*\.vercel\.app\).*/\1/p' | grep -v 'swinneyjs-projects' | tail -1)
+          # 1) Prefer a stable public domain if vercel printed one (e.g. an
+          #    "Aliased" line). Ephemeral per-deployment URLs are excluded.
+          TARGET_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | grep -v 'swinneyjs-projects' | tail -1)
+
+          # 2) Otherwise query the Vercel API for the project's public
+          #    production domains. Unique deployment URLs are SSO-protected
+          #    (Deployment Protection), so they cannot be health-checked here.
           if [ -z "$TARGET_URL" ]; then
-            # Fallback: any URL that is not the ephemeral per-deployment URL.
-            TARGET_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | grep -v 'swinneyjs-projects' | tail -1)
+            echo "No stable domain in deploy output; querying Vercel API for project domains..."
+            TARGET_URL=$(curl -s --max-time 20 \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_ORG_ID" \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); ds=[x['name'] for x in d.get('domains',[]) if x.get('verified')]; print('https://'+ds[0] if ds else '')" 2>/dev/null || true)
           fi
+
           if [ -z "$TARGET_URL" ]; then
-            echo "::error::Could not determine a public deployment URL from Vercel output"
-            grep -E "Aliased|Production" deploy_url.txt || true
+            echo "::error::Could not determine a public deployment URL (deploy output had no stable domain and the Vercel API returned no verified project domains)"
+            cat deploy_url.txt || true
             exit 1
           fi
 
