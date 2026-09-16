@@ -611,6 +611,26 @@ def _purge_case_related_records(
     return stats
 
 
+def _evidence_entry_is_valid(entry) -> bool:
+    """Decide whether an evidence payload entry is worth persisting.
+
+    Entries with an explicit failure/no-result status are always valid even
+    with an empty result body: a legitimate 0-event query or an unavailable
+    data source is real execution evidence, not a dropped save. Only a blank
+    'success' entry (nothing observed, nothing queried) is skipped.
+    """
+    if not (getattr(entry, "query_title", "") or "").strip():
+        return False
+    if (getattr(entry, "result_text", "") or "").strip():
+        return True
+    if (getattr(entry, "analyst_summary", "") or "").strip():
+        return True
+    if (getattr(entry, "query_text", "") or "").strip():
+        return True
+    status = (getattr(entry, "result_status", None) or "success").strip().lower()
+    return status not in ("", "success")
+
+
 def _build_question_driven_followup_queries(
     supportive_query_defs,
     previous_state_payload: Dict[str, Any],
@@ -3284,25 +3304,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
         source_system = (payload.source_system or "phase2_manual").strip() or "phase2_manual"
-        # An entry is valid when it has a title and any identifying content.
-        # Entries with an explicit failure/no-result status are always valid
-        # even with an empty result body: a legitimate 0-event query or an
-        # unavailable data source is real execution evidence, not a dropped
-        # save. Only a blank 'success' entry (nothing observed, nothing
-        # queried) is skipped.
-        def _entry_is_valid(e) -> bool:
-            if not (getattr(e, "query_title", "") or "").strip():
-                return False
-            if (getattr(e, "result_text", "") or "").strip():
-                return True
-            if (getattr(e, "analyst_summary", "") or "").strip():
-                return True
-            if (getattr(e, "query_text", "") or "").strip():
-                return True
-            status = (getattr(e, "result_status", None) or "success").strip().lower()
-            return status not in ("", "success")
-
-        valid_entries = [e for e in (payload.entries or []) if _entry_is_valid(e)]
+        valid_entries = [e for e in (payload.entries or []) if _evidence_entry_is_valid(e)]
         if payload.replace_existing and valid_entries:
             db.query(SupportiveQueryResult).filter(
                 SupportiveQueryResult.case_id == case_id,
