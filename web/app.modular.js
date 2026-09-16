@@ -148,7 +148,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     selectedToolForExecution: null,
 
                     // Code Review
-                    codeReviewForm: { codeSnippet: '', language: 'python', model: 'llama3.1:8b', uploadedFile: null, instructions: '' },
+                    codeReviewForm: { codeSnippet: '', language: 'python', model: '', uploadedFile: null, instructions: '' },
                     codeReviewResult: null,
                     codeReviewRunning: false,
                     codeReviewsList: [],
@@ -247,7 +247,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                         return models;
                     }
                     // Fallback list when Ollama health is not available yet.
-                    return ['llama3.1:8b', 'llama2', 'mistral'];
+                    return ['llama3.1:latest', 'llama3.1:8b', 'llama2', 'mistral'];
                 },
                 filteredCodeReviewSections() {
                     const sections = this.codeReviewSections || [];

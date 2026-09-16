@@ -50,7 +50,7 @@ class ToolInfo(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     case_id: str
-    model: str = "llama3.1:8b"
+    model: str = ""  # empty = auto-resolve an installed model at call time
     context: str = ""
     prior_analysis: str = ""
     analysis_stage: str = "initial"

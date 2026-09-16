@@ -183,7 +183,7 @@ class CodeReview(Base):
     code_snippet = Column(Text)
     language = Column(String, default="python")
     review_result = Column(Text)
-    model_name = Column(String, default="llama3.1:8b")
+    model_name = Column(String, default="llama3.1:latest")
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
 
 

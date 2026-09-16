@@ -299,5 +299,43 @@ class TestPhaseFollowUpGeneration:
         assert cards == []
 
 
+# ---------------------------------------------------------------------------
+# 4. Ollama model tag resolution
+# ---------------------------------------------------------------------------
+
+class TestModelResolution:
+    def _client(self, installed):
+        import services.ollama_service as osvc
+        client = osvc.OllamaClient.__new__(osvc.OllamaClient)
+        client.list_models = lambda: list(installed)
+        return client
+
+    def test_requested_tag_installed_returned_verbatim(self):
+        client = self._client(["llama3.1:latest", "qwen:7b"])
+        assert client.resolve_model("qwen:7b") == "qwen:7b"
+
+    def test_uninstalled_requested_tag_falls_back_to_preference(self):
+        """The first-run bug: request 'llama3.1:8b' when only :latest exists."""
+        client = self._client(["llama3.1:latest"])
+        assert client.resolve_model("llama3.1:8b") == "llama3.1:latest"
+
+    def test_legacy_default_maps_to_installed_latest(self):
+        client = self._client(["llama3.1:latest"])
+        assert client.resolve_model("llama3.1:8b") == "llama3.1:latest"
+
+    def test_no_request_uses_preference_order(self):
+        client = self._client(["mistral", "llama3.1:latest"])
+        assert client.resolve_model("") == "llama3.1:latest"
+
+    def test_any_installed_model_used_when_no_preference_matches(self):
+        client = self._client(["qwen2.5:14b"])
+        assert client.resolve_model("") == "qwen2.5:14b"
+
+    def test_nothing_installed_returns_requested_or_default(self):
+        client = self._client([])
+        assert client.resolve_model("llama3.1:8b") == "llama3.1:8b"
+        assert client.resolve_model("").startswith("llama3.1")
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

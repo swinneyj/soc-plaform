@@ -130,7 +130,7 @@ class ToolInfo(BaseModel):
 
 class AnalyzeRequest(BaseModel):
     case_id: str
-    model: str = "llama3.1:8b"
+    model: str = ""  # empty = auto-resolve an installed model at call time
     context: str = ""
     prior_analysis: str = ""
     analysis_stage: str = "initial"
@@ -5853,7 +5853,7 @@ def fix_code(payload: dict):
         
         code_snippet = payload.get('code_snippet', '').strip()
         language = payload.get('language', 'python').strip()
-        model = payload.get('model', 'llama3.1:8b').strip()
+        model = payload.get('model', '').strip()  # empty = auto-resolve
         
         if not code_snippet:
             raise HTTPException(status_code=400, detail="code_snippet is required")
@@ -5895,7 +5895,7 @@ def code_review(payload: dict):
     # {
     #     "code_snippet": "<code to review>",
     #     "language": "python" (optional, defaults to python),
-    #     "model": "llama3.1:8b" (optional, defaults to llama3.1:8b),
+    #     "model": "<tag>" (optional; empty/auto-resolves an installed model)
     #     "instructions": "Optional focus or question for the review"
     # }
     try:
@@ -5905,7 +5905,7 @@ def code_review(payload: dict):
         
         code_snippet = payload.get('code_snippet', '').strip()
         language = payload.get('language', 'python').strip()
-        model = payload.get('model', 'llama3.1:8b').strip()
+        model = payload.get('model', '').strip()  # empty = auto-resolve
         instructions = payload.get('instructions', '').strip()
         
         if not code_snippet:
@@ -6006,7 +6006,7 @@ def code_review_sections(payload: dict):
 async def code_review_zip(
     file: UploadFile = File(...),
     language: str = Query("python"),
-    model: str = Query("llama3.1:8b"),
+    model: str = Query(""),  # empty = auto-resolve installed model
     instructions: str = Query("", description="Optional focus or question for the review"),
 ):
     # Review a zipped project using the local Ollama model.

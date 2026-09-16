@@ -10,7 +10,16 @@ from typing import Optional, Dict, Any
 import os
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:8b')
+DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:latest')
+
+# Preference order used when auto-resolving an installed model tag. The
+# historical default 'llama3.1:8b' is kept in the list so explicit legacy
+# requests still resolve to something runnable instead of erroring.
+MODEL_PREFERENCES = [
+    'llama3.1:latest',
+    'llama3.1:8b',
+    'llama3.1',
+]
 
 # Allow the request timeout to be tuned via environment while failing clearly
 # instead of leaving an analyst workflow spinning indefinitely.
@@ -61,6 +70,53 @@ class OllamaClient:
         except:
             pass
         return []
+
+    def resolve_model(self, requested: Optional[str] = None) -> str:
+        """Pick a runnable model tag.
+
+        Resolution order:
+        1. An explicitly requested tag that is actually installed.
+        2. OLLAMA_MODEL env var (if installed).
+        3. Best match from MODEL_PREFERENCES among installed models.
+        4. Any installed model (first listed).
+        5. The requested tag as-is / DEFAULT_MODEL — so the error message
+           from Ollama still names a concrete tag when nothing is installed.
+
+        This prevents the classic first-run failure where the API defaults
+        to 'llama3.1:8b' but the machine only has 'llama3.1:latest' pulled.
+        """
+        requested = (requested or '').strip()
+        installed = []
+        try:
+            installed = self.list_models() or []
+        except Exception:
+            installed = []
+        installed_lower = {m.lower(): m for m in installed}
+
+        if requested:
+            if requested.lower() in installed_lower:
+                return installed_lower[requested.lower()]
+
+        env_model = (os.environ.get('OLLAMA_MODEL') or '').strip()
+        if env_model and env_model.lower() in installed_lower:
+            return installed_lower[env_model.lower()]
+
+        for pref in MODEL_PREFERENCES:
+            pref_l = pref.lower()
+            if pref_l in installed_lower:
+                return installed_lower[pref_l]
+            # Family match: 'llama3.1' matches 'llama3.1:latest' etc. —
+            # handled above by exact key; here also allow any tag that
+            # starts with the family name.
+            if any(m.lower().startswith(pref_l + ':') or m.lower() == pref_l for m in installed):
+                for m in installed:
+                    if m.lower().startswith(pref_l + ':') or m.lower() == pref_l:
+                        return m
+
+        if installed:
+            return installed[0]
+
+        return requested or DEFAULT_MODEL
     
     def generate(
         self,
@@ -80,7 +136,7 @@ class OllamaClient:
         Returns:
             Dict with response, model, and metadata
         """
-        model = model or self.model
+        model = self.resolve_model(model or self.model)
         
         if not self.available:
             return {

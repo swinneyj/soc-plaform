@@ -382,11 +382,15 @@
                 const res = await axios.get(this.apiUrl + '/db/ollama/health');
                 this.ollamaHealth = res.data;
                 if (this.ollamaHealth.models.length > 0) {
-                    const preferred = 'llama3.1:8b';
+                    const preferred = 'llama3.1:latest';
+                    const fallbacks = ['llama3.1:latest', 'llama3.1:8b', 'llama3.1'];
                     const models = this.ollamaHealth.models;
                     let selected = models[0];
-                    if (models.includes(preferred)) {
-                        selected = preferred;
+                    for (const candidate of fallbacks) {
+                        if (models.includes(candidate)) {
+                            selected = candidate;
+                            break;
+                        }
                     }
                     this.analysisModel = selected;
                     if (!this.phase2Model || !models.includes(this.phase2Model)) {

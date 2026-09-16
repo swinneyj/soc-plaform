@@ -104,7 +104,7 @@ def format_iteration_audit_trail(analysis_results: List[Any]) -> str:
     ]
 
     for idx, res in enumerate(reversed(analysis_results), 1):
-        model = getattr(res, "model_name", "llama3.1:8b") or "llama3.1:8b"
+        model = getattr(res, "model_name", "") or ""
         created_at = getattr(res, "created_at", None)
         created_str = created_at.strftime("%Y-%m-%d %H:%M:%S") if hasattr(created_at, "strftime") else "—"
         conf = float(getattr(res, "confidence", 0.0) or 0.0)
