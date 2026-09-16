@@ -31,3 +31,23 @@ jobs:
 
       - name: Deploy Project to Vercel
         run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Smoke test production alias
+        run: |
+          TARGET_URL="https://soc-plaform-livid.vercel.app"
+          echo "Smoke testing $TARGET_URL/api/health"
+          STATUS=000
+          for i in $(seq 1 10); do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 15 "$TARGET_URL/api/health" || true)
+            if [ "$STATUS" = "200" ]; then
+              break
+            fi
+            echo "Attempt $i: /api/health returned $STATUS, retrying in 10s..."
+            sleep 10
+          done
+          if [ "$STATUS" != "200" ]; then
+            echo "::error::Smoke test failed: /api/health returned $STATUS after 10 attempts"
+            exit 1
+          fi
+          BODY=$(curl -s --max-time 15 "$TARGET_URL/api/health")
+          echo "Smoke test passed: /api/health returned 200 ($BODY)"
