@@ -11,6 +11,7 @@ import os
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:latest')
+OLLAMA_API_KEY = os.environ.get('OLLAMA_API_KEY', '').strip()
 
 # Preference order used when auto-resolving an installed model tag. The
 # historical default 'llama3.1:8b' is kept in the list so explicit legacy
@@ -43,8 +44,13 @@ class OllamaClient:
     def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None):
         self.base_url = (base_url or os.environ.get('OLLAMA_URL') or OLLAMA_BASE_URL).rstrip('/')
         self.model = model or os.environ.get('OLLAMA_MODEL') or DEFAULT_MODEL
+        self.api_key = os.environ.get('OLLAMA_API_KEY', OLLAMA_API_KEY).strip()
         self.available = False
         self.refresh()
+
+    def _headers(self) -> Dict[str, str]:
+        """Return authentication headers when using a hosted Ollama API."""
+        return {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
 
     def refresh(self) -> bool:
         """Refresh connectivity instead of retaining a stale startup result."""
@@ -54,7 +60,7 @@ class OllamaClient:
     def _check_connection(self) -> bool:
         """Check if Ollama is running and accessible."""
         try:
-            r = requests.get(f"{self.base_url}/api/tags", timeout=2)
+            r = requests.get(f"{self.base_url}/api/tags", headers=self._headers(), timeout=2)
             return r.status_code == 200
         except:
             return False
@@ -63,7 +69,7 @@ class OllamaClient:
         """List available models on Ollama."""
         self.refresh()
         try:
-            r = requests.get(f"{self.base_url}/api/tags", timeout=5)
+            r = requests.get(f"{self.base_url}/api/tags", headers=self._headers(), timeout=5)
             if r.status_code == 200:
                 models = r.json().get('models', [])
                 return [m['name'] for m in models]
@@ -166,6 +172,7 @@ class OllamaClient:
             r = requests.post(
                 f"{self.base_url}/api/generate",
                 json=payload,
+                headers=self._headers(),
                 timeout=OLLAMA_REQUEST_TIMEOUT
             )
             
