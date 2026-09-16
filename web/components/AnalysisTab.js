@@ -32,6 +32,7 @@ window.AnalysisTab = {
         'phase2ManualResults',
         'phase2FindingTypes',
         'phase2ResolutionTypes',
+        'phase2CoverageNotes',
         'phase2ResolutionQuestions',
         'phase2EditedQueries',
         'supportivePlaybookAvailable',
@@ -93,6 +94,7 @@ window.AnalysisTab = {
         'load-placeholder-alias-suggestions',
         'toggle-alias-field-candidate',
         'save-supportive-evidence',
+        'save-supportive-evidence-and-continue',
         'copy-supportive-spl',
         'copy-enrichment-spl',
         'copy-phase2-spl',
@@ -104,6 +106,7 @@ window.AnalysisTab = {
         'update-enrichment-finding',
         'update-phase2-manual',
         'update-phase2-finding',
+        'update-phase2-coverage',
         'delete-evidence',
         'delete-evidence-batch',
         'delete-all-evidence'
@@ -855,9 +858,18 @@ window.AnalysisTab = {
                 <button
                     type="button"
                     class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow"
+                    :disabled="supportiveSaveBusy"
+                    @click="$emit('save-supportive-evidence-and-continue')"
+                >
+                    {{ supportiveSaveBusy ? 'Saving...' : 'Save & Continue to Initial Assessment' }}
+                </button>
+                <button
+                    type="button"
+                    class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 border border-gray-600 rounded text-xs font-semibold text-gray-200"
+                    :disabled="supportiveSaveBusy"
                     @click="$emit('save-supportive-evidence')"
                 >
-                    Save Evidence
+                    Save Only
                 </button>
                 <button
                     type="button"
@@ -902,30 +914,18 @@ window.AnalysisTab = {
                     ></textarea>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Result Status</label>
-                        <select
-                            v-model="evidenceResultStatuses[getSupportiveKey(q)]"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option value="success">Success (Events Found)</option>
-                            <option value="no_results">No Results (0 Events)</option>
-                            <option value="data_source_unavailable">Data Source Unavailable</option>
-                            <option value="query_failed">Query Failed</option>
-                            <option value="benign_result">Benign / Authorized Activity</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Finding Direction</label>
-                        <select
-                            :value="supportiveFindingTypes[getSupportiveKey(q)] || ''"
-                            @change="emitSupportiveFinding(q, $event.target.value)"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option v-for="option in evidenceFindingOptions" :key="'supportive:' + option" :value="option">{{ option }}</option>
-                        </select>
-                    </div>
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
+                    <select
+                        v-model="evidenceResultStatuses[getSupportiveKey(q)]"
+                        class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                    >
+                        <option value="success">Success (Events Found)</option>
+                        <option value="no_results">No Results (0 Events)</option>
+                        <option value="data_source_unavailable">Data Source Unavailable</option>
+                        <option value="query_failed">Query Failed</option>
+                    </select>
+                    <p class="text-[10px] text-gray-500 mt-1">Record only what happened when you ran the query — whether the evidence supports or refutes the hypothesis is decided by the AI assessment, not here.</p>
                 </div>
             </div>
         </div>
@@ -1146,50 +1146,27 @@ window.AnalysisTab = {
                     ></textarea>
                 </div>
 
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Result Status</label>
-                        <select
-                            v-model="evidenceResultStatuses[getPhase2Key(q)]"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option value="success">Success (Events Found)</option>
-                            <option value="no_results">No Results (0 Events)</option>
-                            <option value="data_source_unavailable">Data Source Unavailable</option>
-                            <option value="query_failed">Query Failed</option>
-                            <option value="benign_result">Benign / Authorized Activity</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Finding Direction</label>
-                        <select
-                            :value="phase2FindingTypes[getPhase2Key(q)] || ''"
-                            @change="emitPhase2Finding(q, $event.target.value)"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option v-for="option in evidenceFindingOptions" :key="'phase2:' + option" :value="option">{{ option }}</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Inquiry Resolution</label>
-                        <select
-                            :value="phase2ResolutionTypes[getPhase2Key(q)] || 'not_resolved'"
-                            @change="$emit('update-phase2-resolution', {key: getPhase2Key(q), value: $event.target.value})"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option value="not_resolved">Does Not Resolve</option>
-                            <option value="partially_resolved">Partially Resolves</option>
-                            <option value="resolved">Resolves Inquiry</option>
-                        </select>
-                        <select
-                            v-if="phase2ResolutionTypes[getPhase2Key(q)] !== 'not_resolved' && investigationState?.unresolved_questions && investigationState.unresolved_questions.length"
-                            :value="phase2ResolutionQuestions[getPhase2Key(q)] || (q.target_questions && q.target_questions[0]) || investigationState.unresolved_questions[0]"
-                            @change="$emit('update-phase2-resolution-question', {key: getPhase2Key(q), value: $event.target.value})"
-                            class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
-                        >
-                            <option v-for="question in investigationState.unresolved_questions" :key="'resolution-question:' + question" :value="question">Resolve: {{ question }}</option>
-                        </select>
-                    </div>
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
+                    <select
+                        v-model="evidenceResultStatuses[getPhase2Key(q)]"
+                        class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
+                    >
+                        <option value="success">Success (Events Found)</option>
+                        <option value="no_results">No Results (0 Events)</option>
+                        <option value="data_source_unavailable">Data Source Unavailable</option>
+                        <option value="query_failed">Query Failed</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Coverage Note (optional)</label>
+                    <input
+                        type="text"
+                        :value="phase2CoverageNotes[getPhase2Key(q)] || ''"
+                        @input="$emit('update-phase2-coverage', {key: getPhase2Key(q), value: $event.target.value})"
+                        class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
+                        placeholder="What time window / scope did this query cover? (The AI decides whether it resolves the inquiry.)"
+                    />
                 </div>
             </div>
 

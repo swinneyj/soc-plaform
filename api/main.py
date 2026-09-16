@@ -611,6 +611,101 @@ def _purge_case_related_records(
     return stats
 
 
+def _build_question_driven_followup_queries(
+    supportive_query_defs,
+    previous_state_payload: Dict[str, Any],
+    prompt_supportive_results: List[Dict[str, Any]],
+    phase_number: int,
+    max_queries: int = 3,
+) -> List[Dict[str, Any]]:
+    """Build follow-up cards for later phases that target the CURRENT open
+    questions, even after every playbook template has already been run.
+
+    Strategy, in order:
+    1. Unused playbook templates (grounded, never run) — preferred.
+    2. Fresh variants of already-run templates: clone the closest-matching
+       template for each open question, annotate it with the phase number and
+       the question it targets, and mark it as a variant so the analyst
+       understands it is a re-scoped run (e.g. narrower time window or added
+       context), not a replay.
+
+    This guarantees the UI never shows an empty/stale query list while open
+    questions remain — the Phase 3+ dead end.
+    """
+    if phase_number <= 2:
+        return []
+
+    already_run_titles = _already_run_supportive_titles(prompt_supportive_results)
+
+    # 1) Prefer genuinely unused playbook templates.
+    unused = _build_supportive_phase2_fallback(
+        supportive_query_defs,
+        "",
+        "",
+        already_run_titles=already_run_titles,
+        max_queries=max_queries,
+    )
+    unused = [q for q in unused if _normalize_phase2_text(q.get("title")) not in already_run_titles]
+    if unused:
+        return unused
+
+    # 2) All templates used — build question-targeted variants of the
+    #    closest-matching already-run templates.
+    questions = [str(q).strip() for q in (previous_state_payload.get("unresolved_questions") or []) if str(q).strip()]
+    blockers = [
+        str(b).strip()
+        for b in (previous_state_payload.get("closure_blockers") or [])
+        if str(b).strip() and "remain unresolved" not in str(b).lower()
+    ]
+    targets = questions + blockers
+    if not targets:
+        return []
+
+    defs = []
+    for query_def in supportive_query_defs or []:
+        if isinstance(query_def, dict):
+            title = (query_def.get("title") or "").strip()
+            spl_query = (query_def.get("spl_query") or query_def.get("spl") or "").strip()
+            description = (query_def.get("description") or "").strip()
+        else:
+            title = (getattr(query_def, "title", "") or "").strip()
+            spl_query = (getattr(query_def, "spl_query", "") or "").strip()
+            description = (getattr(query_def, "description", "")).strip() if getattr(query_def, "description", None) else ""
+        if title and spl_query:
+            defs.append({"title": title, "spl": spl_query, "description": description})
+    if not defs:
+        return []
+
+    variants = []
+    for target in targets[:max_queries]:
+        target_words = set(re.findall(r"[a-z0-9]+", target.lower()))
+        best = None
+        best_overlap = -1
+        for candidate in defs:
+            candidate_text = " ".join([
+                candidate["title"], candidate["description"], candidate["spl"],
+            ]).lower()
+            overlap = len(target_words & set(re.findall(r"[a-z0-9]+", candidate_text)))
+            if overlap > best_overlap:
+                best_overlap = overlap
+                best = candidate
+        if not best:
+            continue
+        short_question = target if len(target) <= 90 else target[:87].rstrip() + "..."
+        variants.append({
+            "title": f"Phase {phase_number}: {best['title']} (targeted re-check)",
+            "spl": best["spl"],
+            "description": (
+                f"Re-scoped Phase {phase_number} run of '{best['title']}' to resolve the remaining open question: "
+                f"\"{short_question}\". Refine the time window or add context before running; the AI will "
+                "assess the new result against this question."
+            ),
+            "target_questions": [target],
+            "is_variant": True,
+        })
+    return variants
+
+
 def _build_supportive_phase2_fallback(
     supportive_query_defs,
     prior_analysis: str,
@@ -3189,18 +3284,25 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
 
         source_system = (payload.source_system or "phase2_manual").strip() or "phase2_manual"
-        valid_entries = [
-            e for e in (payload.entries or [])
-            if (getattr(e, "query_title", "") or "").strip() and (
-                (getattr(e, "result_text", "") or "").strip() or
-                (getattr(e, "analyst_summary", "") or "").strip() or
-                (getattr(e, "query_text", "") or "").strip()
-            ) and not (
-                (getattr(e, "result_status", None) or "success").strip().lower() == "success"
-                and not (getattr(e, "result_text", "") or "").strip()
-                and not (getattr(e, "analyst_summary", "") or "").strip()
-            )
-        ]
+        # An entry is valid when it has a title and any identifying content.
+        # Entries with an explicit failure/no-result status are always valid
+        # even with an empty result body: a legitimate 0-event query or an
+        # unavailable data source is real execution evidence, not a dropped
+        # save. Only a blank 'success' entry (nothing observed, nothing
+        # queried) is skipped.
+        def _entry_is_valid(e) -> bool:
+            if not (getattr(e, "query_title", "") or "").strip():
+                return False
+            if (getattr(e, "result_text", "") or "").strip():
+                return True
+            if (getattr(e, "analyst_summary", "") or "").strip():
+                return True
+            if (getattr(e, "query_text", "") or "").strip():
+                return True
+            status = (getattr(e, "result_status", None) or "success").strip().lower()
+            return status not in ("", "success")
+
+        valid_entries = [e for e in (payload.entries or []) if _entry_is_valid(e)]
         if payload.replace_existing and valid_entries:
             db.query(SupportiveQueryResult).filter(
                 SupportiveQueryResult.case_id == case_id,
@@ -3220,10 +3322,14 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
             analyst_summary = (entry.analyst_summary or "").strip()
             query_text = (entry.query_text or "").strip()
             result_status = (getattr(entry, "result_status", None) or "success").strip().lower()
+            # Legacy 'benign_result' was an analyst verdict; persist it as a
+            # plain success so direction is derived from AI analysis instead.
+            if result_status == "benign_result":
+                result_status = "success"
 
-            if not title or not (result_text or analyst_summary or query_text):
+            if not title:
                 continue
-            if result_status == "success" and not result_text and not analyst_summary:
+            if not (result_text or analyst_summary or query_text) and result_status in ("", "success"):
                 continue
 
             raw_result = json.dumps(
@@ -4758,10 +4864,9 @@ def analyze_case(request: AnalyzeRequest):
                     query_text = (raw_result.get("query_text") or "").strip()
                     result_text = (raw_result.get("result_text") or "").strip()
                     analyst_summary = (raw_result.get("analyst_summary") or "").strip()
-                    finding_type = (raw_result.get("finding_type") or "neutral").strip()
+                    result_status = (raw_result.get("result_status") or "success").strip()
                     block = [f"[{idx}] {res['query_title']} ({res['source_system']})"]
-                    if finding_type:
-                        block.append(f"Evidence Direction: {finding_type}")
+                    block.append(f"Collection Status: {result_status}")
                     if query_text:
                         block.append(f"Query Used:\n{query_text[:1200]}")
                     if result_text:
@@ -4854,12 +4959,28 @@ def analyze_case(request: AnalyzeRequest):
         # still contributes reasoning, but the visible cards come only from
         # unused, grounded playbook definitions for this phase.
         if requested_phase_number > 2:
-            phase2_queries = _build_supportive_phase2_fallback(
-                phase_query_defs,
-                f"{prior_analysis} {blocker_context}",
-                response_text,
-                already_run_titles=already_run_titles,
+            # Pass the FULL template pool: when every template has already
+            # been run, the phase-filtered list is empty and the variant
+            # builder would have nothing to derive question-targeted re-check
+            # cards from.
+            phase2_queries = _build_question_driven_followup_queries(
+                supportive_query_defs,
+                previous_state_payload or {},
+                prompt_supportive_results,
+                requested_phase_number,
             )
+            if not phase2_queries:
+                phase2_queries = _build_supportive_phase2_fallback(
+                    phase_query_defs,
+                    f"{prior_analysis} {blocker_context}",
+                    response_text,
+                    already_run_titles=already_run_titles,
+                )
+            # NOTE: do NOT run _ground_phase2_queries here. The fallback and
+            # question-driven variant builders already emit only playbook-
+            # grounded payloads, and grounding would discard the phase-
+            # annotated variant titles (they intentionally differ from the
+            # template titles), reintroducing the empty Phase 3+ card list.
         elif not phase2_queries:
             phase2_queries = _build_supportive_phase2_fallback(
                 phase_query_defs,
@@ -4868,11 +4989,12 @@ def analyze_case(request: AnalyzeRequest):
                 already_run_titles=already_run_titles,
             )
 
-        phase2_queries = _ground_phase2_queries(
-            phase2_queries,
-            phase_query_defs,
-            already_run_titles=already_run_titles,
-        )
+        if requested_phase_number <= 2:
+            phase2_queries = _ground_phase2_queries(
+                phase2_queries,
+                phase_query_defs,
+                already_run_titles=already_run_titles,
+            )
         phase2_queries = _annotate_phase2_targets(phase2_queries, previous_state_payload)
         display_analysis = _sanitize_analysis_text(response_text, phase2_queries)
         investigation_state = _build_investigation_state(

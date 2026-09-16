@@ -1191,16 +1191,15 @@
                     continue;
                 }
 
+                const coverageNote = (this.phase2CoverageNotes && this.phase2CoverageNotes[key] || '').trim();
                 entries.push({
                     query_title: q.title || 'Unnamed phase 2 query',
                     query_text: queryText,
                     result_text: resultText,
-                    analyst_summary: '',
-                    finding_type: this.phase2FindingTypes[key] || 'neutral',
-                    question_resolution: this.phase2ResolutionTypes[key] || 'not_resolved',
-                    target_questions: this.phase2ResolutionQuestions[key]
-                        ? [this.phase2ResolutionQuestions[key]]
-                        : (q.target_questions || []),
+                    analyst_summary: coverageNote ? 'Coverage: ' + coverageNote : '',
+                    finding_type: 'neutral',
+                    question_resolution: 'not_resolved',
+                    target_questions: q.target_questions || [],
                     result_status: resultStatus,
                 });
             }
@@ -1254,6 +1253,26 @@
             }
         },
 
+        async saveSupportiveEvidenceAndContinue() {
+            const hadEntries = this.supportiveManualResults && Object.keys(this.supportiveManualResults).some(
+                key => (this.supportiveManualResults[key] || '').trim()
+            );
+            await this.saveSupportiveEvidence({ silent: true });
+            // Navigate even when nothing was newly typed — the analyst may
+            // have already saved everything earlier. Only block when there
+            // is neither fresh input nor any saved evidence for the case.
+            const savedEvidenceCount = this.investigationState && this.investigationState.evidence_summary
+                ? (this.investigationState.evidence_summary.total_items || 0)
+                : 0;
+            if (hadEntries || savedEvidenceCount > 0) {
+                if (this.$refs && this.$refs.analysisTabRef) {
+                    this.$refs.analysisTabRef.goToStage(3);
+                }
+            } else {
+                alert('Paste at least one query result (or set a Collection Status) before continuing.');
+            }
+        },
+
         async saveSupportiveEvidence(options = {}) {
             if (!this.analysisCaseId || !this.analysisRule || !this.analysisRule.supportive_queries) {
                 return;
@@ -1263,7 +1282,11 @@
             for (const q of this.analysisRule.supportive_queries) {
                 const key = this.getSupportiveKey(q);
                 const resultText = (this.supportiveManualResults[key] || '').trim();
-                if (!resultText) {
+                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                // Save legitimate zero-result / failure executions even with
+                // an empty result body — a 0-event query is real evidence.
+                // Only a blank, untouched 'success' entry is skipped.
+                if (!resultText && resultStatus === 'success') {
                     continue;
                 }
 
@@ -1272,8 +1295,8 @@
                     query_text: this.renderSupportiveQuery(q),
                     result_text: resultText,
                     analyst_summary: '',
-                    finding_type: this.supportiveFindingTypes[key] || 'neutral',
-                    result_status: (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success',
+                    finding_type: 'neutral',
+                    result_status: resultStatus,
                 });
             }
 
@@ -1315,7 +1338,7 @@
                     query_text: (q && q.spl ? q.spl : '').toString().trim(),
                     result_text: resultText,
                     analyst_summary: '',
-                    finding_type: this.enrichmentFindingTypes[key] || 'neutral',
+                    finding_type: 'neutral',
                 });
             }
 

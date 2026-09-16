@@ -98,6 +98,7 @@
             <!-- Analysis -->
             <analysis-tab
                 v-if="currentTab === 'analysis'"
+                ref="analysisTabRef"
                 :ollama-health="ollamaHealth"
                 :analysis-case-search="analysisCaseSearch"
                 :analysis-case-id="analysisCaseId"
@@ -177,6 +178,7 @@
                 @remove-supportive-query="removeSupportiveQuery"
                 @save-supportive-queries="saveSupportiveQueries"
                 @save-supportive-evidence="saveSupportiveEvidence"
+                @save-supportive-evidence-and-continue="saveSupportiveEvidenceAndContinue"
                 @save-phase2-evidence="savePhase2Evidence"
                 @close-placeholder-alias-editor="closePlaceholderAliasEditor"
                 @save-placeholder-alias="savePlaceholderAlias"
@@ -195,6 +197,7 @@
                 @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
                 @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
                 @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
+                @update-phase2-coverage="({key, value}) => phase2CoverageNotes = { ...phase2CoverageNotes, [key]: value }"
                 @update-phase2-resolution="({key, value}) => { phase2ResolutionTypes = { ...phase2ResolutionTypes, [key]: value }; if (value === 'not_resolved') { const next = { ...phase2ResolutionQuestions }; delete next[key]; phase2ResolutionQuestions = next; } }"
                 @update-phase2-resolution-question="({key, value}) => phase2ResolutionQuestions = { ...phase2ResolutionQuestions, [key]: value }"
                 @delete-evidence="deleteEvidence"
@@ -315,7 +318,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=9"></script>
     <script src="modules/database.js?v=17"></script>
-    <script src="modules/analysis.js?v=9"></script>
+    <script src="modules/analysis.js?v=10"></script>
     <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js?v=9"></script>
     <script src="modules/codeReview.js?v=9"></script>
@@ -324,13 +327,13 @@
     <script src="components/HeaderNav.js?v=9"></script>
     <script src="components/ToolsTab.js?v=11"></script>
     <script src="components/DatabaseTab.js?v=26"></script>
-    <script src="components/AnalysisTab.js?v=9"></script>
+    <script src="components/AnalysisTab.js?v=10"></script>
     <script src="components/ClosureTab.js?v=9"></script>
     <script src="components/JobsTab.js?v=15"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=11"></script>
+    <script src="app.modular.js?v=12"></script>
 </body>
 </html>

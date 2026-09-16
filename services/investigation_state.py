@@ -214,6 +214,44 @@ def _is_substantive_evidence_value(value: str) -> bool:
 MAX_EVIDENCE_SUMMARY_CHARS = 2000
 
 
+def _infer_direction_from_analysis(analysis_text: str) -> str:
+    """Derive the evidence direction (supports/refutes/neutral) from the AI
+    analysis text rather than analyst-entered dropdown values.
+
+    Heuristic over the verdict/hypothesis/investigative sections: the model's
+    language about the evidence is the authoritative signal. Defaults to
+    'neutral' when the text is inconclusive, so un-analyzed evidence never
+    gets scored as directional.
+    """
+    text = (analysis_text or "").strip().lower()
+    if not text:
+        return "neutral"
+
+    support_signals = [
+        "supports the hypothesis", "supports the hypothesis that",
+        "confirms the hypothesis", "corroborates", "consistent with malicious",
+        "consistent with compromise", "indicates malicious", "indicates compromise",
+        "suggests malicious", "evidence of execution", "evidence of compromise",
+        "confirms malicious", "suspicious activity", "malicious activity",
+        "lateral movement observed", "unauthorized",
+    ]
+    refute_signals = [
+        "refutes the hypothesis", "no evidence of", "no indication of",
+        "benign administrative", "authorized administrative", "expected administrative",
+        "legitimate administrative", "known good", "approved change", "change ticket",
+        "authorized activity", "expected behavior", "normal operational",
+        "routine administrative", "false positive",
+    ]
+
+    support_hits = sum(1 for signal in support_signals if signal in text)
+    refute_hits = sum(1 for signal in refute_signals if signal in text)
+    if refute_hits > support_hits:
+        return "refutes"
+    if support_hits > refute_hits:
+        return "supports"
+    return "neutral"
+
+
 def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
     """Extract a clean observation summary from raw result payload.
 
@@ -330,8 +368,19 @@ def _build_investigation_state(
         "data_source_unavailable": 0,
         "query_failed": 0,
         "not_run": 0,
-        "benign_result": 0,
     }
+
+    # Evidence direction is AI-derived from the analysis text (verdict,
+    # hypothesis, and investigative sections), never taken from analyst
+    # ledger input. Analysts record execution facts; the model infers whether
+    # the evidence supports or refutes the active hypothesis.
+    ai_evidence_direction = _infer_direction_from_analysis(
+        " ".join([
+            verdict_text,
+            initial_thoughts,
+            sections.get("investigative analysis", ""),
+        ])
+    )
     evidence_by_source: Dict[str, int] = {}
     evidence_timeline = []
     titles_with_saved_results = set()
@@ -341,7 +390,6 @@ def _build_investigation_state(
     failed_query_count = 0
     source_unavailable_count = 0
     no_results_count = 0
-    benign_result_count = 0
     support_strength = 0
     refute_strength = 0
 
@@ -353,12 +401,17 @@ def _build_investigation_state(
             raw_result = {"result_text": str(raw_result)}
 
         raw_status = (raw_result.get("result_status") or "success").strip().lower()
+        # "benign_result" was an analyst verdict, not an execution fact. Map
+        # legacy rows to a plain success so direction is derived from the AI
+        # analysis instead of a stored judgment.
+        if raw_status == "benign_result":
+            raw_status = "success"
         result_status = raw_status if raw_status in VALID_RESULT_STATUSES else "success"
         evidence_by_status[result_status] = evidence_by_status.get(result_status, 0) + 1
 
-        finding_type = (raw_result.get("finding_type") or "neutral").strip().lower()
-        if finding_type not in VALID_FINDING_TYPES:
-            finding_type = "neutral"
+        # Legacy analyst-entered finding_type is kept in raw_result for audit
+        # only; scoring always uses the AI-derived direction.
+        finding_type = ai_evidence_direction
 
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:
@@ -389,8 +442,8 @@ def _build_investigation_state(
             pending_evidence_count += 1
         elif result_status == "no_results":
             no_results_count += 1
-            # A query returning no results when searching for lateral movement or malware
-            # can be valid negative evidence (refutes hypothesis)
+            # A query returning no results when the AI reads it as negative
+            # evidence is valid refuting evidence for the active hypothesis.
             if finding_type == "refutes":
                 has_substantive = True
                 substantive_evidence_count += 1
@@ -403,12 +456,6 @@ def _build_investigation_state(
                     evidence_by_finding[finding_type] += 1
                 else:
                     pending_evidence_count += 1
-        elif result_status == "benign_result":
-            benign_result_count += 1
-            has_substantive = True
-            substantive_evidence_count += 1
-            refute_strength += 2
-            evidence_by_finding["refutes"] += 1
         else:  # success
             if _is_substantive_evidence_value(observation_summary):
                 has_substantive = True
@@ -487,7 +534,7 @@ def _build_investigation_state(
         if not benign_tracked:
             provisional_disposition = "malicious"
     elif refute_strength >= 2 and support_strength == 0:
-        if case.verdict == "benign" or benign_result_count > 0:
+        if case.verdict == "benign":
             provisional_disposition = "benign"
         else:
             provisional_disposition = "false_positive"
