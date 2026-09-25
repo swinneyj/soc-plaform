@@ -2934,13 +2934,22 @@ def list_reports():
 
 @app.get("/api/reports/{report_name}", tags=["Data"])
 def download_report(report_name: str):
-    """Download a specific report file."""
-    report_path = os.path.join(get_reports_dir(), report_name)
-    if not os.path.exists(report_path):
+    """Download a specific report file.
+
+    Path-traversal safe: the candidate path is resolved (following
+    symlinks) and must remain inside the platform Reports directory
+    before any file is served. Absolute paths, `..` escapes, and
+    symlinks pointing outside all resolve to 404.
+    """
+    reports_root = Path(get_reports_dir()).resolve()
+    candidate = (reports_root / report_name).resolve()
+    if candidate != reports_root and reports_root not in candidate.parents:
+        raise HTTPException(status_code=404, detail=f"Report '{report_name}' not found")
+    if not candidate.is_file():
         raise HTTPException(status_code=404, detail=f"Report '{report_name}' not found")
     return FileResponse(
-        path=report_path,
-        filename=report_name,
+        path=str(candidate),
+        filename=candidate.name,
         media_type="text/plain"
     )
 
