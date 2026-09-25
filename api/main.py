@@ -132,7 +132,7 @@ if cors_origins:
         # The frontend uses exactly these methods and headers (see
         # web/modules/api.js); keep the allowlist tight instead of "*".
         allow_methods=["GET", "POST", "PUT", "DELETE"],
-        allow_headers=["Content-Type", "Accept"],
+        allow_headers=["Content-Type", "Accept", "X-API-Key"],
     )
 
 from api.routes.system import router as system_router

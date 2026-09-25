@@ -4,6 +4,13 @@ The gate is a no-op unless API_KEY is set in the environment, so these tests
 monkeypatch the module-level _API_KEY value directly to exercise both modes.
 """
 
+import os
+
+# CORS middleware is mounted at api.main import time only when CORS_ORIGINS
+# is set; set it here, before the import, so the CORS test below can run.
+os.environ.setdefault("CORS_ORIGINS", "https://test.local")
+CORS_TEST_ORIGIN = os.environ["CORS_ORIGINS"].split(",")[0].strip()
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -24,6 +31,25 @@ def test_gate_is_noop_without_api_key(client):
     """Default dev mode: API_KEY unset, dangerous routes stay open."""
     resp = client.delete("/api/jobs/nonexistent-id")
     assert resp.status_code in (200, 404)  # 404 = reached handler, job missing
+
+
+def test_cors_allows_x_api_key_header(client):
+    """The browser sends X-API-Key; CORS must not silently strip it.
+
+    Behavioral check: a real preflight requesting X-API-Key must be answered
+    with that header in Access-Control-Allow-Headers.
+    """
+    resp = client.options(
+        "/api/health",
+        headers={
+            "Origin": CORS_TEST_ORIGIN,
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "x-api-key",
+        },
+    )
+    assert resp.status_code in (200, 204)
+    allow = resp.headers.get("access-control-allow-headers", "")
+    assert "x-api-key" in allow.lower(), f"X-API-Key not allowed by CORS: {allow}"
 
 
 def test_execute_rejected_without_key(client, with_api_key):
