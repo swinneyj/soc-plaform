@@ -38,9 +38,10 @@ def _make_csv(tmp_path, name="events.csv", rows=None):
 
 
 def _fake_ingest(monkeypatch, rows_inserted=2):
+    """Stub the boundary's canonical CSV engine so unit tests never touch Postgres."""
     calls = []
 
-    def fake_ingest(path, silent=False):
+    def fake_ingest_csv(path, silent=True, session_factory=None):
         calls.append(path)
         return {
             "success": True,
@@ -48,19 +49,10 @@ def _fake_ingest(monkeypatch, rows_inserted=2):
             "rows_inserted": rows_inserted,
             "rows_skipped": 0,
             "errors": [],
-            "file": str(path),
+            "file": os.path.basename(str(path)),
         }
 
-    monkeypatch.setattr(
-        "services.splunk_boundary.ingest_splunk_csv", fake_ingest, raising=False
-    )
-    # The real import happens inside ingest_manifest; patch sys.modules path
-    import sys as _sys
-    import types as _types
-
-    fake_mod = _types.ModuleType("Tools.splunk_csv_ingestor.splunk_csv_ingestor")
-    fake_mod.ingest_splunk_csv = fake_ingest
-    monkeypatch.setitem(_sys.modules, "Tools.splunk_csv_ingestor.splunk_csv_ingestor", fake_mod)
+    monkeypatch.setattr(sb, "ingest_csv_events", fake_ingest_csv)
     return calls
 
 
@@ -267,3 +259,79 @@ def test_http_write_endpoints_require_api_key(monkeypatch):
     purge = client.delete("/api/splunk-boundary/batches/20260925T120000Z-abcdef01")
     assert admit.status_code == 401
     assert purge.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Canonical CSV engine (ingest_csv_events) — sqlite-backed, hermetic
+# ---------------------------------------------------------------------------
+
+
+def _sqlite_session_factory():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+    from db.models import Base
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    factory = sessionmaker(bind=engine, autoflush=False)
+    return factory
+
+
+def test_ingest_csv_events_inserts_and_dedups(tmp_path):
+    from db.models import SplunkEvent
+
+    factory = _sqlite_session_factory()
+    path = tmp_path / "events.csv"
+    path.write_text(
+        "_time,host,source,sourcetype,_raw\n"
+        "2026-09-25T10:00:00,H1,/v/log,linux_secure,hello world\n"
+        "2026-09-25T10:01:00,H2,/v/log,linux_secure,second event\n",
+        encoding="utf-8",
+    )
+
+    first = sb.ingest_csv_events(path, session_factory=factory)
+    assert first["success"] is True
+    assert first["rows_inserted"] == 2
+
+    session = factory()
+    assert session.query(SplunkEvent).count() == 2
+    event = session.query(SplunkEvent).first()
+    assert event.raw == "hello world"
+    session.close()
+
+    # Re-ingesting the same file must skip everything as duplicates.
+    second = sb.ingest_csv_events(path, session_factory=factory)
+    assert second["rows_inserted"] == 0
+    assert second["rows_skipped"] == 2
+
+
+def test_ingest_csv_events_normalizes_tz_and_defaults(tmp_path):
+    from db.models import SplunkEvent
+
+    factory = _sqlite_session_factory()
+    path = tmp_path / "events.csv"
+    path.write_text(
+        "host,_raw\n"
+        "H9,no timestamp and no sourcetype\n",
+        encoding="utf-8",
+    )
+    stats = sb.ingest_csv_events(path, session_factory=factory)
+    assert stats["rows_inserted"] == 1
+
+    session = factory()
+    event = session.query(SplunkEvent).one()
+    assert event.sourcetype == "splunk:notable"  # default applied
+    assert event.source == "splunk_export"
+    assert event.timestamp.tzinfo is None  # naive UTC
+    session.close()
+
+
+def test_ingest_csv_events_missing_file(tmp_path):
+    stats = sb.ingest_csv_events(tmp_path / "nope.csv", session_factory=_sqlite_session_factory())
+    assert stats["success"] is False
+    assert "not found" in stats["error"]

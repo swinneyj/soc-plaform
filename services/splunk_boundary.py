@@ -185,6 +185,129 @@ def _load_db_module():
     return SplunkEvent, SessionLocal
 
 
+def ingest_csv_events(
+    path: Union[str, Path],
+    silent: bool = True,
+    session_factory=None,
+) -> Dict[str, Any]:
+    """Canonical Splunk CSV -> SplunkEvent loader used by every ingest path.
+
+    Maps common Splunk export columns (case-insensitive: sourcetype/source::
+    type, source/_source, host/_host, _raw/raw, _time/time/timestamp),
+    deduplicates on (sourcetype, source, host, timestamp), and truncates raw
+    to 2000 chars. Timestamps normalize to naive UTC.
+
+    ``session_factory`` lets tests inject an isolated database; production
+    callers use the platform SessionLocal.
+    """
+    import csv as _csv
+
+    source = Path(path)
+    stats: Dict[str, Any] = {
+        "success": False,
+        "rows_read": 0,
+        "rows_inserted": 0,
+        "rows_skipped": 0,
+        "errors": [],
+        "file": source.name,
+    }
+    if not source.is_file():
+        stats["error"] = f"CSV file not found: {source}"
+        return stats
+
+    SplunkEvent, SessionLocal = _load_db_module()
+    session = (session_factory or SessionLocal)()
+    try:
+        with open(source, "r", encoding="utf-8", errors="ignore") as fh:
+            reader = _csv.DictReader(fh)
+            if not reader.fieldnames:
+                stats["error"] = "CSV file is empty or malformed"
+                return stats
+
+            stats["success"] = True
+            for row_num, row in enumerate(reader, start=2):
+                stats["rows_read"] += 1
+                try:
+                    field_lower = {k.lower(): v for k, v in row.items() if k}
+                    sourcetype = (
+                        field_lower.get("sourcetype")
+                        or field_lower.get("source::type")
+                        or "splunk:notable"
+                    )
+                    src = field_lower.get("source") or field_lower.get("_source") or "splunk_export"
+                    host = field_lower.get("host") or field_lower.get("_host") or "unknown"
+                    raw = field_lower.get("_raw") or field_lower.get("raw") or str(row)
+
+                    ts_str = (
+                        field_lower.get("_time")
+                        or field_lower.get("time")
+                        or field_lower.get("timestamp")
+                    )
+                    ts = None
+                    if ts_str:
+                        try:
+                            ts = datetime.fromisoformat(str(ts_str).replace("Z", "+00:00"))
+                            if ts.tzinfo is not None:
+                                ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+                        except ValueError:
+                            ts = None
+                    if ts is None:
+                        ts = _utcnow()
+
+                    existing = (
+                        session.query(SplunkEvent)
+                        .filter(
+                            SplunkEvent.sourcetype == sourcetype,
+                            SplunkEvent.source == src,
+                            SplunkEvent.host == host,
+                            SplunkEvent.timestamp == ts,
+                        )
+                        .first()
+                    )
+                    if existing:
+                        stats["rows_skipped"] += 1
+                        continue
+
+                    session.add(
+                        SplunkEvent(
+                            sourcetype=sourcetype,
+                            source=src,
+                            host=host,
+                            raw=raw[:2000],
+                            timestamp=ts,
+                        )
+                    )
+                    stats["rows_inserted"] += 1
+                    if stats["rows_inserted"] % 50 == 0:
+                        session.commit()
+                except Exception as exc:
+                    stats["rows_skipped"] += 1
+                    stats["errors"].append(f"Row {row_num}: {str(exc)[:100]}")
+            session.commit()
+
+        # Guard against silent total failure: if the database itself is
+        # broken (missing tables, connection loss), every row lands in
+        # errors[] while nothing was inserted. That must not read as success.
+        if (
+            stats["rows_read"] > 0
+            and stats["rows_inserted"] == 0
+            and stats["rows_skipped"] == len(stats["errors"])
+        ):
+            stats["success"] = False
+            stats["error"] = (
+                "all rows failed (likely a database error); first: "
+                + (stats["errors"][0] if stats["errors"] else "unknown")
+            )
+        return stats
+    except Exception as exc:
+        session.rollback()
+        stats["success"] = False
+        stats["error"] = str(exc)
+        return stats
+    finally:
+        session.close()
+
+
 def ingest_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     """Ingest a quarantined batch into the platform database.
 
@@ -202,9 +325,7 @@ def ingest_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
         )
 
     t0 = _utcnow() - timedelta(seconds=1)
-    from Tools.splunk_csv_ingestor.splunk_csv_ingestor import ingest_splunk_csv
-
-    stats = ingest_splunk_csv(str(staged), silent=True)
+    stats = ingest_csv_events(str(staged), silent=True)
     t1 = _utcnow() + timedelta(seconds=1)
 
     result = dict(stats)
