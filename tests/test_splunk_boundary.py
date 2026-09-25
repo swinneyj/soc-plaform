@@ -335,3 +335,100 @@ def test_ingest_csv_events_missing_file(tmp_path):
     stats = sb.ingest_csv_events(tmp_path / "nope.csv", session_factory=_sqlite_session_factory())
     assert stats["success"] is False
     assert "not found" in stats["error"]
+
+
+# ---------------------------------------------------------------------------
+# JSON notable admission (ingest_json_notables)
+# ---------------------------------------------------------------------------
+
+
+def test_ingest_json_notables_inserts_object_and_array(tmp_path):
+    from db.models import SplunkEvent
+
+    factory = _sqlite_session_factory()
+    single = tmp_path / "one.json"
+    single.write_text(json.dumps({
+        "search_name": "Impossible Travel",
+        "user": "bjones",
+        "host": "HOST-1",
+        "_time": "2026-09-25T10:00:00Z",
+    }), encoding="utf-8")
+    stats = sb.ingest_json_notables(single, session_factory=factory)
+    assert stats["success"] is True
+    assert stats["rows_inserted"] == 1
+
+    many = tmp_path / "many.json"
+    many.write_text(json.dumps([
+        {"search_name": "Malware", "host": "HOST-2", "_time": 1758792000.0},
+        {"search_name": "Exfil", "host": "HOST-3"},
+    ]), encoding="utf-8")
+    stats2 = sb.ingest_json_notables(many, session_factory=factory)
+    assert stats2["rows_inserted"] == 2
+
+    session = factory()
+    assert session.query(SplunkEvent).filter(SplunkEvent.source == "splunk_json_export").count() == 3
+    epoch_event = session.query(SplunkEvent).filter(SplunkEvent.host == "HOST-2").one()
+    assert epoch_event.timestamp.tzinfo is None  # epoch normalized to naive UTC
+    session.close()
+
+
+def test_ingest_json_notables_dedups_by_payload(tmp_path):
+    """Same-second events with different payloads must BOTH insert; exact
+    re-admission of the same payload must skip."""
+    from db.models import SplunkEvent
+
+    factory = _sqlite_session_factory()
+    path = tmp_path / "events.json"
+    base = {"host": "H1", "_time": "2026-09-25T10:00:00Z", "sourcetype": "splunk:notable"}
+    path.write_text(json.dumps([
+        dict(base, search_name="Rule A"),
+        dict(base, search_name="Rule B"),   # same second, different payload
+    ]), encoding="utf-8")
+    first = sb.ingest_json_notables(path, session_factory=factory)
+    assert first["rows_inserted"] == 2
+
+    second = sb.ingest_json_notables(path, session_factory=factory)
+    assert second["rows_inserted"] == 0
+    assert second["rows_skipped"] == 2  # payload-hash dedup
+
+    session = factory()
+    assert session.query(SplunkEvent).count() == 2
+    session.close()
+
+
+def test_ingest_json_notables_rejects_malformed(tmp_path):
+    factory = _sqlite_session_factory()
+    bad = tmp_path / "bad.json"
+    bad.write_text("{not json", encoding="utf-8")
+    stats = sb.ingest_json_notables(bad, session_factory=factory)
+    assert stats["success"] is False
+    assert "invalid JSON" in stats["error"]
+
+    scalar = tmp_path / "scalar.json"
+    scalar.write_text("[1, 2, 3]", encoding="utf-8")
+    stats2 = sb.ingest_json_notables(scalar, session_factory=factory)
+    assert stats2["success"] is False
+    assert "array of objects" in stats2["error"]
+
+
+def test_admit_json_file_end_to_end(tmp_path, monkeypatch):
+    """A .json admission produces a batch manifest and inserts rows."""
+    from db.models import SplunkEvent
+
+    factory = _sqlite_session_factory()
+    monkeypatch.setattr(sb, "_load_db_module", lambda: (SplunkEvent, factory))
+
+    path = tmp_path / "notables.json"
+    path.write_text(json.dumps([
+        {"search_name": "R1", "host": "JH1", "_time": "2026-09-25T11:00:00Z"},
+        {"search_name": "R2", "host": "JH2", "_time": "2026-09-25T11:01:00Z"},
+    ]), encoding="utf-8")
+    result = sb.admit_file(path, source_label="unit-test-json")
+    assert result["ingest"]["rows_inserted"] == 2
+    assert result["manifest"]["validation"]["filename"] == "notables.json"
+    staging = sb.staging_dir()
+    assert list(staging.glob("*-notables.json"))
+
+    session = factory()
+    assert session.query(SplunkEvent).filter(SplunkEvent.source == "splunk_json_export").count() == 2
+    session.close()

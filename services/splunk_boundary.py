@@ -319,13 +319,17 @@ def ingest_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     staged = Path(manifest["staged_path"])
     if not staged.is_file():
         raise FileNotFoundError(f"staged file missing: {staged}")
-    if not staged.name.endswith(".csv"):
-        raise ValueError(
-            "boundary ingests CSV batches only; other formats need a dedicated parser"
-        )
 
     t0 = _utcnow() - timedelta(seconds=1)
-    stats = ingest_csv_events(str(staged), silent=True)
+    if staged.name.endswith(".csv"):
+        stats = ingest_csv_events(str(staged), silent=True)
+    elif staged.name.endswith(".json"):
+        stats = ingest_json_notables(str(staged), silent=True)
+    else:
+        raise ValueError(
+            "boundary ingests CSV and notable-JSON batches only; "
+            "other formats need a dedicated parser"
+        )
     t1 = _utcnow() + timedelta(seconds=1)
 
     result = dict(stats)
@@ -337,6 +341,145 @@ def ingest_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
     return result
+
+
+def ingest_json_notables(
+    path: Union[str, Path],
+    silent: bool = True,
+    session_factory=None,
+) -> Dict[str, Any]:
+    """Canonical Splunk notable-JSON -> SplunkEvent loader.
+
+    Accepts a JSON object or an array of objects, each representing one
+    notable/event (e.g. an Incident Review JSON export). Every object is
+    stored as one SplunkEvent whose ``raw`` is the full JSON payload, so
+    downstream analysis sees the complete notable.
+
+    Key mapping per object (all optional):
+      - ``sourcetype`` (default ``splunk:notable``)
+      - ``source`` (default ``splunk_json_export``)
+      - ``host`` (default ``unknown``)
+      - ``_time``/``timestamp``: ISO string or epoch seconds (Splunk exports
+        epoch floats; both normalize to naive UTC, fallback = now)
+
+    Deduplication: same (sourcetype, source, host, timestamp) candidates are
+    additionally compared by raw payload hash, so same-second events do not
+    collide. NOTE: this is event-level admission — the paste-box flow (with
+    segmentation, sanitization, and promotion) remains the path for analyst
+    pastes; this loader is for machine-exported JSON files.
+
+    ``session_factory`` lets tests inject an isolated database.
+    """
+    import hashlib
+
+    source = Path(path)
+    stats: Dict[str, Any] = {
+        "success": False,
+        "rows_read": 0,
+        "rows_inserted": 0,
+        "rows_skipped": 0,
+        "errors": [],
+        "file": source.name,
+    }
+    if not source.is_file():
+        stats["error"] = f"JSON file not found: {source}"
+        return stats
+
+    try:
+        payload = json.loads(source.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        stats["error"] = f"invalid JSON: {exc}"
+        return stats
+
+    objects = payload if isinstance(payload, list) else [payload]
+    if not objects or not all(isinstance(o, dict) for o in objects):
+        stats["error"] = "JSON must be an object or an array of objects"
+        return stats
+
+    cap = int(os.environ.get("SPLUNK_BOUNDARY_MAX_EVENTS", "10000"))
+    if len(objects) > cap:
+        stats["error"] = f"{len(objects)} events exceeds SPLUNK_BOUNDARY_MAX_EVENTS={cap}"
+        return stats
+
+    SplunkEvent, SessionLocal = _load_db_module()
+    session = (session_factory or SessionLocal)()
+    try:
+        stats["success"] = True
+        for index, obj in enumerate(objects, start=1):
+            stats["rows_read"] += 1
+            try:
+                sourcetype = str(obj.get("sourcetype") or "splunk:notable")
+                src = str(obj.get("source") or "splunk_json_export")
+                host = str(obj.get("host") or "unknown")
+                raw = json.dumps(obj, ensure_ascii=False)
+
+                ts = None
+                ts_value = obj.get("_time", obj.get("timestamp"))
+                if isinstance(ts_value, (int, float)):
+                    ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
+                elif isinstance(ts_value, str) and ts_value.strip():
+                    try:
+                        ts = datetime.fromisoformat(ts_value.strip().replace("Z", "+00:00"))
+                        if ts.tzinfo is not None:
+                            ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
+                    except ValueError:
+                        ts = None
+                if ts is None:
+                    ts = _utcnow()
+
+                raw_hash = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+                candidate = (
+                    session.query(SplunkEvent)
+                    .filter(
+                        SplunkEvent.sourcetype == sourcetype,
+                        SplunkEvent.source == src,
+                        SplunkEvent.host == host,
+                        SplunkEvent.timestamp == ts,
+                    )
+                    .all()
+                )
+                if any(
+                    hashlib.sha1((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
+                    for e in candidate
+                ):
+                    stats["rows_skipped"] += 1
+                    continue
+
+                session.add(
+                    SplunkEvent(
+                        sourcetype=sourcetype,
+                        source=src,
+                        host=host,
+                        raw=raw[:2000],
+                        timestamp=ts,
+                    )
+                )
+                stats["rows_inserted"] += 1
+                if stats["rows_inserted"] % 50 == 0:
+                    session.commit()
+            except Exception as exc:
+                stats["rows_skipped"] += 1
+                stats["errors"].append(f"Event {index}: {str(exc)[:100]}")
+        session.commit()
+
+        if (
+            stats["rows_read"] > 0
+            and stats["rows_inserted"] == 0
+            and stats["rows_skipped"] == len(stats["errors"])
+        ):
+            stats["success"] = False
+            stats["error"] = (
+                "all events failed (likely a database error); first: "
+                + (stats["errors"][0] if stats["errors"] else "unknown")
+            )
+        return stats
+    except Exception as exc:
+        session.rollback()
+        stats["success"] = False
+        stats["error"] = str(exc)
+        return stats
+    finally:
+        session.close()
 
 
 def admit_file(path: Union[str, Path], source_label: str = "") -> Dict[str, Any]:
