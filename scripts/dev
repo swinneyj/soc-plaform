@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# scripts/dev — SOC Platform development launcher.
+#
+# Launches uvicorn with secrets injected from Bitwarden Secrets Manager when
+# available, falling back to plain .env values when not. The app cannot tell
+# the difference: both paths end with the same environment.
+#
+# Modes (auto-detected, see --check):
+#   bws       BWS_ACCESS_TOKEN present in .env and `bws` CLI installed
+#             -> `bws run` injects every BWS secret as an env var, on top of
+#                anything in .env (injected values win; local overrides lose)
+#   env-only  no token or no CLI -> plain .env launch (today's behavior)
+#
+# Usage:
+#   scripts/dev                 # launch on :8000 (auto mode)
+#   scripts/dev --check         # show detected mode + diagnostics, launch nothing
+#   scripts/dev --port 8001     # custom port
+#   scripts/dev -- --log-level debug   # extra args after -- go to uvicorn
+#
+# Env vars honored:
+#   SOC_PORT           default port (8000)
+#   DATABASE_URL       set in .env (local Postgres or Neon)
+#   BWS_ACCESS_TOKEN   set in .env only when the BWS path is wanted
+#   ENABLE_DOCS=1      keep Swagger UI in local dev (prod has it disabled)
+
+set -euo pipefail
+
+PORT="${SOC_PORT:-8000}"
+EXTRA_ARGS=()
+CHECK_ONLY=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check)   CHECK_ONLY=1; shift ;;
+        --port)    PORT="$2"; shift 2 ;;
+        --)        shift; EXTRA_ARGS=("$@"); break ;;
+        *)         EXTRA_ARGS+=("$1"); shift ;;
+    esac
+done
+
+# Resolve repo root (two levels up from this script) so it works from anywhere.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$ROOT"
+
+# Pick the newest venv automatically (3.14 preferred, 3.9 legacy fallback).
+if [ -x ".venv314/bin/python" ]; then
+    PY=".venv314/bin/python"
+elif [ -x ".venv/bin/python" ]; then
+    PY=".venv/bin/python"
+else
+    echo "✗ No virtualenv found (.venv314 or .venv). Create one first." >&2
+    exit 1
+fi
+
+# Load .env into the environment (keys only — values never echoed).
+ENV_FILE="$ROOT/.env"
+HAVE_TOKEN=0
+if [ -f "$ENV_FILE" ]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+    if [ -n "${BWS_ACCESS_TOKEN:-}" ]; then
+        HAVE_TOKEN=1
+    fi
+else
+    echo "⚠ No .env found at $ENV_FILE — continuing with environment only." >&2
+fi
+
+if command -v bws >/dev/null 2>&1; then
+    BWS_BIN="bws"
+elif [ -x "$HOME/.local/bin/bws" ]; then
+    BWS_BIN="$HOME/.local/bin/bws"
+    export PATH="$HOME/.local/bin:$PATH"
+else
+    BWS_BIN=""
+fi
+
+MODE="env-only"
+if [ "$HAVE_TOKEN" -eq 1 ] && [ -n "$BWS_BIN" ]; then
+    MODE="bws"
+fi
+
+echo "── SOC Platform launcher ─────────────────────────────"
+echo "  mode:        $MODE"
+echo "  python:      $($PY --version 2>&1) ($PY)"
+echo "  port:        $PORT"
+if [ "$MODE" = "bws" ]; then
+    echo "  bws cli:     $BWS_BIN"
+else
+    [ "$HAVE_TOKEN" -eq 0 ] && echo "  bws:         no BWS_ACCESS_TOKEN in .env (add it to enable secret injection)"
+    [ -z "$BWS_BIN" ] && [ "$HAVE_TOKEN" -eq 1 ] && echo "  bws:         token found but bws CLI missing (brew install bitwarden-cli is wrong; use the bws installer)"
+fi
+echo "──────────────────────────────────────────────────────"
+
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    exit 0
+fi
+
+if [ "$MODE" = "bws" ]; then
+    # Pre-flight: a bad token should die here with guidance, not deep inside
+    # a half-launched server (bws's own error for this is a terse 'Error: ').
+    if ! "$BWS_BIN" project list >/dev/null 2>&1; then
+        echo "✗ BWS_ACCESS_TOKEN rejected (invalid, expired, or no project access)." >&2
+        echo "  Launching with .env values only would hide missing secrets — fix the" >&2
+        echo "  token first (ask your BWS admin), or remove BWS_ACCESS_TOKEN from .env" >&2
+        echo "  to run in env-only mode." >&2
+        exit 1
+    fi
+fi
+
+if [ "$MODE" = "bws" ]; then
+    exec "$BWS_BIN" run -- "$PY" -m uvicorn api.main:app --host 127.0.0.1 --port "$PORT" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+else
+    exec "$PY" -m uvicorn api.main:app --host 127.0.0.1 --port "$PORT" "${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}"
+fi
