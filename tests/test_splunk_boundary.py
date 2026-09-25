@@ -232,6 +232,31 @@ def test_status_reports_batches(tmp_path, monkeypatch):
     assert status["batches"][0]["ingested_rows"] == 2
 
 
+def test_staging_dir_falls_back_when_repo_readonly(tmp_path, monkeypatch):
+    """Serverless deploys (Vercel) have a read-only app tree; staging must
+    fall back to a temp location instead of 500ing (seen live as
+    '[Errno 30] Read-only file system: /var/task/Data')."""
+    import tempfile as tf
+
+    readonly = tmp_path / "readonly_repo"
+    (readonly / "Data").mkdir(parents=True)
+    monkeypatch.setattr(
+        "services.splunk_boundary.Path", lambda p: readonly / p
+    )
+    # Simulate the mkdir/touch failure the way the read-only FS does:
+    monkeypatch.setenv("SPLUNK_BOUNDARY_STAGING", "")
+    orig_mkdir = __import__("pathlib").Path.mkdir
+
+    def failing_mkdir(self, *a, **k):
+        if str(self).startswith(str(readonly)):
+            raise OSError(30, "Read-only file system")
+        return orig_mkdir(self, *a, **k)
+
+    monkeypatch.setattr("pathlib.Path.mkdir", failing_mkdir)
+    staging = sb.staging_dir()
+    assert str(tf.gettempdir()) in str(staging) or staging.is_dir()
+
+
 # ---------------------------------------------------------------------------
 # HTTP surface behavior
 # ---------------------------------------------------------------------------

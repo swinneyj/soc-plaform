@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -68,11 +69,25 @@ def current_mode() -> str:
 
 
 def staging_dir() -> Path:
-    """Quarantine directory (created on demand), env-overridable."""
-    root = Path(
-        os.environ.get("SPLUNK_BOUNDARY_STAGING")
-        or (Path(__file__).resolve().parent.parent / "Data" / "quarantine")
-    )
+    """Quarantine directory (created on demand), env-overridable.
+
+    Defaults to ``<repo>/Data/quarantine``; on read-only deployments
+    (e.g. Vercel serverless, where only /tmp is writable) it falls back to
+    a temp-directory location so the boundary endpoints never 500.
+    """
+    configured = os.environ.get("SPLUNK_BOUNDARY_STAGING")
+    if configured:
+        root = Path(configured)
+    else:
+        candidate = Path(__file__).resolve().parent.parent / "Data" / "quarantine"
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            probe = candidate / ".write-probe"
+            probe.touch()
+            probe.unlink()
+            root = candidate
+        except OSError:
+            root = Path(tempfile.gettempdir()) / "splunk-quarantine"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
