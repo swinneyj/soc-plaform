@@ -21,7 +21,7 @@ API is now available at `http://localhost:8000`
 ### Dockerfile (Multi-Stage Build)
 
 - **Builder stage**: Installs dependencies (fastapi, uvicorn, pydantic, requests, python-dotenv)
-- **Runtime stage**: Minimal Python 3.11 slim image (~216MB final)
+- **Runtime stage**: Minimal Python 3.14 slim image
 - **Volumes**: Data, Playbooks, and Tools are mounted separately
 - **Healthcheck**: Container-native health checks for orchestration platforms
 
