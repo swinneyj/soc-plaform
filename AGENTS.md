@@ -67,7 +67,7 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)
 - 🔧 **remoteguest SSH** `[V — staged, failing with no diagnostic]`: token-enabled, key installed, perms correct, password valid — SSH still closes pre-auth. macOS bug hypothesis `[A]`. Retest after OS updates; rotate its `12345` password before real use
 - 🔧 **Boot persistence** (decision) `[V — currently manual]`: point launchd at `scripts/dev` for vault-injected auto-start, or keep manual launches
-- ⚪ **`close_freebuff_tabs.py`** (Dalton) `[V — untracked personal utility]`: commit to `Tools/`, keep untracked, or delete
+- ⚪ **`friend` account** `[V — fully deleted Sep 25]`: record + home gone. If anything ever recreates accounts by terminal, re-read the quirks section first
 
 ## Doc index
 

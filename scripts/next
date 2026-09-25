@@ -58,6 +58,6 @@ else
 fi
 
 # 6. Hygiene reminders ----------------------------------------------------
-[ -f triage.db ] && echo "${WAIT}triage.db still in the tree — keep or delete, decide deliberately"
+[ -f triage.db ] && echo "${WAIT}triage.db reappeared in the tree — it was archived to splunk-es-backup-toolkit/ on Sep 25; investigate why it's back"
 echo ""
 echo "   (read-only check — nothing was changed. Details: docs/security-remediation-tracker.md)"

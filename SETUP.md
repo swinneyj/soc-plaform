@@ -76,7 +76,7 @@ for p in 445 548 22; do nc -z -G 2 100.88.143.23 $p >/dev/null 2>&1 && echo "$p 
 |---|---|---|
 | `daltonlewis` | Owner (admin) | SSH works via `~/.ssh/authorized_keys` (ed25519 key) |
 | `remoteguest` (full name "Remote Guest", pw `12345`) | Future SSH guest account, created via GUI | **Exists & token-enabled, but SSH blocked by macOS bug — see below. Will start working after an OS fix, no re-setup needed.** |
-| `friend` (full name "Friend Access") | Dead leftover from headless experiments | Home dir deleted; record may still show in Users & Groups — delete via right-click whenever (GUI deletion is the only path that works) |
+| ~~`friend`~~ | Deleted Sep 25 (GUI) | Gone — record + home dir. The SecureToken saga's casualty; see AGENTS.md if recreating accounts |
 
 **Golden rule discovered today:** accounts created via **System Settings GUI** get a SecureToken automatically and work; accounts created via terminal (`sysadminctl`/`dscl`) get a broken half-initialized password record. Always use the GUI for new accounts on this Mac.
 
@@ -119,7 +119,7 @@ open https://login.tailscale.com/admin/machines
 - **Canonical BWS org** — if Justin's org (with the "real" project) materializes, decide which org is canonical and migrate; avoid a permanent split
 - **Syncthing** — auto-synced folder, no mounts, no passwords. The durable evolution of the drop zone.
 - **SSH for Jay** — either (a) wait for the macOS fix and his key lands in `remoteguest`, or (b) now: install his `.pub` into `~/.ssh/authorized_keys` (owner account, full access, revocable by deleting one line).
-- **Cleanup** — delete the `friend` husk in Users & Groups; optional: rotate `12345` to something stronger via GUI (it's tailnet-only exposure, low risk).
+- **Cleanup** — ~~delete the `friend` husk~~ done. Optional: rotate `12345` to something stronger via GUI (it's tailnet-only exposure, low risk).
 - **Rotate guest SMB off** if a third party ever joins the tailnet — guest folder is writable by anyone on the tailnet.
 
 ## Fail-safe: if everything breaks
@@ -129,3 +129,5 @@ open https://login.tailscale.com/admin/machines
 3. If share missing: System Settings → General → Sharing → File Sharing on; verify `sharing -l`
 4. If Jay can't connect: his Tailscale icon connected? Then `⌘K` again.
 5. If Dalton can't reach Jay's share: probe ports (see reverse-direction section) — if 445 is closed, *his* File Sharing got toggled off.
+6. After macOS updates / reboots / anything weird: `scripts/baseline --verify` — the platform's baseline test (hard drift = investigate)
+7. **Pushes are guarded twice**: a pre-push hook runs the machine baseline (bypass: `git push --no-verify`), and CI runs a repo-state guard before every Vercel build
