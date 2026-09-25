@@ -19,6 +19,25 @@ Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https:
 | SSH server | macOS Remote Login enabled (`com.openssh.sshd`) — works for **daltonlewis** (owner key installed) |
 | Tailscale SSH | `RunSSH: true` on the node, but effectively owner-only (see quirks) |
 
+## BWS (Bitwarden Secrets Manager) workflow — LIVE since Sep 25
+
+Secrets no longer live in `.env` by hand — they live in the **SSC-Lewis** BWS org (free 2-person plan), project **SOC Platform**. `.env` is just a bootstrap: it holds `BWS_ACCESS_TOKEN` (machine account `Machine-Dev`, scoped to the project only) plus local-only keys.
+
+**The four vault secrets:** `DATABASE_URL` (currently local Postgres — swap to Neon's URL when it arrives), `OLLAMA_URL`, `API_KEY` (dormant until the gate activates), `CORS_ORIGINS`.
+
+**Daily commands:**
+```bash
+scripts/dev --check     # mode diagnostic (env-only vs bws)
+scripts/pull-secrets    # regenerate .env from the vault (0600, prints key NAMES only)
+scripts/dev             # launch API with secrets injected at runtime
+```
+
+**Rotation / new secret:** edit it in the BWS UI → `scripts/pull-secrets` → restart. **Wiped .env:** `pull-secrets` rebuilds it (preserves the token + local-only keys). **Token compromised:** revoke in SM UI → generate new → update one `.env` line → re-pull.
+
+**Setup gotchas (all hit live):** machine accounts must be *scoped to the project* or the token silently returns `[]` (auth passes!); the access token belongs to the machine account it was generated from — re-scope later does nothing for old tokens; creating an org requires picking a plan (the free 2-person tier covers this team).
+
+**State note:** the old launchd-managed API (`local.soc-platform.api`) is no longer running — the API currently starts manually via `scripts/dev`. Boot persistence was intentionally not restored yet (decision pending: point launchd at `scripts/dev` for vault-injected boot).
+
 ## How Jay connects (the message that worked)
 
 > Finder → ⌘K → `smb://100.84.93.19` → Connect as **Guest** → open the **Exchange** folder.
@@ -96,6 +115,8 @@ open https://login.tailscale.com/admin/machines
 
 ## Future upgrades (when wanted, not needed)
 
+- **Restore boot persistence** — point the launchd plist at `scripts/dev` so the API auto-starts with vault injection at boot
+- **Canonical BWS org** — if Justin's org (with the "real" project) materializes, decide which org is canonical and migrate; avoid a permanent split
 - **Syncthing** — auto-synced folder, no mounts, no passwords. The durable evolution of the drop zone.
 - **SSH for Jay** — either (a) wait for the macOS fix and his key lands in `remoteguest`, or (b) now: install his `.pub` into `~/.ssh/authorized_keys` (owner account, full access, revocable by deleting one line).
 - **Cleanup** — delete the `friend` husk in Users & Groups; optional: rotate `12345` to something stronger via GUI (it's tailnet-only exposure, low risk).
