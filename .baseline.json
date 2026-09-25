@@ -1,0 +1,20 @@
+{
+  "test_files": 7,
+  "python": "Python 3.14.7",
+  "launch_mode": "bws",
+  "services": {
+    "tailscale_cli": "up",
+    "postgres_5432": "up",
+    "smb_445": "up",
+    "ssh_22": "up",
+    "api_8000": "up"
+  },
+  "tailscale_nodes": [
+    "daltons-macbook-pro-1",
+    "justins-macbook-pro.tail3e59ce.ts.net"
+  ],
+  "exchange_share_registered": "3",
+  "git_branch": "dev-dalton",
+  "git_dirty_count": 3,
+  "bws_token_present": "yes"
+}

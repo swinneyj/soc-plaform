@@ -1,0 +1,129 @@
+#!/usr/bin/env bash
+# scripts/baseline — the Blade Runner baseline test for this platform.
+#
+# "And blood-black nothingness began to spin..." — systems set in motion.
+#
+# Usage:
+#   scripts/baseline            # run all checks live, show state
+#   scripts/baseline --snapshot # record current state as known-good (.baseline.json)
+#   scripts/baseline --verify   # diff live vs recorded; exit 1 on drift
+#
+# The baseline file is committed: drift after macOS updates, reboots, or config
+# changes is signal, not noise. Service up/down that is EXPECTED to vary
+# (the manually-launched API) is recorded as a state key, not a failure.
+
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+BASELINE_FILE=".baseline.json"
+
+# ---- collectors ----------------------------------------------------------
+
+collect() {
+  python3 - "$@" <<'PYEOF'
+import json, subprocess, sys, os, glob
+
+def sh(cmd, timeout=15):
+    try:
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        return (r.stdout + r.stderr).strip()
+    except Exception as e:
+        return f"ERR: {e}"
+
+state = {}
+
+# 1. Test suite (count only — names change legitimately)
+state["test_files"] = len(glob.glob("tests/test_*.py"))
+
+# 2. Python runtime
+state["python"] = sh(".venv314/bin/python --version 2>&1") or sh("python3 --version")
+
+# 3. Launcher mode
+mode = sh("bash scripts/dev --check 2>/dev/null | grep mode")
+state["launch_mode"] = mode.split(":")[-1].strip() if mode else "unknown"
+
+# 4. Services
+def up(port):
+    r = sh(f"nc -z -G 2 localhost {port} 2>/dev/null && echo up || echo down")
+    return r.strip()
+state["services"] = {
+    "tailscale_cli": "up" if sh("/opt/homebrew/bin/tailscale status 2>/dev/null | head -1").strip() else "down",
+    "postgres_5432": up(5432),
+    "smb_445": up(445),
+    "ssh_22": up(22),
+    "api_8000": up(8000),          # expected up when manually launched; state key, not failure
+}
+
+# 5. Tailscale node identity (name + IP should be stable)
+ts = sh("/opt/homebrew/bin/tailscale status 2>/dev/null | grep -E '^100\\.' | head -2")
+state["tailscale_nodes"] = sorted(l.split()[1] for l in ts.splitlines() if l.strip())
+
+# 6. SMB share registered
+share = sh("sharing -l 2>/dev/null | grep -c Exchange")
+state["exchange_share_registered"] = share.strip() or "0"
+
+# 7. Git identity
+state["git_branch"] = sh("git rev-parse --abbrev-ref HEAD")
+state["git_dirty_count"] = len([l for l in sh("git status --porcelain").splitlines() if l.strip()])
+
+# 8. Secret mode: token present in .env (name only, never value)
+state["bws_token_present"] = "yes" if os.path.exists(".env") and "BWS_ACCESS_TOKEN=" in open(".env").read() else "no"
+
+print(json.dumps(state, indent=2))
+PYEOF
+}
+
+# ---- modes ---------------------------------------------------------------
+
+case "${1:-}" in
+  --snapshot)
+    collect > "$BASELINE_FILE"
+    echo "✅ Baseline snapshot written: $BASELINE_FILE"
+    echo "   (commit it — drift against it is future signal)"
+    ;;
+  --verify)
+    if [ ! -f "$BASELINE_FILE" ]; then
+      echo "❌ No baseline recorded. Run: scripts/baseline --snapshot"; exit 1
+    fi
+    collect > /tmp/baseline_now.json
+    python3 - "$BASELINE_FILE" <<'PYEOF'
+import json, sys
+
+def flatten(d, prefix=""):
+    out = {}
+    for k, v in d.items():
+        key = f"{prefix}{k}"
+        if isinstance(v, dict): out.update(flatten(v, key + "."))
+        else: out[key] = v
+    return out
+
+base = flatten(json.load(open(sys.argv[1])))
+now  = flatten(json.load(open("/tmp/baseline_now.json")))
+
+# keys allowed to drift without failing (expected-variable state)
+SOFT = {"services.api_8000", "git_dirty_count"}
+
+drift = []
+for k in sorted(set(base) | set(now)):
+    b, n = base.get(k, "<absent>"), now.get(k, "<absent>")
+    if b != n:
+        (drift if k not in SOFT else []).append((k, b, n)) if k not in SOFT else None
+        if k in SOFT:
+            print(f"  ~ {k}: {b} → {n}   (soft drift, allowed)")
+        else:
+            print(f"  ✗ {k}: {b} → {n}")
+
+if drift:
+    print(f"\n❌ BASELINE DRIFT: {len(drift)} hard drift(s). Investigate before proceeding.")
+    sys.exit(1)
+print("\n✅ BASELINE HOLDING. You are still you.")
+PYEOF
+    ;;
+  *)
+    echo "── SOC Platform baseline ────────────────────────────"
+    collect
+    echo
+    echo "  snapshot: scripts/baseline --snapshot   (record known-good)"
+    echo "  verify:   scripts/baseline --verify     (drift check, exit 1 on hard drift)"
+    ;;
+esac

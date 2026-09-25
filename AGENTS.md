@@ -2,11 +2,14 @@
 
 *The boot file for a fresh agent session (or new human) on this repo + this Mac. Read this first; it encodes what cannot be derived from the code. Live state lives in the oracles (below) — never trust prose over them.*
 
+**Baseline test**: after macOS updates, reboots, or anything traumatic, run `scripts/baseline --verify`. Hard drift (services, mode, nodes, git branch) = investigate before proceeding; soft drift (manual API up/down, dirty-file count) is reported but allowed. After an *intentional* change, re-snapshot (`--snapshot`) and commit the new baseline.
+
 ## Recovery drill (first 5 commands)
 
 ```bash
 bash scripts/next        # computed to-do list + blockers (read-only)
 bash scripts/dev --check # config/secret mode (env-only vs bws), Python, port
+bash scripts/baseline --verify # am I still me? (drift check vs committed baseline; exit 1 = investigate)
 git status -sb && git log --oneline -5
 curl -s -m 3 http://localhost:8000/api/health   # local API (may be down — manual launch, see below)
 ```
