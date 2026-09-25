@@ -25,6 +25,30 @@ Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https:
 
 Drag and drop, both directions. If it fails: check Tailscale is connected first — that's 90% of failures.
 
+## How Dalton connects to Jay's Mac (reverse direction)
+
+Jay's node: **`justins-macbook-pro`** — `100.88.143.23` (full name `justins-macbook-pro.tail3e59ce.ts.net`; the short name won't resolve across tailnets, use the IP).
+
+**Status as of Sep 25, 2026:** SMB (445) is **already open** on his Mac — File Sharing is on. SSH (22) is closed.
+
+**Files (works now):**
+1. Finder → **⌘K** → `smb://100.88.143.23`
+2. Connect as **Registered User** with *Jay's* macOS username + password (he must share them with you directly — guest was rejected when last tested)
+3. Open the share(s) his Mac offers. **If you only see his Public folder:** he needs to add the folder he intends to share — System Settings → General → Sharing → File Sharing → **(i)** → **Shared Folders** → **+**. Also check **Options…** there: "Share files and folders using SMB" checked AND his user account checked beneath it (the #1 silent breaker).
+4. Mounted volumes appear in Finder sidebar under **Locations**. Eject when done; re-mount anytime with ⌘K (or add to Login Items for auto-mount).
+
+**SSH into his Mac (needs him to flip one toggle first):**
+- He enables: System Settings → General → Sharing → **Remote Login**
+- Password path (works immediately): `ssh <jays-macos-username>@100.88.143.23` with his password
+- Key path (no password): send him YOUR public key (`cat ~/.ssh/id_ed25519.pub` — the `.pub` file only); he appends it to HIS `~/.ssh/authorized_keys`; then you connect with `ssh <his-username>@100.88.143.23` keyless. (Key generation happens on the client — yours already exists.)
+- ⚠️ If he ever creates a new account for you via terminal commands, the SecureToken phantom-expiry trap applies on HIS machine too — insist on GUI-created accounts (System Settings → Users & Groups).
+
+**Quick probes from Dalton's Mac:**
+```bash
+for p in 445 548 22; do nc -z -G 2 100.88.143.23 $p >/dev/null 2>&1 && echo "$p OPEN" || echo "$p closed"; done
+/opt/homebrew/bin/tailscale ping justins-macbook-pro.tail3e59ce.ts.net   # expect direct, ~4-12ms (same LAN)
+```
+
 ## Accounts on Dalton's Mac
 
 | Account | Purpose | Status |
@@ -81,3 +105,4 @@ open https://login.tailscale.com/admin/machines
 2. If Tailscale down: `sudo launchctl kickstart -k system/sh.brew.tailscale`
 3. If share missing: System Settings → General → Sharing → File Sharing on; verify `sharing -l`
 4. If Jay can't connect: his Tailscale icon connected? Then `⌘K` again.
+5. If Dalton can't reach Jay's share: probe ports (see reverse-direction section) — if 445 is closed, *his* File Sharing got toggled off.
