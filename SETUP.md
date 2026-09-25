@@ -25,7 +25,9 @@ Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https:
 
 Drag and drop, both directions. If it fails: check Tailscale is connected first — that's 90% of failures.
 
-## How Dalton connects to Jay's Mac (reverse direction)
+## How Dalton connects to Jay's Mac (reverse direction) — OPTIONAL
+
+> **When to use this at all: rarely.** Exchange is the canonical drop zone — the everyday workflow never needs this section. Only relevant for reading Jay's files *in place* on his disk without copying them into Exchange. Note the asymmetry: Exchange lives on Dalton's disk (Jay writes consume Dalton's space; Jay can't reach Exchange when Dalton's Mac is asleep). Mounting Jay's share makes *his* files available whenever *his* Mac is up.
 
 Jay's node: **`justins-macbook-pro`** — `100.88.143.23` (full name `justins-macbook-pro.tail3e59ce.ts.net`; the short name won't resolve across tailnets, use the IP).
 
