@@ -22,6 +22,8 @@
         ></header-nav>
 
         <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
+            <splunk-boundary-widget></splunk-boundary-widget>
+
             <!-- Tools -->
             <tools-tab
                 v-if="currentTab === 'tools'"
@@ -326,6 +328,7 @@
 
     <!-- components (UI) -->
     <script src="components/HeaderNav.js?v=9"></script>
+    <script src="components/SplunkBoundaryWidget.js?v=1"></script>
     <script src="components/ToolsTab.js?v=11"></script>
     <script src="components/DatabaseTab.js?v=26"></script>
     <script src="components/AnalysisTab.js?v=11"></script>

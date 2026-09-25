@@ -159,7 +159,7 @@ def get_splunk_boundary_status():
     return splunk_boundary.status()
 
 
-@app.post("/api/splunk-boundary/admit", tags=["System"])
+@app.post("/api/splunk-boundary/admit", tags=["System"], dependencies=[Depends(require_api_key)])
 def admit_splunk_file(file: UploadFile = File(...)):
     """Admit a Splunk export through the boundary (validate -> quarantine -> ingest)."""
     if splunk_boundary.current_mode() == "quarantined":
@@ -190,7 +190,7 @@ def admit_splunk_file(file: UploadFile = File(...)):
     return result
 
 
-@app.delete("/api/splunk-boundary/batches/{batch_id}", tags=["System"])
+@app.delete("/api/splunk-boundary/batches/{batch_id}", tags=["System"], dependencies=[Depends(require_api_key)])
 def purge_splunk_batch(batch_id: str):
     """Purge one admitted batch: staged files and its ingested DB rows."""
     try:

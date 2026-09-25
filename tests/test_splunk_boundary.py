@@ -247,3 +247,23 @@ def test_http_status_endpoint():
 def test_http_purge_rejects_malformed_id():
     resp = _client().delete("/api/splunk-boundary/batches/not-a-batch")
     assert resp.status_code == 400
+
+
+def test_http_write_endpoints_require_api_key(monkeypatch):
+    """The purge/admit HTTP surface sits behind the API-key gate.
+
+    With API_KEY configured, unauthenticated writes must 401 before any
+    handler logic runs. (With no key configured the gate is a no-op for
+    local dev — covered elsewhere.)
+    """
+    from api import main as api_main
+
+    monkeypatch.setattr(api_main, "_API_KEY", "test-secret-key")
+    client = _client()
+    admit = client.post(
+        "/api/splunk-boundary/admit",
+        files={"file": ("x.csv", io.BytesIO(b"a,b\n1,2\n"), "text/csv")},
+    )
+    purge = client.delete("/api/splunk-boundary/batches/20260925T120000Z-abcdef01")
+    assert admit.status_code == 401
+    assert purge.status_code == 401

@@ -16,6 +16,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
 
     components: {
         'header-nav': window.HeaderNav,
+        'splunk-boundary-widget': window.SplunkBoundaryWidget,
         'tools-tab': window.ToolsTab,
         'database-tab': window.DatabaseTab,
         'analysis-tab': window.AnalysisTab,
