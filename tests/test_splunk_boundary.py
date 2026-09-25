@@ -181,6 +181,40 @@ def test_purge_rejects_malformed_batch_id():
         sb.purge_batch("../../etc/passwd")
 
 
+def test_purge_prefers_ids_over_window(tmp_path, monkeypatch):
+    """Manifests with inserted_ids must purge by exact ids — ingest-time
+    windows can overlap between rapid consecutive batches, so window-based
+    deletion could eat a neighboring batch's rows."""
+    monkeypatch.setattr(sb, "_delete_events_by_ids", lambda ids: len(ids))
+    staging = sb.staging_dir()
+    batch_id = "20260925T120000Z-abcdef01"
+    (staging / f"{batch_id}-data.csv").write_text("x", encoding="utf-8")
+    (staging / f"{batch_id}-manifest.json").write_text(json.dumps({
+        "batch_id": batch_id,
+        "staged_path": str(staging / f"{batch_id}-data.csv"),
+        "inserted_ids": [11, 22],
+        "ingest_window": ["2026-09-25T12:00:00", "2026-09-25T12:10:00"],
+    }), encoding="utf-8")
+    result = sb.purge_batch(batch_id)
+    assert result["purge_strategy"] == "ids"
+    assert result["events_deleted"] == 2
+
+
+def test_purge_window_fallback_for_legacy_manifest(tmp_path, monkeypatch):
+    """Pre-ids manifests (no inserted_ids) still purge via their window."""
+    monkeypatch.setattr(sb, "_delete_events_in_window", lambda window: 5)
+    staging = sb.staging_dir()
+    batch_id = "20260925T120000Z-abcdef02"
+    (staging / f"{batch_id}-manifest.json").write_text(json.dumps({
+        "batch_id": batch_id,
+        "staged_path": str(staging / f"{batch_id}-data.csv"),
+        "ingest_window": ["2026-09-25T12:00:00", "2026-09-25T12:10:00"],
+    }), encoding="utf-8")
+    result = sb.purge_batch(batch_id)
+    assert result["purge_strategy"] == "window"
+    assert result["events_deleted"] == 5
+
+
 def test_list_batches_roundtrip(tmp_path, monkeypatch):
     _fake_ingest(monkeypatch)
     sb.admit_file(_make_csv(tmp_path, name="one.csv"))

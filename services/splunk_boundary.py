@@ -217,6 +217,7 @@ def ingest_csv_events(
 
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
+    inserted: list = []
     try:
         with open(source, "r", encoding="utf-8", errors="ignore") as fh:
             reader = _csv.DictReader(fh)
@@ -268,15 +269,15 @@ def ingest_csv_events(
                         stats["rows_skipped"] += 1
                         continue
 
-                    session.add(
-                        SplunkEvent(
-                            sourcetype=sourcetype,
-                            source=src,
-                            host=host,
-                            raw=raw[:2000],
-                            timestamp=ts,
-                        )
+                    event = SplunkEvent(
+                        sourcetype=sourcetype,
+                        source=src,
+                        host=host,
+                        raw=raw[:2000],
+                        timestamp=ts,
                     )
+                    session.add(event)
+                    inserted.append(event)
                     stats["rows_inserted"] += 1
                     if stats["rows_inserted"] % 50 == 0:
                         session.commit()
@@ -284,6 +285,7 @@ def ingest_csv_events(
                     stats["rows_skipped"] += 1
                     stats["errors"].append(f"Row {row_num}: {str(exc)[:100]}")
             session.commit()
+            stats["inserted_ids"] = [obj.id for obj in inserted]
 
         # Guard against silent total failure: if the database itself is
         # broken (missing tables, connection loss), every row lands in
@@ -337,6 +339,7 @@ def ingest_manifest(manifest: Dict[str, Any]) -> Dict[str, Any]:
     result["ingest_window"] = [t0.isoformat(), t1.isoformat()]
     manifest["ingest"] = result
     manifest["ingest_window"] = result["ingest_window"]
+    manifest["inserted_ids"] = result.get("inserted_ids") or []
     (staging_dir() / f"{manifest['batch_id']}-manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"
     )
@@ -403,6 +406,7 @@ def ingest_json_notables(
 
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
+    inserted: list = []
     try:
         stats["success"] = True
         for index, obj in enumerate(objects, start=1):
@@ -445,15 +449,15 @@ def ingest_json_notables(
                     stats["rows_skipped"] += 1
                     continue
 
-                session.add(
-                    SplunkEvent(
-                        sourcetype=sourcetype,
-                        source=src,
-                        host=host,
-                        raw=raw[:2000],
-                        timestamp=ts,
-                    )
+                event = SplunkEvent(
+                    sourcetype=sourcetype,
+                    source=src,
+                    host=host,
+                    raw=raw[:2000],
+                    timestamp=ts,
                 )
+                session.add(event)
+                inserted.append(event)
                 stats["rows_inserted"] += 1
                 if stats["rows_inserted"] % 50 == 0:
                     session.commit()
@@ -461,6 +465,7 @@ def ingest_json_notables(
                 stats["rows_skipped"] += 1
                 stats["errors"].append(f"Event {index}: {str(exc)[:100]}")
         session.commit()
+        stats["inserted_ids"] = [obj.id for obj in inserted]
 
         if (
             stats["rows_read"] > 0
@@ -499,9 +504,32 @@ def list_batches() -> List[Dict[str, Any]]:
     return out
 
 
-def _delete_events_in_window(window: List[str]) -> int:
-    """Delete SplunkEvents ingested within the batch window. Isolated so the
+def _delete_events_by_ids(ids: List[int]) -> int:
+    """Delete exactly the SplunkEvents inserted by a batch. Isolated so the
     boundary logic stays testable without a database."""
+    if not ids:
+        return 0
+    SplunkEvent, SessionLocal = _load_db_module()
+    session = SessionLocal()
+    try:
+        deleted = (
+            session.query(SplunkEvent)
+            .filter(SplunkEvent.id.in_(ids))
+            .delete(synchronize_session=False)
+        )
+        session.commit()
+        return deleted
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _delete_events_in_window(window: List[str]) -> int:
+    """Legacy fallback: delete SplunkEvents by ingest-time window (used only
+    for manifests written before inserted_ids existed — windows can overlap
+    between rapid consecutive batches, so id-based purge is preferred)."""
     SplunkEvent, SessionLocal = _load_db_module()
     start, end = (datetime.fromisoformat(w) for w in window)
     session = SessionLocal()
@@ -527,19 +555,29 @@ def purge_batch(batch_id: str) -> Dict[str, Any]:
 
     manifest_path = staging_dir() / f"{batch_id}-manifest.json"
     window: Optional[List[str]] = None
+    inserted_ids: Optional[List[int]] = None
     if manifest_path.is_file():
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         window = manifest.get("ingest_window")
+        raw_ids = manifest.get("inserted_ids")
+        if isinstance(raw_ids, list):
+            inserted_ids = [int(i) for i in raw_ids if isinstance(i, (int, float))]
         staged = Path(manifest.get("staged_path", ""))
         if staged.is_file():
             staged.unlink()
         manifest_path.unlink()
 
-    deleted_events = _delete_events_in_window(window) if window else 0
+    if inserted_ids is not None:
+        deleted_events = _delete_events_by_ids(inserted_ids)
+    elif window:
+        deleted_events = _delete_events_in_window(window)
+    else:
+        deleted_events = 0
     return {
         "batch_id": batch_id,
         "staged_removed": not manifest_path.is_file(),
         "events_deleted": deleted_events,
+        "purge_strategy": "ids" if inserted_ids is not None else ("window" if window else "none"),
     }
 
 
