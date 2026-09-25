@@ -101,7 +101,7 @@
 
 ### 12. `triage.db` (SQLite) in working tree
 - **What:** Legacy SQLite DB, gitignored. Runtime no longer uses it (per `db/models.py`), but if it holds real triage data it's another sensitive file on disk.
-- **Remediation:** [ ] Keep as artifact or delete — decide deliberately.
+- **Remediation:** [x] **Resolved Sep 25, 2026 — archived** to `splunk-es-backup-toolkit/triage.db` (the exact path `RUNBOOK.md`'s restore procedure expects). Audit before moving: all-TEST simulated data (7 triage results, 12 Splunk events, rest empty), SQLite `integrity_check: ok`. Working tree is now clear of it; binary stays gitignored as a provided artifact.
 
 ### 13. CORS_ORIGINS only has the Vercel prod URL
 - **What:** Local dev UI may not be in the allowlist for local testing against a remote backend.
