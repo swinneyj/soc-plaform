@@ -1,0 +1,6 @@
+# Development/test-only dependencies. Runtime deps live in requirements.txt.
+# Install with:  pip install -r requirements-dev.txt
+#
+# httpx is required by starlette's TestClient (used by the API-level tests).
+pytest
+httpx

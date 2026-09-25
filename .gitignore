@@ -40,3 +40,4 @@ web/Old/app.js-pre-modular-monolith.bak
 *.orig
 *~
 .vercel
+.venv314/

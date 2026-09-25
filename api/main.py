@@ -5,7 +5,8 @@ Serves web UI at root path. Includes database and AI analysis endpoints.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Query
+from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Query, Depends, Header
+from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -71,11 +72,48 @@ async def lifespan(app: FastAPI):
         app.state.database_startup_error = str(exc)
     yield
 
+# Interactive API docs are a recon convenience for local development but an
+# attack-surface map in production, so they are disabled unless explicitly
+# enabled (set ENABLE_DOCS=1 in .env for local development).
+_enable_docs = os.environ.get("ENABLE_DOCS", "") == "1"
+
+# ---------------------------------------------------------------------------
+# API-key auth for dangerous routes.
+#
+# The public deployment exposes process-execution and mutation endpoints that
+# must never be reachable without a shared secret. Setting API_KEY activates
+# gating on those routes; leaving it unset keeps local development friction
+# free (localhost-only exposure), matching the previous behavior.
+#
+# Deliberately NOT gated (read-only / health / static UI): /api/health,
+# /api/db/stats and other GETs, the mounted web UI. Gating those can follow
+# once the frontend learns to send the key.
+# ---------------------------------------------------------------------------
+_API_KEY = os.environ.get("API_KEY", "").strip()
+
+
+def require_api_key(x_api_key: Optional[str] = Header(default=None), api_key: Optional[str] = Query(default=None)) -> None:
+    """FastAPI dependency: reject requests unless they present the API key.
+
+    Accepts the key as either the X-API-Key header or an ?api_key= query
+    parameter — either one passes. When API_KEY is unset the dependency is a
+    no-op so local dev and existing tests keep working unchanged.
+    """
+    if not _API_KEY:
+        return
+    if x_api_key == _API_KEY or api_key == _API_KEY:
+        return
+    raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+
 app = FastAPI(
     title="SOC Platform API",
     lifespan=lifespan,
     description="REST API for SOC Orchestration Platform tools and workflows with local AI analysis",
     version="1.0.0",
+    docs_url="/docs" if _enable_docs else None,
+    redoc_url=None,
+    openapi_url="/openapi.json" if _enable_docs else None,
 )
 
 # The hosted branch preview can call a locally running API through a secure
@@ -91,8 +129,10 @@ if cors_origins:
         CORSMiddleware,
         allow_origins=cors_origins,
         allow_credentials=False,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        # The frontend uses exactly these methods and headers (see
+        # web/modules/api.js); keep the allowlist tight instead of "*".
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Content-Type", "Accept"],
     )
 
 from api.routes.system import router as system_router
@@ -2712,7 +2752,7 @@ def get_tool(tool_name: str):
         arguments=tool.get("arguments", [])
     )
 
-@app.post("/api/tools/regression", tags=["Tools"])
+@app.post("/api/tools/regression", tags=["Tools"], dependencies=[Depends(require_api_key)])
 def run_tool_catalog_regression():
     """Run safe offline regression checks for the registered tool catalog."""
     runner = os.path.join(get_platform_root(), "scripts", "run_tool_catalog_regression.py")
@@ -2729,7 +2769,7 @@ def run_tool_catalog_regression():
     payload["exit_code"] = result.returncode
     return payload
 
-@app.post("/api/execute", response_model=JobResponse, tags=["Execution"])
+@app.post("/api/execute", response_model=JobResponse, tags=["Execution"], dependencies=[Depends(require_api_key)])
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
     registry = load_registry()
@@ -2843,7 +2883,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
         job_list = [j for j in job_list if j["status"] == status]
     return [JobResponse(**j) for j in job_list]
 
-@app.delete("/api/jobs/{job_id}", tags=["Execution"])
+@app.delete("/api/jobs/{job_id}", tags=["Execution"], dependencies=[Depends(require_api_key)])
 def delete_job(job_id: str):
     """Delete one job from memory and the persisted tool-run history."""
     deleted_job_ids.add(job_id)
@@ -2860,7 +2900,7 @@ def delete_job(job_id: str):
         print(f"[tool_runs] Could not delete persisted job: {exc}", file=sys.stderr)
     return {"deleted": job_id}
 
-@app.delete("/api/jobs", tags=["Execution"])
+@app.delete("/api/jobs", tags=["Execution"], dependencies=[Depends(require_api_key)])
 def clear_jobs():
     """Clear all in-memory and persisted tool-run history."""
     deleted_job_ids.update(jobs.keys())
@@ -4804,7 +4844,9 @@ def analyze_case(request: AnalyzeRequest):
             temperature=0.1,
             # Section 4 (Per-Evidence Assessment) adds a per-entry line each;
             # 320 tokens truncated it mid-sentence, losing later verdicts.
-            options={"num_predict": 640},
+            # The service default (OLLAMA_NUM_PREDICT env) is 500, so the
+            # per-card flow explicitly needs the larger budget.
+            options={"num_predict": int(os.environ.get("OLLAMA_ANALYSIS_NUM_PREDICT", "640"))},
         )
         # Report the tag actually used after auto-resolution so API consumers
         # and the audit trail reflect reality, not the (possibly empty)
@@ -4817,51 +4859,6 @@ def analyze_case(request: AnalyzeRequest):
         response_text = result["response"] or ""
         phase2_queries = _extract_phase2_queries(response_text)
 
-        if False and not phase2_queries:
-            fallback_prompt_parts = [
-                "You are generating follow-up SOC investigation queries from an existing analysis.",
-                "Return ONLY a JSON array. Do not include markdown fences, prose, headings, or commentary.",
-                "Each JSON item must have keys: title, spl, description.",
-                "Generate 1-3 high-value SPL queries that would most directly change the disposition decision between true positive, benign positive, false positive, or undetermined.",
-                "Prefer confirmatory or falsifying checks over broad exploratory searches.",
-                f"Case ID: {case.case_id}",
-                f"Rule: {case.rule_name}",
-            ]
-            if detection_rule:
-                fallback_prompt_parts.append(f"Rule Description: {detection_rule.description}")
-                if detection_rule.drilldown_fields:
-                    fallback_prompt_parts.append(f"Key Drilldown Fields: {detection_rule.drilldown_fields}")
-            if supportive_query_defs:
-                fallback_prompt_parts.append("Candidate Supportive Query Templates:")
-                for idx, q in enumerate(supportive_query_defs[:5], 1):
-                    fallback_prompt_parts.append(f"[{idx}] {q.title}: {q.spl_query}")
-            if source_notable_payload and source_notable_payload.get("fields"):
-                fallback_prompt_parts.append("Case Fields:")
-                for k, v in list(source_notable_payload["fields"].items())[:20]:
-                    fallback_prompt_parts.append(f"- {k}: {v}")
-            if supportive_results:
-                fallback_prompt_parts.append("Saved Investigation Evidence:")
-                for idx, res in enumerate(supportive_results[:5], 1):
-                    fallback_prompt_parts.append(f"[{idx}] {res['query_title']} ({res['source_system']}): {json.dumps(res['raw_result'])}")
-            fallback_prompt_parts.append("Previous/Current Analysis:")
-            fallback_prompt_parts.append(prior_analysis or response_text[:6000])
-            fallback_prompt_parts.append(
-                "Return valid JSON like: [{\"title\":\"...\",\"spl\":\"search ...\",\"description\":\"...\"}]"
-            )
-
-            fallback_result = client.generate("\n".join(fallback_prompt_parts), model=model)
-            if fallback_result.get("success"):
-                fallback_response_text = (fallback_result.get("response") or "").strip()
-                try:
-                    parsed_fallback = json.loads(fallback_response_text)
-                    if isinstance(parsed_fallback, list):
-                        phase2_queries = _extract_phase2_queries(
-                            "PHASE2_QUERIES_JSON_START\n"
-                            + fallback_response_text
-                            + "\nPHASE2_QUERIES_JSON_END"
-                        )
-                except Exception:
-                    phase2_queries = _extract_phase2_queries(fallback_response_text)
 
         already_run_titles = _already_run_supportive_titles(prompt_supportive_results)
         phase_query_defs = supportive_query_defs
