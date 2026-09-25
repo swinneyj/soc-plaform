@@ -359,3 +359,13 @@ Refer to:
 - FastAPI docs: https://fastapi.tiangolo.com/
 - Docker docs: https://docs.docker.com/
 - docker-compose: https://docs.docker.com/compose/
+
+## Runtime versions (Sept 25)
+
+- **Local dev**: Python 3.14 (`.venv314`; see `.venv314/` README note in services/mock_splunk)
+- **Docker**: `python:3.14-slim` (Dockerfile)
+- **Vercel (production)**: platform default (3.12) — deliberately. Do NOT add a
+  `.python-version` file at the repo root: `vercel build` reads it, and adding
+  `3.14` broke every deployment starting at commit `00c7e69` (see GitHub
+  Actions history). If you want prod on a newer runtime, verify it on a
+  preview deploy first, then land the file deliberately.
