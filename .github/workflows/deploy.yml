@@ -17,6 +17,26 @@ jobs:
       - name: Checkout Project Code
         uses: actions/checkout@v4
 
+      - name: Baseline check (repo-state guard)
+        run: |
+          # Fast pre-deploy sanity: the repo layout the platform depends on.
+          # Machine-side checks (tailscale, postgres, SMB, API) are physical
+          # and belong to scripts/baseline on the dev Mac, not CI.
+          FAIL=0
+          for f in scripts/dev scripts/pull-secrets scripts/baseline SETUP.md AGENTS.md .baseline.json; do
+            [ -e "$f" ] || { echo "::error::missing platform artifact: $f"; FAIL=1; }
+          done
+          [ -x scripts/dev ] || { echo "::error::scripts/dev is not executable"; FAIL=1; }
+          python3 -c "import json; json.load(open('.baseline.json'))" 2>/dev/null \
+            || { echo "::error::.baseline.json is missing or invalid JSON"; FAIL=1; }
+          TESTS=$(ls tests/test_*.py 2>/dev/null | wc -l)
+          [ "$TESTS" -ge 1 ] || { echo "::error::no test files found"; FAIL=1; }
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Baseline repo-state guard failed — fix before deploying"
+            exit 1
+          fi
+          echo "Baseline repo-state guard passed."
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
