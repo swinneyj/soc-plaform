@@ -1,0 +1,63 @@
+#!/usr/bin/env bash
+# scripts/next — "what do I have to do?" answered automatically.
+#
+# Read-only: inspects repo/env/git state and prints the remaining human
+# actions with exact commands. Run it anytime; it never changes anything.
+
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+OK="  ✓ "
+TODO="  ▶ "
+WAIT="  ⏳ "
+
+echo "── SOC Platform: what's left for YOU ──────────────────"
+
+# 1. BWS onboarding -------------------------------------------------------
+if grep -qE '^BWS_ACCESS_TOKEN=.+' .env 2>/dev/null; then
+    echo "${OK}BWS: token in .env — run scripts/pull-secrets if you haven't, then scripts/dev"
+elif [ -n "${BWS_INVITE_HINT:-}" ]; then
+    echo "${WAIT}BWS: invite pending (coworker) — when it lands, see .env.bws.template (10 min)"
+else
+    echo "${WAIT}BWS: waiting on coworker's org invite/token → then: accept invite, create"
+    echo "        machine account 'dalton-laptop', generate token, put it in .env as"
+    echo "        BWS_ACCESS_TOKEN=...  (walkthrough in .env.bws.template)"
+fi
+
+# 2. New Neon URL ---------------------------------------------------------
+if grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
+    echo "${OK}Neon: DATABASE_URL points at Neon ✓"
+elif grep -qE '^DATABASE_URL=.*neon\.tech' .env.example 2>/dev/null; then
+    echo "${WAIT}Neon: new URL in .env.example? — copy it into .env"
+else
+    echo "${TODO}Neon: when the new URL reaches you (call/Signal/BWS — NOT email/chat):"
+    echo "        echo 'DATABASE_URL=<new url>' >> .env   # then update Vercel env vars too"
+fi
+
+# 3. Vercel env vars ------------------------------------------------------
+if grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
+    echo "${TODO}Vercel: confirm DATABASE_URL in project settings matches the new Neon URL"
+else
+    echo "${WAIT}Vercel: env-var update rides along with the Neon URL (don't skip it)"
+fi
+
+# 4. Dependabot -----------------------------------------------------------
+if [ -f .github/dependabot.yml ]; then
+    echo "${OK}Dependabot: config committed — just confirm alerts are enabled in repo Settings → Security"
+else
+    echo "${WAIT}Dependabot: config lands via git; then Settings → Security → Dependabot → Enable"
+fi
+
+# 5. API key activation ---------------------------------------------------
+if [ -n "${API_KEY:-}" ] && [ "$API_KEY" != "replace-with-a-long-random-password" ]; then
+    echo "${OK}API gate: API_KEY present in .env — mirror it in Vercel to activate on prod"
+else
+    echo "${WAIT}API gate: dormant by design — activate when you + coworker agree (set API_KEY"
+    echo "        in Vercel; the frontend already knows how to send it)"
+fi
+
+# 6. Hygiene reminders ----------------------------------------------------
+[ -f triage.db ] && echo "${WAIT}triage.db still in the tree — keep or delete, decide deliberately"
+echo ""
+echo "   (read-only check — nothing was changed. Details: docs/security-remediation-tracker.md)"

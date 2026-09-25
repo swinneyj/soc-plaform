@@ -1,0 +1,11 @@
+version: 2
+updates:
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    # SOC platform runtime deps: fastapi, starlette, uvicorn, sqlalchemy,
+    # psycopg, cryptography, redis, python-pptx, requests.
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
