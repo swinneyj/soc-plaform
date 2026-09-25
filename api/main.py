@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 import os
+import shutil
 import sys
 import json
 import uuid
@@ -50,6 +51,7 @@ from services.analysis_service import (
     normalize_phase2_text as _normalize_phase2_text,
     sanitize_analysis_text as _sanitize_analysis_text,
 )
+from services import splunk_boundary
 
 # _normalize_rule_match_text is the same normalization as
 # normalize_phase2_text (lowercase, non-alphanumerics -> spaces); the old
@@ -137,6 +139,64 @@ if cors_origins:
 
 from api.routes.system import router as system_router
 app.include_router(system_router)
+
+
+# ---------------------------------------------------------------------------
+# Splunk boundary ("the latch") — HTTP surface
+#
+# Splunk is the sensitive system of record; this is the single HTTP doorway
+# for its data. In the default `quarantined` mode every endpoint below
+# refuses to operate — data enters only via host-local tooling (the folder
+# watcher / CSV ingestor CLI). Flipping the latch to `restricted` (an
+# explicit, audited config change) enables browser admission behind the
+# API-key gate.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/splunk-boundary/status", tags=["System"])
+def get_splunk_boundary_status():
+    """Inspect the latch: mode, staging, and admitted batches."""
+    return splunk_boundary.status()
+
+
+@app.post("/api/splunk-boundary/admit", tags=["System"])
+def admit_splunk_file(file: UploadFile = File(...)):
+    """Admit a Splunk export through the boundary (validate -> quarantine -> ingest)."""
+    if splunk_boundary.current_mode() == "quarantined":
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Splunk boundary is quarantined: HTTP admission is disabled. "
+                "Use host-local ingest tooling, or set SPLUNK_BOUNDARY_MODE=restricted."
+            ),
+        )
+    import tempfile
+
+    suffix = Path(file.filename or "upload").suffix.lower()
+    with tempfile.NamedTemporaryFile(prefix="boundary-", suffix=suffix, delete=False) as tmp:
+        shutil.copyfileobj(file.file, tmp)
+        tmp_path = tmp.name
+    try:
+        result = splunk_boundary.admit_file(
+            tmp_path, source_label="http-upload:" + (file.filename or "unknown")
+        )
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+    if not (result.get("ingest") or {}).get("success", False):
+        raise HTTPException(status_code=400, detail=result.get("ingest", {}))
+    return result
+
+
+@app.delete("/api/splunk-boundary/batches/{batch_id}", tags=["System"])
+def purge_splunk_batch(batch_id: str):
+    """Purge one admitted batch: staged files and its ingested DB rows."""
+    try:
+        return splunk_boundary.purge_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 # In-memory job tracking (in production, use Redis)
 jobs: Dict[str, Dict[str, Any]] = {}
