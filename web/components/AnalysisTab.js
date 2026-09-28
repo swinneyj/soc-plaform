@@ -990,6 +990,11 @@ window.AnalysisTab = {
                                             :title="item.ai_verdict_rationale || 'Model-assessed verdict for this entry'"
                                         >AI ASSESSMENT</span>
                                         <span
+                                            v-if="item.ai_verdict_source === 'evidence_json'"
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold bg-violet-950 text-violet-200 border-violet-600"
+                                            :title="item.ai_verdict_rationale || 'Structured verdict from the model PHASE2_EVIDENCE_JSON block'"
+                                        >EVIDENCE JSON</span>
+                                        <span
                                             v-if="item.result_status"
                                             class="text-[10px] px-1.5 py-0.2 rounded border font-semibold"
                                             :class="{
@@ -1012,6 +1017,8 @@ window.AnalysisTab = {
                             </div>
                             <p v-if="item.summary" class="text-xs text-gray-300 mt-2 font-mono whitespace-pre-wrap">{{ item.summary }}</p>
                             <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 mt-1 italic">AI: {{ item.ai_verdict_rationale }}</p>
+                            <p v-if="item.ai_verdict_source === 'evidence_json' && item.ai_verdict_rationale" class="text-xs text-violet-300 mt-1 italic">AI (JSON): {{ item.ai_verdict_rationale }}</p>
+                            <p v-if="item.confidence_delta_hint && item.confidence_delta_hint !== 'none'" class="text-[11px] font-semibold mt-1" :class="item.confidence_delta_hint === 'increase' ? 'text-red-300' : 'text-emerald-300'">Confidence hint: {{ item.confidence_delta_hint }}</p>
                         </div>
                     </div>
                 </div>
@@ -1191,8 +1198,9 @@ window.AnalysisTab = {
                         <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
                         <span class="text-[10px] uppercase text-gray-400">{{ item.result_status || 'success' }}</span>
                     </div>
-                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span> <span v-if="item.ai_verdict_source === 'per_card'" class="ml-1 text-[10px] px-1 rounded bg-indigo-950 text-indigo-200 border border-indigo-800" :title="item.ai_verdict_rationale || 'Model-assessed'">AI</span></p>
+                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span> <span v-if="item.ai_verdict_source === 'per_card'" class="ml-1 text-[10px] px-1 rounded bg-indigo-950 text-indigo-200 border border-indigo-800" :title="item.ai_verdict_rationale || 'Model-assessed'">AI</span><span v-if="item.ai_verdict_source === 'evidence_json'" class="ml-1 text-[10px] px-1 rounded bg-violet-950 text-violet-200 border border-violet-600 font-semibold" :title="item.ai_verdict_rationale || 'Structured PHASE2_EVIDENCE_JSON verdict'">AI·JSON</span></p>
                     <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 italic">AI: {{ item.ai_verdict_rationale }}</p>
+                    <p v-if="item.ai_verdict_source === 'evidence_json' && item.ai_verdict_rationale" class="text-xs text-violet-300 italic">AI (JSON): {{ item.ai_verdict_rationale }}</p>
                     <p class="text-xs text-gray-300 whitespace-pre-wrap">{{ item.summary || 'Saved result; no observation summary recorded.' }}</p>
                 </div>
             </div>

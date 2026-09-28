@@ -48,6 +48,7 @@ Complete the "analyst brings logs, AI decides" principle at the per-entry level.
 - **Scoring:** `_infer_direction_from_analysis` becomes the fallback; per-card `ai_direction` takes precedence when present. Aggregate rationale feeds the Investigative Analysis section.
 - **UI:** evidence timeline shows the AI's per-card verdict chip with rationale tooltip; analyst still enters nothing but execution facts.
 - **Tests:** prompt contract (JSON block present), parser (malformed → fallback), scoring precedence.
+- **Polish (done):** `confidence_delta_hint` nudges disposition confidence ±0.02 per structured verdict, capped at ±0.06 aggregate, applied before disposition caps and the final clamp (hints refine but never outweigh the ledger or breach guardrails). Serializer exposes `confidence_hints` counts; UI shows a distinct violet **EVIDENCE JSON** chip (vs indigo **AI ASSESSMENT**) plus the hint on evidence cards.
 
 **Size:** M–L. **Depends on:** nothing; can start after Phase 1 helper de-dup (touches the same code).
 

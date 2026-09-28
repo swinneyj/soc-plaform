@@ -7,8 +7,11 @@ Covers the three contract surfaces from the development plan:
      with the verdict persisted into raw_result on the analyze flow.
 """
 
+import json
 import sys
+from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -17,7 +20,10 @@ from services.analysis_service import (  # noqa: E402
     extract_phase2_evidence_json,
 )
 from services.investigation_state import (  # noqa: E402
+    CONFIDENCE_HINT_DELTA,
+    CONFIDENCE_HINT_MAX_IMPACT,
     _build_investigation_state,
+    _serialize_investigation_state_record,
 )
 
 
@@ -163,3 +169,102 @@ def test_unmatched_json_titles_are_ignored():
     entry = timeline[0]
     assert entry["finding_type"] == "refutes"
     assert entry["ai_verdict_source"] == "per_card"
+
+
+# ------------------------------------------------- confidence_delta_hint
+def _state_multi(hints):
+    """Build state from substantive evidence cards driven by structured
+    verdicts carrying the given confidence_delta_hint values."""
+    titles = ["Card One", "Card Two", "Card Three", "Card Four", "Card Five"][: max(len(hints), 2)]
+    evidence = [
+        {
+            "id": idx + 1,
+            "query_title": title,
+            "source_system": "splunk",
+            "raw_result": {"result_text": "observed", "result_status": "success"},
+            "created_at": "2026-09-28T00:00:0%d" % idx,
+        }
+        for idx, title in enumerate(titles)
+    ]
+    verdicts = [
+        {"title": title, "direction": "supports", "rationale": "r", "confidence_delta_hint": hint}
+        for title, hint in zip(titles, hints)
+    ]
+    return _build_investigation_state(
+        _make_case(),
+        "Initial Thoughts\nSomething.",
+        [],
+        evidence,
+        "initial",
+        {},
+        evidence_verdicts=verdicts,
+    )
+
+
+def test_hint_recorded_on_timeline_and_defaults_to_none_for_text_verdicts():
+    state = _state_multi(["increase", "none"])
+    timeline = state["evidence_summary"]["timeline"]
+    hints = {entry["title"]: entry["confidence_delta_hint"] for entry in timeline}
+    assert hints["Card One"] == "increase"
+    assert hints["Card Two"] == "none"
+
+
+def test_text_section_verdicts_never_carry_hints():
+    analysis = (
+        "Initial Thoughts\nSomething.\n\n"
+        "Per-Evidence Assessment\n"
+        "[1] Encoded Payload — direction=supports — from text section\n"
+    )
+    entry = _state(analysis, [])["evidence_summary"]["timeline"][0]
+    assert entry["ai_verdict_source"] == "per_card"
+    assert entry["confidence_delta_hint"] == "none"
+
+
+def test_increase_hints_raise_confidence():
+    baseline = _state_multi(["none", "none"])["disposition_confidence"]
+    boosted = _state_multi(["increase", "increase"])["disposition_confidence"]
+    assert boosted == round(baseline + 2 * CONFIDENCE_HINT_DELTA, 3)
+
+
+def test_decrease_hints_lower_confidence():
+    baseline = _state_multi(["none", "none"])["disposition_confidence"]
+    lowered = _state_multi(["decrease", "decrease"])["disposition_confidence"]
+    assert lowered == round(baseline - 2 * CONFIDENCE_HINT_DELTA, 3)
+
+
+def test_mixed_hints_cancel_out():
+    baseline = _state_multi(["none", "none"])["disposition_confidence"]
+    mixed = _state_multi(["increase", "decrease"])["disposition_confidence"]
+    assert mixed == baseline
+
+
+def test_hint_impact_is_capped_in_aggregate():
+    four_hints = _state_multi(["increase"] * 4)["disposition_confidence"]
+    five_hints = _state_multi(["increase"] * 5)["disposition_confidence"]
+    assert five_hints == four_hints  # 4*0.02 already exceeds the +0.06 cap
+    baseline = _state_multi(["none"] * 5)["disposition_confidence"]
+    assert four_hints == round(baseline + CONFIDENCE_HINT_MAX_IMPACT, 3)
+
+
+def test_serializer_exposes_confidence_hints():
+    record = SimpleNamespace(
+        case_id="TEST-X",
+        rule_id="r",
+        current_hypothesis="h",
+        provisional_disposition="malicious",
+        disposition_confidence=0.66,
+        loop_status="ready_for_disposition_review",
+        iteration_count=2,
+        unresolved_questions=json.dumps([]),
+        closure_blockers=json.dumps([]),
+        recommended_next_actions=json.dumps([]),
+        evidence_summary=json.dumps({"timeline": [
+            {"title": "A", "confidence_delta_hint": "increase"},
+            {"title": "B", "confidence_delta_hint": "decrease"},
+            {"title": "C", "confidence_delta_hint": "none"},
+        ]}),
+        last_analysis_stage="initial",
+        updated_at=datetime(2026, 9, 28),
+    )
+    out = _serialize_investigation_state_record(record)
+    assert out["confidence_hints"] == {"increase": 1, "decrease": 1}

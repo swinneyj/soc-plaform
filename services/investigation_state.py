@@ -220,6 +220,14 @@ def _is_substantive_evidence_value(value: str) -> bool:
 
 MAX_EVIDENCE_SUMMARY_CHARS = 2000
 
+# Phase 2 structured verdicts (PHASE2_EVIDENCE_JSON) may carry a
+# confidence_delta_hint ("increase" | "decrease"). Each hint nudges the
+# disposition confidence by a small fixed amount, capped in aggregate so
+# hints refine the score without ever outweighing the substantive evidence
+# ledger or breaching the disposition guardrails.
+CONFIDENCE_HINT_DELTA = 0.02
+CONFIDENCE_HINT_MAX_IMPACT = 0.06
+
 
 def _infer_direction_from_analysis(analysis_text: str) -> str:
     """Derive the evidence direction (supports/refutes/neutral) from the AI
@@ -385,6 +393,8 @@ def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
 def _serialize_investigation_state_record(record) -> Dict[str, Any]:
     if not record:
         return {}
+    summary = _parse_json_object(record.evidence_summary)
+    timeline_entries = summary.get("timeline") or []
     return {
         "case_id": record.case_id,
         "rule_id": record.rule_id,
@@ -396,7 +406,17 @@ def _serialize_investigation_state_record(record) -> Dict[str, Any]:
         "unresolved_questions": _parse_json_list(record.unresolved_questions),
         "closure_blockers": _parse_json_list(record.closure_blockers),
         "recommended_next_actions": _parse_json_list(record.recommended_next_actions),
-        "evidence_summary": _parse_json_object(record.evidence_summary),
+        "evidence_summary": summary,
+        "confidence_hints": {
+            "increase": sum(
+                1 for entry in timeline_entries
+                if entry.get("confidence_delta_hint") == "increase"
+            ),
+            "decrease": sum(
+                1 for entry in timeline_entries
+                if entry.get("confidence_delta_hint") == "decrease"
+            ),
+        },
         "last_analysis_stage": record.last_analysis_stage or "initial",
         "updated_at": record.updated_at.isoformat() if getattr(record, "updated_at", None) else None,
     }
@@ -558,11 +578,13 @@ def _build_investigation_state(
         structured = structured_verdicts_by_title.get(
             re.sub(r"\s+", " ", str(item_title).strip().lower())
         )
+        confidence_delta_hint = "none"
         if structured:
             finding_type = structured["direction"]
             per_card_verdicts_applied += 1
             per_card_rationale = structured.get("rationale") or ""
             ai_verdict_source = "evidence_json"
+            confidence_delta_hint = structured.get("confidence_delta_hint") or "none"
         elif per_card:
             finding_type = per_card["direction"]
             per_card_verdicts_applied += 1
@@ -638,6 +660,7 @@ def _build_investigation_state(
                 "finding_type": finding_type,
                 "ai_verdict_source": ai_verdict_source,
                 "ai_verdict_rationale": per_card_rationale,
+                "confidence_delta_hint": confidence_delta_hint,
                 "summary": observation_summary or "Pending analyst observation",
                 "has_substantive_observation": has_substantive,
                 "created_at": item.get("created_at"),
@@ -776,6 +799,25 @@ def _build_investigation_state(
         confidence = min(confidence, 0.75)  # Cap if questions unresolved
     if pending_evidence_count > 0:
         confidence -= min(0.08, pending_evidence_count * 0.02)
+
+    # Phase 2: bounded nudges from the model's per-card confidence hints.
+    # Only structured evidence_json verdicts carry hints (per-card text and
+    # the global heuristic default to "none"). Applied before the disposition
+    # caps and final clamp so the guardrails stay authoritative.
+    increase_hints = sum(
+        1 for entry in evidence_timeline
+        if entry.get("confidence_delta_hint") == "increase"
+    )
+    decrease_hints = sum(
+        1 for entry in evidence_timeline
+        if entry.get("confidence_delta_hint") == "decrease"
+    )
+    if increase_hints or decrease_hints:
+        hint_delta = (
+            min(increase_hints * CONFIDENCE_HINT_DELTA, CONFIDENCE_HINT_MAX_IMPACT)
+            - min(decrease_hints * CONFIDENCE_HINT_DELTA, CONFIDENCE_HINT_MAX_IMPACT)
+        )
+        confidence += hint_delta
 
     # Disposition caps
     if provisional_disposition in {"suspicious", "undetermined"}:
