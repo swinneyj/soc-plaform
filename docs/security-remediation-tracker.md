@@ -87,7 +87,7 @@
 ### 9. Python 3.9 venv (EOL) ✅ RESOLVED
 - **What:** Local `.venv` runs Python 3.9.6 (macOS CommandLineTools system Python). 3.9 is end-of-life.
 - **Status Sept 25 (session 2):** resolved. `.python-version` pins `3.14`, Dockerfile stages moved to `python:3.14-slim`, `CONTAINERIZATION.md` aligned (`00c7e69`). `.venv314` (3.14.7) runs the full suite; the old 3.9 venv also still passes, verified both ways. Docker build not verifiable on this machine (no docker CLI) — first `docker compose build` should be watched.
-- **Follow-up:** 3.14 surfaced deprecation warnings (SQLAlchemy/`datetime.utcnow()` call sites ~`api/main.py:3339`; Starlette prefers `httpx2` for TestClient) — small cleanup ticket before a future Python removes them.
+- **Follow-up:** 3.14 surfaced deprecation warnings (SQLAlchemy/`datetime.utcnow()` call sites ~`api/main.py:3339`; Starlette prefers `httpx2` for TestClient) — small cleanup ticket before a future Python removes them. **utcnow() portion resolved Sept 28, 2026** — see open item #5.
 
 ### 10. Pip is ancient in the venv ✅ RESOLVED
 - **What:** pip 21.2.4 flagged during install.
@@ -177,7 +177,7 @@
 - CORS origins are an explicit allowlist, not `*`
 - `allow_credentials=False` (reduces CSRF-style risk)
 - Every push secret-scanned before it left the machine (pattern: `npg_*` + password/token/secret assignments)
-- Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9
+- Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9 at the time; **124/124 as of Sept 28, 2026** (3 tests added since this note)
 - **Repo-wide credential sweep (Sept 28, 2026)**: pattern classes run across all 248 tracked files — `npg_`/Neon URLs, `sk-`/`ghp_`/`AKIA`-style keys, JWT/Bearer tokens, private-key blocks, `postgres://user:pass@` URLs, generic `(password|secret|token|api_key)=value` assignments, `.pem/.key/.db`-type tracked files. **Zero live findings.** `.env.example` still fully placeholder-ized (#8 fix holding); `deploy.yml` uses `${{ secrets.* }}` references only; `admin.jlee`/`WIN-APP-042` corpus confirmed synthetic per `CHAT_HANDOFF.md`. Caveats: (1) the 5 tracked `.pptx`/`.docx` binaries are not text-searchable — unaudited by this pass, low risk, spot-check once if desired; (2) dead credentials remain in git history by design (`theitguru` placeholder, rotated `remoteguest` password scrubbed from the working tree the same day)
 
 ## Open items, in order
@@ -186,4 +186,6 @@
 3. **Auth activation decision** (coworker conversation) → `API_KEY` in Vercel + `SOC_CONFIG.apiKey` injection in the pages
 4. **Dependabot alerts** (GitHub Settings → Security, ~2 min, you or Justin) + one-time `pip-audit`
 5. **Deprecation cleanup** from the 3.14 warnings (`utcnow()` → timezone-aware; `httpx2`)
+   - [x] **`utcnow()` — done Sept 28, 2026** (commits `e3b91fb` + `b816291`): shared `_utcnow()` helper (`now(timezone.utc)` stripped to naive — byte-identical output to the old calls, so the platform's naive-UTC storage convention is untouched) across `db/models.py` (11 Column defaults), `api/main.py`, `api/routes/system.py`, `services/closure_service.py`, `services/evidence_service.py`, and 6 seed/ingest/tool scripts. Suite: **124 passed, 1 warning** — the only remaining warning is third-party (`anyio.BlockingPortal` via starlette's TestClient), not fixable here. SQLite roundtrip verified: model defaults still store naive UTC. One deliberate exception: `add_code_review.py` keeps its utcnow — dead one-shot migration kept as historical record (its output already landed in `db/models.py`).
+   - [ ] `httpx2`/TestClient preference — gated on starlette upstream; no action today
 6. **Small decisions**: `triage.db` keep/delete; Safari history cleanup for the old Neon URL
