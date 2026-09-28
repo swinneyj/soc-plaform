@@ -7,7 +7,7 @@
     "postgres_5432": "up",
     "smb_445": "up",
     "ssh_22": "up",
-    "api_8000": "up"
+    "api_8000": "down"
   },
   "tailscale_nodes": [
     "daltons-macbook-pro-1",
@@ -15,6 +15,6 @@
   ],
   "exchange_share_registered": "3",
   "git_branch": "dev-dalton",
-  "git_dirty_count": 3,
+  "git_dirty_count": 1,
   "bws_token_present": "yes"
 }
