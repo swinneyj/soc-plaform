@@ -48,7 +48,10 @@ from services.investigation_state import (
 )
 from services.analysis_service import (
     build_analysis_prompt_intro,
+    extract_phase2_queries as _extract_phase2_queries_impl,
     format_evidence_ledger_entries,
+    ground_phase2_queries as _ground_phase2_queries_impl,
+    looks_like_spl_query as _looks_like_spl_query_impl,
     normalize_phase2_text as _normalize_phase2_text,
     sanitize_analysis_text as _sanitize_analysis_text,
 )
@@ -267,77 +270,20 @@ PHASE_SPECIFIC_SUPPORTIVE_QUERIES = {
             "spl_query": "index=nix host=\"$host$\" earliest=-24h (\"authorized_keys\" OR \"ssh-keygen\" OR \"sudo\" OR \"curl\" OR \"wget\" OR \"nc\" OR \"chmod\" OR \"chown\") | rex field=_raw \"comm=\\\"(?<command>[^\\\"]+)\\\"\" | rex field=_raw \"exe=\\\"(?<exe>[^\\\"]+)\\\"\" | rex field=_raw \"name=\\\"(?<file_path>[^\\\"]+)\\\"\" | stats count as events earliest(_time) as first_seen latest(_time) as last_seen values(command) as commands values(exe) as executables values(file_path) as file_paths by host | sort -events"
         }
     ]
-}
+}# The extract/ground/looks-like-SPL logic lives ONLY in the services layer now
+# (services/analysis_service.py) — this module keeps thin aliases for its many
+# internal call sites and for historical importers. Do not reintroduce inline
+# copies: the earlier twins had drifted (marker-tag-only extraction, different
+# default descriptions, different unused-first ordering). Extend the service
+# copy instead.
 
 
 def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
-    response_text = response_text or ""
-    phase2_queries: List[Dict[str, Any]] = []
-    start_marker = "PHASE2_QUERIES_JSON_START"
-    end_marker = "PHASE2_QUERIES_JSON_END"
-    start_idx = response_text.find(start_marker)
-    end_idx = response_text.find(end_marker)
-    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-        raw_block = response_text[start_idx + len(start_marker):end_idx]
-        arr_start = raw_block.find("[")
-        arr_end = raw_block.rfind("]")
-        json_block = ""
-        if arr_start != -1 and arr_end != -1 and arr_end > arr_start:
-            json_block = raw_block[arr_start:arr_end + 1].strip()
-        else:
-            json_block = raw_block.strip()
-        try:
-            parsed_block = json.loads(json_block)
-            if isinstance(parsed_block, list):
-                for idx, item in enumerate(parsed_block, 1):
-                    title = ""
-                    spl_value = ""
-                    desc = ""
-
-                    if isinstance(item, dict):
-                        title_keys = ["title", "name", "query_name"]
-                        spl_keys = ["spl", "query", "sql", "code"]
-                        desc_keys = ["description", "desc", "notes"]
-
-                        for k in title_keys:
-                            if k in item and (item.get(k) or "").strip():
-                                title = str(item.get(k)).strip()
-                                break
-
-                        for k in spl_keys:
-                            if k in item and (item.get(k) or "").strip():
-                                spl_value = str(item.get(k)).strip()
-                                break
-
-                        for k in desc_keys:
-                            if k in item and (item.get(k) or "").strip():
-                                desc = str(item.get(k)).strip()
-                                break
-                    elif isinstance(item, str):
-                        spl_value = item.strip()
-                        title = f"Phase 2 Query {idx}"
-
-                    title = title or f"Phase 2 Query {idx}"
-                    if spl_value:
-                        phase2_queries.append({
-                            "title": title,
-                            "spl": spl_value,
-                            "description": desc,
-                        })
-        except Exception:
-            phase2_queries = []
-
-    return phase2_queries
+    return _extract_phase2_queries_impl(response_text)
 
 
 def _looks_like_spl_query(query_text: str) -> bool:
-    query = (query_text or "").strip().lower()
-    if not query:
-        return False
-    if re.match(r"^select\b", query):
-        return False
-    spl_markers = ["index=", "|", "sourcetype=", "eventcode=", "tstats", "from datamodel", "search ", "stats ", "table ", "`"]
-    return any(marker in query for marker in spl_markers)
+    return _looks_like_spl_query_impl(query_text)
 
 
 def _already_run_supportive_titles(supportive_results=None) -> set:
@@ -415,90 +361,14 @@ def _ground_phase2_queries(
 ) -> List[Dict[str, Any]]:
     """Map model Phase 2 suggestions onto real supportive playbook templates only.
 
-    - Never emit free-form / invented SPL when a playbook exists or when it does not.
-    - Prefer title match to supportive defs; fall back to ranked unused playbook queries.
-    - Deprioritize queries that already have saved results for this case.
+    Thin alias for services.analysis_service.ground_phase2_queries — the
+    canonical implementation (dict-or-object template support, containment
+    matching, unused-first ordering, ranked fallback) lives there. See the
+    note above _extract_phase2_queries.
     """
-    already_run_titles = already_run_titles or set()
-    title_to_def = {}
-    spl_to_def = {}
-    for query_def in supportive_query_defs or []:
-        if isinstance(query_def, dict):
-            title = (query_def.get("title") or "").strip()
-            spl_query = (query_def.get("spl_query") or query_def.get("spl") or "").strip()
-            description = (query_def.get("description") or "").strip()
-        else:
-            title = (getattr(query_def, "title", "") or "").strip()
-            spl_query = (getattr(query_def, "spl_query", "") or getattr(query_def, "spl", "") or "").strip()
-            description = (getattr(query_def, "description", "") or "").strip()
-        if not title or not spl_query:
-            continue
-        payload = {
-            "title": title,
-            "spl": spl_query,
-            "description": description or "Use this query to collect disposition-driving follow-up evidence for the current hypothesis.",
-        }
-        title_to_def[_normalize_phase2_text(title)] = payload
-        spl_to_def[_normalize_phase2_text(spl_query)] = payload
-
-    # No playbook → no Phase 2 SPL cards (do not invent)
-    if not title_to_def:
-        return []
-
-    grounded: List[Dict[str, Any]] = []
-    seen_titles = set()
-
-    for query in phase2_queries or []:
-        title = (query.get("title") or "").strip()
-        spl_query = (query.get("spl") or "").strip()
-        matched = None
-
-        if title:
-            matched = title_to_def.get(_normalize_phase2_text(title))
-        if not matched and spl_query:
-            matched = spl_to_def.get(_normalize_phase2_text(spl_query))
-        # Soft title containment match (model shortens/paraphrases titles)
-        if not matched and title:
-            norm = _normalize_phase2_text(title)
-            for key, payload in title_to_def.items():
-                if norm and (norm in key or key in norm):
-                    matched = payload
-                    break
-
-        if not matched:
-            # Discard invented SPL; playbook is the only source of truth
-            continue
-
-        dedupe_key = _normalize_phase2_text(matched["title"])
-        if dedupe_key in seen_titles:
-            continue
-        # Prefer not-yet-run; still allow if we need to fill later
-        grounded.append(dict(matched))
-        seen_titles.add(dedupe_key)
-        if len(grounded) >= max_queries:
-            break
-
-    # Re-order: not-yet-run first. When a later follow-up phase is requested,
-    # do not keep resurfacing the same saved cards just because the model
-    # repeated their titles; prefer an unused playbook query instead.
-    grounded.sort(
-        key=lambda q: (0 if _normalize_phase2_text(q.get("title")) not in already_run_titles else 1)
-    )
-    unused_grounded = [
-        q for q in grounded
-        if _normalize_phase2_text(q.get("title")) not in already_run_titles
-    ]
-    if unused_grounded:
-        return unused_grounded[:max_queries]
-
-    if grounded and not already_run_titles:
-        return grounded[:max_queries]
-
-    # Model suggested nothing usable → ranked fallback from playbook, skip already-run when possible
-    return _build_supportive_phase2_fallback(
+    return _ground_phase2_queries_impl(
+        phase2_queries,
         supportive_query_defs,
-        "",
-        "",
         already_run_titles=already_run_titles,
         max_queries=max_queries,
     )

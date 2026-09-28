@@ -62,9 +62,31 @@ def extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
                 if isinstance(parsed, list):
                     for idx, item in enumerate(parsed, 1):
                         if isinstance(item, dict):
-                            title = item.get("title") or item.get("name") or f"Phase 2 Query {idx}"
-                            spl = item.get("spl") or item.get("query") or item.get("kql") or ""
-                            desc = item.get("description") or item.get("desc") or ""
+                            # Accept the key aliases the api/ layer historically accepted,
+                            # so the service copy is the strict superset.
+                            title_keys = ("title", "name", "query_name")
+                            spl_keys = ("spl", "query", "sql", "code", "kql")
+                            desc_keys = ("description", "desc", "notes")
+                            title = ""
+                            spl = ""
+                            desc = ""
+                            if isinstance(item, dict):
+                                for k in title_keys:
+                                    if k in item and (item.get(k) or "").strip():
+                                        title = str(item.get(k)).strip()
+                                        break
+                                for k in spl_keys:
+                                    if k in item and (item.get(k) or "").strip():
+                                        spl = str(item.get(k)).strip()
+                                        break
+                                for k in desc_keys:
+                                    if k in item and (item.get(k) or "").strip():
+                                        desc = str(item.get(k)).strip()
+                                        break
+                            elif isinstance(item, str):
+                                spl = item.strip()
+                                title = f"Phase 2 Query {idx}"
+                            title = title or f"Phase 2 Query {idx}"
                             if spl:
                                 phase2_queries.append({
                                     "title": str(title).strip(),
@@ -75,6 +97,17 @@ def extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
             pass
 
     return phase2_queries
+
+
+def looks_like_spl_query(query_text: str) -> bool:
+    """Heuristic: does this text look like an SPL query (not SQL, not prose)?"""
+    query = (query_text or "").strip().lower()
+    if not query:
+        return False
+    if re.match(r"^select\b", query):
+        return False
+    spl_markers = ["index=", "|", "sourcetype=", "eventcode=", "tstats", "from datamodel", "search ", "stats ", "table ", "`"]
+    return any(marker in query for marker in spl_markers)
 
 
 def normalize_phase2_text(value: str) -> str:
@@ -94,15 +127,20 @@ def ground_phase2_queries(
     spl_to_def: Dict[str, Dict[str, Any]] = {}
 
     for query_def in supportive_query_defs or []:
-        title = (getattr(query_def, "title", "") or "").strip()
-        spl_query = (getattr(query_def, "spl_query", "") or "").strip()
-        description = (getattr(query_def, "description", "") or "").strip()
+        if isinstance(query_def, dict):
+            title = (query_def.get("title") or "").strip()
+            spl_query = (query_def.get("spl_query") or query_def.get("spl") or "").strip()
+            description = (query_def.get("description") or "").strip()
+        else:
+            title = (getattr(query_def, "title", "") or "").strip()
+            spl_query = (getattr(query_def, "spl_query", "") or getattr(query_def, "spl", "") or "").strip()
+            description = (getattr(query_def, "description", "") or "").strip()
         if not title or not spl_query:
             continue
         payload = {
             "title": title,
             "spl": spl_query,
-            "description": description or "Execute this grounded check to collect disposition-driving follow-up evidence.",
+            "description": description or "Use this query to collect disposition-driving follow-up evidence for the current hypothesis.",
         }
         title_to_def[normalize_phase2_text(title)] = payload
         spl_to_def[normalize_phase2_text(spl_query)] = payload
@@ -132,6 +170,7 @@ def ground_phase2_queries(
                     break
 
         if not matched:
+            # Discard invented SPL; playbook is the only source of truth
             continue
 
         dedupe_key = normalize_phase2_text(matched["title"])
@@ -143,16 +182,23 @@ def ground_phase2_queries(
         if len(grounded) >= max_queries:
             break
 
-    # Prioritize queries that have not been executed yet
+    # Re-order: not-yet-run first. When a later follow-up phase is requested,
+    # do not keep resurfacing the same saved cards just because the model
+    # repeated their titles; prefer an unused playbook query instead.
     grounded.sort(
         key=lambda q: (0 if normalize_phase2_text(q.get("title")) not in already_run else 1)
     )
-    grounded = grounded[:max_queries]
+    unused_grounded = [
+        q for q in grounded
+        if normalize_phase2_text(q.get("title")) not in already_run
+    ]
+    if unused_grounded:
+        return unused_grounded[:max_queries]
 
-    if grounded:
-        return grounded
+    if grounded and not already_run:
+        return grounded[:max_queries]
 
-    # Fallback: rank unused playbook templates
+    # Model suggested nothing usable → ranked fallback from playbook, skip already-run when possible
     ranked = []
     for t_norm, payload in title_to_def.items():
         score = 0
