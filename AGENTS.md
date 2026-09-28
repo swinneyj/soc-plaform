@@ -84,7 +84,7 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 
 ## Open threads (owners marked)
 
-- ⏳ **Neon URL** (Justin → Dalton) `[I — waiting]`: edit `DATABASE_URL` in BWS → `scripts/pull-secrets` → restart; **also Vercel env vars**
+- ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). **Remaining: Justin updates Vercel `DATABASE_URL`** (deploy-breaker). First stale-URL detail + no-other-copies sweep in tracker item #1. Local API runs against the shared cloud DB now — treat destructive testing accordingly
 - ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; one Vercel env var flips it on
 - 🔧 **CI pytest-on-push** (Dalton, after checking Justin's CI) `[V — only deploy.yml exists locally]`: the 124-test suite doesn't run in CI yet
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)

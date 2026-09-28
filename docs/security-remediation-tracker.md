@@ -10,15 +10,15 @@
 
 ## Priority 1 — Do first
 
-### 1. Rotate the exposed shared Neon password 🔄 ROTATION DONE — DISTRIBUTION OPEN
+### 1. Rotate the exposed shared Neon password ✅ ROTATION + LOCAL CUTOVER DONE — VERCEL HANDOFF OPEN
 - **What:** The shared Neon `DATABASE_URL` (with password `npg_...`) was pasted into a terminal/chat in plain text. Coworker is already rotating.
-- **Status Sept 25:** coworker completed the rotation. Remaining on Dalton's side:
-- **Remediation:**
+- **Status Sept 28:** cutover executed and verified end to end on Dalton's machine:
   - [x] Coworker resets password in Neon console (Roles → `neondb_owner` → Reset password)
-  - [ ] Update `.env` locally with new URL (currently pointing at local Postgres on 5432)
-  - [ ] Update Vercel env vars if the production deploy uses this DB — otherwise deploys break
-  - [ ] Verify no other copies exist (terminal history, notes, shared docs, password manager entries, old `.env` backups)
-- **Owner:** coworker (done) + Dalton (.env/Vercel)
+  - [x] `.env` updated via BWS (`scripts/pull-secrets` regenerates from vault; values never transit chat)
+  - [ ] **Vercel env vars still pending (Justin)** — the deploy-breaker; deploy.yml's `/api/health` smoke test will catch a miss loudly
+  - [x] No-other-copies sweep (Sept 28): tracked files clean; git history clean (`git log --all -S neon.tech` = zero commits); `.env.example`/`.env.bws.template` placeholder-only; old `~/soc-platform/.env` clean; Downloads dump clean. Residual dead-URL copies (inert, old password): 1 line in `~/.zsh_history` + 3 `~/.zsh_sessions` files (Sept 25 era); Safari History.db per E2 (manual in-app cleanup, still open).
+- **Verification (Sept 28):** connection smoke passed (PostgreSQL 18.6, `neondb`, 11 tables, 7 triage rows); API restarted against Neon via `scripts/dev`; **write-path roundtrip passed** (evidence POST → id 8 → GET → DELETE → net-zero rows) — live INSERT/SELECT/DELETE confirmed against the cloud DB.
+- **Incident note (stale-URL first pull):** the first BWS-stored URL failed auth (`password authentication failed for neondb_owner`) despite clean structure — it was a pre-rotation string (old password, live address). Fixed by re-copying a fresh connection string from the Neon console into BWS. Lesson: connection strings must come from the console copy button at handoff time, never from prior messages/history — same rule as the original incident, now with a concrete second example.
 
 ### 2. `.env` had a broken duplicate `DATABASE_URL=` ✅ FIXED today
 - **What:** A stray empty `DATABASE_URL=` line (leftover from an interrupted `read -r -s` prompt) was overriding the real value, causing 500s on `/api/db/notables`.
