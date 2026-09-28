@@ -98,6 +98,7 @@ window.AnalysisTab = {
         'copy-supportive-spl',
         'copy-enrichment-spl',
         'copy-phase2-spl',
+        'run-splunk-search',
         'promote-phase2-query',
         'on-phase2-template-input',
         'update-supportive-manual',
@@ -895,6 +896,14 @@ window.AnalysisTab = {
                     </div>
                     <button
                         type="button"
+                        class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200 flex-shrink-0"
+                        title="Run this query through the configured search backend and save the result as splunk_auto evidence"
+                        @click="$emit('run-splunk-search', { q, kind: 'supportive' })"
+                    >
+                        Run in Splunk
+                    </button>
+                    <button
+                        type="button"
                         class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200 flex-shrink-0"
                         @click="$emit('copy-supportive-spl', q)"
                     >
@@ -1126,6 +1135,14 @@ window.AnalysisTab = {
                         </div>
                     <div class="flex items-center gap-2">
                         <span v-if="phase2SavedTitles.has((q.title || '').toString().trim().toLowerCase())" class="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 text-[10px] uppercase font-bold text-emerald-300">Already saved</span>
+                        <button
+                            type="button"
+                            class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200"
+                            title="Run this query through the configured search backend and save the result as splunk_auto evidence"
+                            @click="$emit('run-splunk-search', { q, kind: 'phase2' })"
+                        >
+                            Run in Splunk
+                        </button>
                         <button
                             type="button"
                             class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200"

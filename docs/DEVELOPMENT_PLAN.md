@@ -57,17 +57,20 @@ Complete the "analyst brings logs, AI decides" principle at the per-entry level.
 
 ---
 
-## 5. Phase 3 — Read-only Splunk REST integration
+## 5. Phase 3 — Read-only Splunk integration (mock-first delivered)
 
 Turn the paste-driven loop into a one-click loop. **Read-only first** (search + results fetch; no writes to Splunk).
 
-- **Auth/config:** `SPLUNK_URL`, `SPLUNK_TOKEN` (bearer) in `.env`; session-key flow only as fallback. Token stored in macOS keychain or env, never in DB.
-- **Flow:** `POST /api/splunk/search-one {case_id, query_title}` → substitute placeholders (`$host$`, `$user$`…) from the case's notable fields → `search/jobs` (blocking mode, `max_count<=1000`) → fetch results → return raw rows for the analyst to review → one click saves them into the evidence ledger with `result_status` derived from the job outcome (0 rows ⇒ `no_results`; error ⇒ `query_failed`).
-- **Guardrails:** per-case concurrency cap (1 running job), 60 s timeout, query text logged to the audit trail, explicit "SPL auto-run" label on resulting evidence rows (`source_system=splunk_auto`).
-- **Non-goals (v1):** saved-search management, index writes, ES notable updates, multi-cluster.
-- **Tests:** placeholder substitution (pure), job-outcome → status mapping (pure), endpoint with mocked Splunk HTTP.
+**Status (Sept 28, 2026): the mock-first slice is delivered.** Everything runs end-to-end against the deterministic `MockSplunkBackend`; the real REST connector activates as a config change (`SEARCH_BACKEND=splunk` + `RealSplunkBackend` implementation) once the Splunk API key is available.
 
-**Size:** L. **Depends on:** Phase 1 API tests (so the ledger path is pinned before automating it).
+- **Flow (shipped):** `POST /api/splunk/search-one {case_id, query_title, spl?, earliest?, latest?, target_questions?}` → substitute placeholders (`$host$`, `$user$`…) from the case's notable fields via `rule_context_service.render_query_template` (DB-backed `PlaceholderAlias` overrides + built-in defaults; unresolved tokens ⇒ 422, never a silently broken query) → run through `get_search_backend()` → map job outcome to `result_status` (`map_search_outcome`: 0 rows ⇒ `no_results`; error/timeout ⇒ `query_failed`; else `success`) → save through the standard evidence-save path with the explicit `splunk_auto` label (re-runs replace the prior auto row per query title) → return bounded raw rows for analyst review.
+- **Guardrails (shipped):** per-case concurrency cap (1 running job; second run ⇒ 409), 60 s timeout (`SEARCH_ONE_TIMEOUT_SECONDS`), every executed query text logged to the `tool_runs` audit trail (`tool_name=splunk_search_one`).
+- **UI (shipped):** "Run in Splunk" button on Stage-2 supportive query cards and Phase 2 follow-up cards; results land in the card notes and the Evidence Timeline ledger immediately (investigation state rebuilt on save).
+- **Auth/config (deferred to the real connector):** `SPLUNK_URL`, `SPLUNK_TOKEN` (bearer) in keychain/env, never in DB; session-key flow only as fallback.
+- **Non-goals (v1):** saved-search management, index writes, ES notable updates, multi-cluster.
+- **Tests:** placeholder substitution, outcome mapping, and row summarization (pure, `tests/test_search_backend.py`); endpoint via TestClient — substitution, `no_results`/`query_failed` mapping, per-title replace, 404/422 guards, concurrency 409, timeout (`tests/test_api_analyze_flow.py`).
+
+**Size:** L. **Depends on:** Phase 1 API tests (so the ledger path is pinned before automating it). **Remaining:** `RealSplunkBackend` REST wiring when the API key arrives.
 
 ---
 

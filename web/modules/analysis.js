@@ -1651,6 +1651,68 @@
                 });
         },
 
+        async runSplunkSearch({ q, kind }) {
+            if (!this.analysisCaseId) {
+                alert('Select a triage case first');
+                return;
+            }
+            const title = ((q && q.title) || '').toString().trim() || 'Unnamed query';
+            const isPhase2 = kind === 'phase2';
+            const key = isPhase2 ? this.getPhase2Key(q) : this.getSupportiveKey(q);
+            const template = isPhase2
+                ? ((this.phase2EditedQueries && this.phase2EditedQueries[key]) || (q && q.spl) || '').toString()
+                : ((q && q.spl_query) || '').toString();
+            if (!template.trim()) {
+                alert('No SPL query text available to run');
+                return;
+            }
+
+            try {
+                const res = await axios.post(this.apiUrl + '/splunk/search-one', {
+                    case_id: this.analysisCaseId,
+                    query_title: title,
+                    spl: template,
+                    target_questions: (q && q.target_questions) || [],
+                });
+                const data = res.data || {};
+                const summary = this.formatSplunkAutoSummary(data);
+                if (isPhase2) {
+                    this.phase2ManualResults = { ...this.phase2ManualResults, [key]: summary };
+                } else {
+                    this.supportiveManualResults = { ...this.supportiveManualResults, [key]: summary };
+                }
+                if (data.investigation_state) {
+                    this.investigationState = data.investigation_state;
+                }
+                alert('Run complete (' + (data.result_status || 'success') + ', ' + (data.row_count || 0) + ' rows). Saved to the evidence ledger as splunk_auto evidence.');
+            } catch (err) {
+                console.error('Splunk search-one run failed:', err);
+                const detail = err.response && err.response.data ? err.response.data.detail : null;
+                let msg = err.message;
+                if (typeof detail === 'string') {
+                    msg = detail;
+                } else if (detail && detail.message) {
+                    msg = detail.message + ((detail.unresolved_tokens || []).length ? ' Missing: ' + detail.unresolved_tokens.join(', ') : '');
+                }
+                alert('Run failed: ' + msg);
+            }
+        },
+
+        formatSplunkAutoSummary(data) {
+            const rows = (data && data.rows) || [];
+            const lines = ['[auto-run via /api/splunk/search-one — ' + (data.result_status || '') + ' — ' + (data.row_count || 0) + ' rows — saved as splunk_auto evidence]'];
+            if (data.spl) {
+                lines.push(data.spl);
+            }
+            for (const row of rows.slice(0, 10)) {
+                lines.push(row.raw || Object.keys(row).map(k => k + '=' + row[k]).join(' '));
+            }
+            if ((data.row_count || 0) > 10) {
+                lines.push('... ' + (data.row_count - 10) + ' more row(s) in the saved evidence.');
+            }
+            return lines.join('\n');
+        },
+
         renderPhase2Query(template) {
             const synthetic = { spl_query: template };
             return this.renderSupportiveQuery(synthetic);

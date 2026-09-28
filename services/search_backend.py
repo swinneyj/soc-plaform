@@ -300,3 +300,50 @@ def get_search_backend(name: Optional[str] = None):
     if chosen == "splunk":
         return RealSplunkBackend()
     raise ValueError(f"Unknown SEARCH_BACKEND '{chosen}' (expected 'mock' or 'splunk')")
+
+
+# ---------------------------------------------------------------------------
+# Job-outcome mapping and result summarization (pure)
+# ---------------------------------------------------------------------------
+
+def map_search_outcome(row_count: Optional[int], error: Optional[str] = None) -> str:
+    """Map a search-job outcome onto the evidence ledger ``result_status`` vocabulary.
+
+    Contract (plan §5): 0 rows ⇒ ``no_results``; error (including timeout or
+    unsupported SPL) ⇒ ``query_failed``; anything else ⇒ ``success``.
+    """
+    if error:
+        return "query_failed"
+    if (row_count or 0) <= 0:
+        return "no_results"
+    return "success"
+
+
+def summarize_search_rows(
+    rows: Optional[List[Dict[str, Any]]],
+    error: Optional[str] = None,
+    max_rows: int = 20,
+    max_chars: int = 4000,
+) -> str:
+    """Build a bounded, human-reviewable result summary for the evidence ledger."""
+    if error:
+        return f"Search failed: {error}"[:max_chars]
+
+    rows = rows or []
+    if not rows:
+        return "0 rows returned (no matching events in the selected time window)."
+
+    lines: List[str] = [f"{len(rows)} row(s) returned (showing first {min(len(rows), max_rows)}):"]
+    for row in rows[:max_rows]:
+        raw = row.get("raw")
+        if raw:
+            lines.append(str(raw))
+        else:
+            lines.append(" ".join(f"{k}={v}" for k, v in row.items() if not k.startswith("_")))
+    if len(rows) > max_rows:
+        lines.append(f"... {len(rows) - max_rows} more row(s) omitted.")
+
+    text = "\n".join(lines)
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n... (summary truncated)"
+    return text

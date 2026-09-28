@@ -13,7 +13,10 @@ from services.search_backend import (
     MockSplunkBackend,
     RealSplunkBackend,
     get_search_backend,
+    map_search_outcome,
+    summarize_search_rows,
 )
+from services.rule_context_service import render_query_template
 
 
 def _write_seed(tmp_path, events):
@@ -201,3 +204,69 @@ def test_factory_rejects_unknown_backend():
 def test_real_backend_fails_loudly():
     with pytest.raises(NotImplementedError, match="not wired yet"):
         RealSplunkBackend()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 pure helpers: job-outcome mapping and placeholder substitution
+# ---------------------------------------------------------------------------
+
+def test_map_search_outcome_rows_found_is_success():
+    assert map_search_outcome(3) == "success"
+
+
+def test_map_search_outcome_zero_rows_is_no_results():
+    assert map_search_outcome(0) == "no_results"
+    assert map_search_outcome(None) == "no_results"
+
+
+def test_map_search_outcome_error_wins_over_row_count():
+    assert map_search_outcome(5, error="boom") == "query_failed"
+    assert map_search_outcome(0, error="timed out") == "query_failed"
+
+
+def test_summarize_search_rows_error_and_empty():
+    assert summarize_search_rows([], error="boom") == "Search failed: boom"
+    assert summarize_search_rows([]).startswith("0 rows returned")
+
+
+def test_summarize_search_rows_lists_rows():
+    rows = [{"raw": "sshd: action=failure user=bjones"}, {"host": "H1", "count": 2}]
+    text = summarize_search_rows(rows)
+    assert "2 row(s) returned" in text
+    assert "sshd: action=failure user=bjones" in text
+    assert "host=H1 count=2" in text
+
+
+def test_summarize_search_rows_caps_and_truncates():
+    rows = [{"raw": f"row-{i}"} for i in range(30)]
+    text = summarize_search_rows(rows, max_rows=5)
+    assert "showing first 5" in text
+    assert "25 more row(s) omitted" in text
+    assert "row-29" not in text
+    tiny = summarize_search_rows(rows, max_rows=5, max_chars=60)
+    assert "summary truncated" in tiny
+
+
+def test_render_query_template_direct_field_match():
+    rendered, unresolved = render_query_template("user=$user$ action=failure", {"user": "bjones"})
+    assert rendered == "user=bjones action=failure"
+    assert unresolved == []
+
+
+def test_render_query_template_default_alias():
+    rendered, unresolved = render_query_template("dest=$dest$", {"destination": "srv-01"})
+    assert rendered == "dest=srv-01"
+    assert unresolved == []
+
+
+def test_render_query_template_custom_alias():
+    custom = [{"alias": "host", "fields": ["computer_name"]}]
+    rendered, unresolved = render_query_template("host=$host$", {"computer_name": "WIN-01"}, custom)
+    assert rendered == "host=WIN-01"
+    assert unresolved == []
+
+
+def test_render_query_template_reports_unresolved_tokens():
+    rendered, unresolved = render_query_template("host=$host$ user={who}", {})
+    assert "$host$" in rendered and "{who}" in rendered
+    assert unresolved == ["host", "who"]

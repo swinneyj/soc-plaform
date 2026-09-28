@@ -19,6 +19,7 @@ the UI does.
 
 import json
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -33,6 +34,8 @@ sys.path.insert(0, str(PLATFORM_ROOT))
 import db.models as db_models  # noqa: E402
 import services.ollama_service as ollama_service  # noqa: E402
 from api.main import app  # noqa: E402
+import api.main as api_main  # noqa: E402
+import services.search_backend as search_backend_mod  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -265,6 +268,220 @@ class TestAnalyzeFlow:
         assert state["evidence_summary"]["by_finding"]["refutes"] >= 1
         assert any("Conflicting evidence" in b for b in state["closure_blockers"])
         assert state["provisional_disposition"] == "suspicious"
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: one-click search execution (/api/splunk/search-one, mock backend)
+# ---------------------------------------------------------------------------
+
+def seed_notable_event(client, case_id, fields):
+    """Seed a pasted notable whose fields ground placeholder substitution."""
+    db = client.test_session()
+    event = db_models.SplunkEvent(
+        source="pasted",
+        sourcetype="splunk:notable:pasted",
+        host=fields.get("host", "TEST-HOST"),
+        raw=json.dumps({"promoted_case_id": case_id, "fields": fields}),
+    )
+    db.add(event)
+    db.commit()
+    db.close()
+
+
+def seed_supportive_query(client, rule_id, title, spl):
+    db = client.test_session()
+    db.add(db_models.SupportiveQuery(rule_id=rule_id, title=title, description="", spl_query=spl))
+    db.commit()
+    db.close()
+
+
+class TestSplunkSearchOneEndpoint:
+    def _prepare(self, client, fields=None):
+        case_id = seed_case(client)
+        seed_notable_event(client, case_id, fields or {"host": "VPN-GW-01", "user": "bjones"})
+        return case_id
+
+    def test_stored_template_runs_and_ledgers_splunk_auto(self, api_client):
+        case_id = self._prepare(api_client)
+        seed_supportive_query(
+            api_client,
+            "test_rule",
+            "Failed logins by user",
+            "sourcetype=linux_secure action=failure user=$user$",
+        )
+
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={"case_id": case_id, "query_title": "Failed logins by user", "earliest": "all"},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["result_status"] == "success"
+        assert body["row_count"] >= 1
+        assert body["source_system"] == "splunk_auto"
+        # Server-side substitution: the notable's user value, no raw tokens.
+        assert "$user$" not in body["spl"]
+        assert "user=bjones" in body["spl"]
+
+        db = api_client.test_session()
+        rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        tool_runs = db.query(db_models.ToolRun).filter(
+            db_models.ToolRun.tool_name == "splunk_search_one"
+        ).all()
+        db.close()
+
+        assert len(rows) == 1
+        raw = json.loads(rows[0].raw_result)
+        assert raw["result_status"] == "success"
+        assert raw["query_text"] == body["spl"]
+        assert raw["source_system"] == "splunk_auto"
+        # Guardrail: the executed query text is in the audit trail.
+        assert len(tool_runs) == 1
+        assert tool_runs[0].status == "completed"
+        assert json.loads(tool_runs[0].arguments)["spl"] == body["spl"]
+
+    def test_zero_rows_maps_to_no_results(self, api_client):
+        case_id = self._prepare(api_client, fields={"host": "VPN-GW-01", "user": "nobody"})
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={
+                "case_id": case_id,
+                "query_title": "No-match query",
+                "spl": "sourcetype=linux_secure action=failure user=$user$",
+                "earliest": "all",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["result_status"] == "no_results"
+
+        db = api_client.test_session()
+        rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        db.close()
+        assert len(rows) == 1
+        assert json.loads(rows[0].raw_result)["result_status"] == "no_results"
+
+    def test_unsupported_spl_maps_to_query_failed(self, api_client):
+        case_id = self._prepare(api_client)
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={
+                "case_id": case_id,
+                "query_title": "Broken query",
+                "spl": "sourcetype=linux_secure | dedup user",
+                "earliest": "all",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["result_status"] == "query_failed"
+        assert "unsupported SPL operator" in body["error"]
+
+        db = api_client.test_session()
+        rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        tool_runs = db.query(db_models.ToolRun).filter(
+            db_models.ToolRun.tool_name == "splunk_search_one"
+        ).all()
+        db.close()
+        assert json.loads(rows[0].raw_result)["result_status"] == "query_failed"
+        assert tool_runs[0].status == "failed"
+
+    def test_unknown_title_without_spl_returns_404(self, api_client):
+        case_id = self._prepare(api_client)
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={"case_id": case_id, "query_title": "Missing query"},
+        )
+        assert resp.status_code == 404
+
+    def test_unresolved_placeholder_returns_422(self, api_client):
+        case_id = self._prepare(api_client)
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={
+                "case_id": case_id,
+                "query_title": "Half-rendered",
+                "spl": "sourcetype=linux_secure host=$nope_token$",
+            },
+        )
+        assert resp.status_code == 422
+        detail = resp.json()["detail"]
+        assert "nope_token" in detail["unresolved_tokens"]
+
+    def test_rerun_replaces_prior_auto_row(self, api_client):
+        case_id = self._prepare(api_client)
+        payload = {
+            "case_id": case_id,
+            "query_title": "Failed logins",
+            "spl": "sourcetype=linux_secure action=failure user=$user$",
+            "earliest": "all",
+        }
+        first = api_client.post("/api/splunk/search-one", json=payload)
+        second = api_client.post("/api/splunk/search-one", json=payload)
+        assert first.status_code == second.status_code == 200
+
+        db = api_client.test_session()
+        rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        db.close()
+        assert len(rows) == 1
+
+    def test_per_case_concurrency_cap_rejects_second_run(self, api_client):
+        case_id = self._prepare(api_client)
+        api_main._SEARCH_ONE_INFLIGHT.add(case_id)
+        try:
+            resp = api_client.post(
+                "/api/splunk/search-one",
+                json={
+                    "case_id": case_id,
+                    "query_title": "Q",
+                    "spl": "sourcetype=linux_secure action=failure user=$user$",
+                },
+            )
+            assert resp.status_code == 409
+        finally:
+            api_main._SEARCH_ONE_INFLIGHT.discard(case_id)
+
+    def test_timeout_maps_to_query_failed(self, api_client, monkeypatch):
+        case_id = self._prepare(api_client)
+        monkeypatch.setattr(api_main, "_SEARCH_ONE_TIMEOUT_SECONDS", 0.05)
+
+        def slow_search(self, spl, earliest="-7d", latest="now", limit=500):
+            time.sleep(0.5)
+            return []
+
+        monkeypatch.setattr(search_backend_mod.MockSplunkBackend, "search", slow_search)
+        resp = api_client.post(
+            "/api/splunk/search-one",
+            json={
+                "case_id": case_id,
+                "query_title": "Slow query",
+                "spl": "sourcetype=linux_secure action=failure user=$user$",
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["result_status"] == "query_failed"
+        assert "timed out" in body["error"]
+
+        db = api_client.test_session()
+        rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        db.close()
+        assert len(rows) == 1
+        assert json.loads(rows[0].raw_result)["result_status"] == "query_failed"
 
 
 if __name__ == "__main__":
