@@ -484,5 +484,96 @@ class TestSplunkSearchOneEndpoint:
         assert json.loads(rows[0].raw_result)["result_status"] == "query_failed"
 
 
+# ---------------------------------------------------------------------------
+# Phase 4: closure-note judgment-flow lockdown
+# ---------------------------------------------------------------------------
+
+def seed_investigation_state(client, case_id, provisional_disposition):
+    """Insert a decisive investigation state directly (deterministic tests)."""
+    db = client.test_session()
+    db.add(db_models.InvestigationState(
+        case_id=case_id,
+        rule_id="test_rule",
+        current_hypothesis="Test hypothesis grounded in collected rows.",
+        provisional_disposition=provisional_disposition,
+        disposition_confidence=0.9,
+        loop_status="ready_for_closure",
+        iteration_count=2,
+        unresolved_questions="[]",
+        closure_blockers="[]",
+        recommended_next_actions="[]",
+        evidence_summary=json.dumps({"substantive_items": 2, "by_finding": {"supports": 2}}),
+        last_analysis_stage="initial",
+    ))
+    db.commit()
+    db.close()
+
+
+class TestClosureNoteDispositionDerivation:
+    """The operator must not be able to pre-set the closure disposition; it
+    is derived from the evidence-backed investigation state (plan §6)."""
+
+    def test_operator_disposition_cannot_override_derived(self, api_client):
+        case_id = seed_case(api_client)
+        seed_investigation_state(api_client, case_id, "malicious")
+        resp = api_client.post("/api/db/closure-note", json={
+            "case_id": case_id,
+            "rule_id": "test_rule",
+            "disposition": "False Positive",
+            "field_values": {"justification": "Test/training exercise", "host": "WIN-APP-042"},
+            "analyst_notes": "Observed during the approved change window.",
+            "force_closure": True,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["disposition"].lower().startswith("true positive")
+        assert body["disposition_source"] == "investigation_state"
+        assert body["operator_disposition"] == "False Positive"
+        assert body["disposition_conflict"] is True
+
+        note = body["generated_note"].lower()
+        assert "the evidence-driven conclusion was true positive" in note
+        assert "evidence-driven conclusion was false positive" not in note
+        # field_values render only as attributed operator facts.
+        assert "operator-recorded closure fields" in note
+        assert "test/training exercise" in note
+
+    def test_matching_operator_disposition_reports_no_conflict(self, api_client):
+        case_id = seed_case(api_client)
+        seed_investigation_state(api_client, case_id, "benign")
+        resp = api_client.post("/api/db/closure-note", json={
+            "case_id": case_id,
+            "rule_id": "test_rule",
+            "disposition": "Benign Positive",
+            "force_closure": True,
+        })
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["disposition"].lower().startswith("benign positive")
+        assert body["disposition_conflict"] is False
+        assert body["disposition_key"] == "benign_positive"
+
+    def test_field_values_cannot_smuggle_a_conclusion(self, api_client):
+        """A disposition-shaped field value must never reach the note's
+        conclusion sentence — only the attributed operator section."""
+        case_id = seed_case(api_client)
+        seed_investigation_state(api_client, case_id, "benign")
+        resp = api_client.post("/api/db/closure-note", json={
+            "case_id": case_id,
+            "rule_id": "test_rule",
+            "disposition": "True Positive",
+            "field_values": {"justification": "Known false positive pattern"},
+            "force_closure": True,
+        })
+        assert resp.status_code == 200, resp.text
+        note = resp.json()["generated_note"].lower()
+        conclusion_lines = [ln for ln in note.splitlines() if "evidence-driven conclusion" in ln]
+        assert len(conclusion_lines) == 1
+        assert "benign positive" in conclusion_lines[0]
+        assert "false positive" not in conclusion_lines[0]
+        # The value is still preserved, attributed, elsewhere in the note.
+        assert "known false positive pattern" in note
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

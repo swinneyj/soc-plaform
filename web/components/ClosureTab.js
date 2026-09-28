@@ -102,11 +102,11 @@ window.ClosureTab = {
                                     class="w-full mt-2 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm placeholder-gray-400"></textarea>
                             </div>
                             <div>
-                                <label class="text-sm text-gray-400">Disposition</label>
+                                <label class="text-sm text-gray-400">Disposition (AI-Derived)</label>
                                 <select
                                     :value="closureForm.disposition"
-                                    @change="updateDisposition($event.target.value)"
-                                    class="w-full mt-2 px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-sm">
+                                    disabled
+                                    class="w-full mt-2 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-gray-400 text-sm cursor-not-allowed">
                                     <option value="True Positive">True Positive - Suspicious Activity Confirmed</option>
                                     <option value="Benign Positive">Benign Positive - Suspicious But Expected</option>
                                     <option value="False Positive">False Positive - Incorrect Analytic Logic</option>
@@ -115,7 +115,7 @@ window.ClosureTab = {
                                 </select>
 
                                 <p class="text-xs text-gray-400 mt-2">
-                                    Choose disposition based on final investigative outcome.
+                                    Derived from the evidence ledger at generation time. The disposition is an investigative conclusion, not an operator input — the closure note always uses the derived value.
                                 </p>
                             </div>
                         </div>

@@ -14,6 +14,7 @@ import pytest
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLATFORM_ROOT))
 
+from services import closure_service as csvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
 
 
@@ -321,6 +322,44 @@ class TestPerCardVerdicts:
         state = build_state(analysis, items)
         assert state["evidence_summary"]["by_finding"]["refutes"] == 1
         assert state["evidence_summary"]["substantive_items"] == 1
+
+
+class TestDerivedClosureDisposition:
+    """Phase 4 judgment-flow lockdown: the closure disposition is derived
+    from the evidence-backed investigation state, never operator-supplied.
+    These pure rules must not drift toward trusting caller input."""
+
+    def test_malicious_derives_true_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "malicious"}) == "true_positive"
+
+    def test_benign_derives_benign_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "benign"}) == "benign_positive"
+
+    def test_false_positive_derives_false_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "false_positive"}) == "false_positive"
+
+    def test_tentative_states_derive_undetermined(self):
+        for state in (
+            {"provisional_disposition": "suspicious"},
+            {"provisional_disposition": "undetermined"},
+            {"provisional_disposition": ""},
+            {},
+            None,
+        ):
+            assert csvc.derive_closure_disposition(state) == "undetermined"
+
+    def test_state_derivation_never_reads_an_operator_field(self):
+        """A disposition smuggled into the state payload under any operator-
+        supplied key must not be used — only provisional_disposition."""
+        state = {"provisional_disposition": "benign", "operator_disposition": "malicious"}
+        assert csvc.derive_closure_disposition(state) == "benign_positive"
+
+    def test_operator_labels_normalize_into_derived_key_space(self):
+        assert csvc._normalize_disposition_key("True Positive") == "true_positive"
+        assert csvc._normalize_disposition_key("malicious") == "true_positive"
+        assert csvc._normalize_disposition_key("Benign Positive") == "benign_positive"
+        assert csvc._normalize_disposition_key("garbage input") == "undetermined"
+        assert csvc._normalize_disposition_key(None) == "undetermined"
 
 
 if __name__ == "__main__":

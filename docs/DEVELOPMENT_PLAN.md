@@ -78,9 +78,9 @@ Turn the paste-driven loop into a one-click loop. **Read-only first** (search + 
 
 Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 
-- Closure-note generation: confirm the operator cannot pre-set disposition fields the AI should derive.
-- Triage verdict entry on promote: baseline confidence semantics — document or derive.
-- Inquiry resolution remnants in Phase 2 state (analyst `question_resolution` values still stored): make them advisory-only, audited, or remove.
+- Closure-note generation: **done (Sep 28, 2026)** — the disposition is now derived server-side from the evidence-backed `investigation_state.provisional_disposition` (`closure_service.derive_closure_disposition`); the caller's value is advisory/audited only (`operator_disposition` + `disposition_conflict` in the response) and the UI disposition select is disabled. Rule-required `field_values` render only under an attributed "Operator-Recorded Closure Fields (execution facts, not conclusions)" header and can never reach the conclusion sentence — pinned by tests in `test_closure_gate.py` / `test_api_analyze_flow.py`.
+- Triage verdict entry on promote: baseline confidence semantics — document or derive. *(open)*
+- Inquiry resolution remnants in Phase 2 state (analyst `question_resolution` values still stored): make them advisory-only, audited, or remove. *(open)*
 
 **Size:** S–M each. **Exit criteria:** the only analyst inputs anywhere are execution facts and observations.
 
@@ -93,6 +93,12 @@ Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 - **Service hardening:** review launchd plists (restart throttling, log rotation for `soc-api.log` / Ollama logs).
 - **Multi-model:** model selector already exists in UI; expose per-stage model choice (analysis vs closure) and record it per iteration (DB default now `llama3.1:latest`).
 - **Data retention:** `analysis_results` grows unbounded; add retention/pruning policy (e.g., keep last N per case + all closure-linked).
+
+---
+
+## 8. Known issues
+
+- **SPL follow-up phase degradation (reported Sept 28, 2026):** across iterative follow-up phases the generated SPL degrades, and after Phase 3 the iterative investigation stops producing new query cards and largely stalls ("basically stopped working overall"). Suspected mechanism from code inspection: later phases surface only *unused* playbook templates (`already_run_titles` filter, `api/main.py` ~5069), so once every template has been run the only remaining card source is `_build_question_driven_followup_queries` (`api/main.py` ~557), which returns nothing unless the previous state still carries `unresolved_questions`. When questions resolve early (durable `question_resolution` consumption) or the model emits no "Key Questions" section, both sources empty out and the UI hits the no-cards dead end — pinned as-is by `test_no_questions_and_no_unused_templates_means_no_cards` (that pin *is* the bug). Also verify `phase3_manual`+ evidence handling against the hardcoded `phase2_manual` stage filter (`api/main.py` ~4787) and whether `followUpPhase` / `analysis_phase` stay in sync across reloads. Repro: drive a case through 3+ follow-up iterations and trace `phase2_queries` → `displayPhase2Queries` per phase.
 
 ---
 

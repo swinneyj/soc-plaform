@@ -118,16 +118,59 @@ def format_iteration_audit_trail(analysis_results: List[Any]) -> str:
     return NL.join(lines) + NL
 
 
+def derive_closure_disposition(investigation_state: Optional[Dict[str, Any]]) -> str:
+    """Derive the closure disposition key from the evidence-backed state.
+
+    Judgment-flow rule (plan §6): disposition is a conclusion, so it must be
+    derived, never operator-supplied. The state's ``provisional_disposition``
+    is itself derived from the AI analyses and the durable evidence ledger
+    (with the confidence caps), making it the single source of truth here.
+
+    Returns a key in {true_positive, benign_positive, false_positive,
+    undetermined}; any tentative state maps to ``undetermined``.
+    """
+    mapping = {
+        "malicious": "true_positive",
+        "benign": "benign_positive",
+        "false_positive": "false_positive",
+    }
+    raw = ((investigation_state or {}).get("provisional_disposition") or "undetermined").strip().lower()
+    return mapping.get(raw, "undetermined")
+
+
+def _normalize_disposition_key(value: Optional[str]) -> str:
+    """Normalize a free-form disposition label into the derived key space."""
+    key = (value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    aliases = {
+        "true_positive": "true_positive",
+        "malicious": "true_positive",
+        "benign_positive": "benign_positive",
+        "benign": "benign_positive",
+        "false_positive": "false_positive",
+        "other": "other",
+        "undetermined": "undetermined",
+    }
+    return aliases.get(key, "undetermined")
+
+
 def generate_structured_closure_note(
     db,
     case_id: str,
     rule_id: Optional[str],
     field_values: Dict[str, Any],
     analyst_notes: str,
-    disposition: str,
+    disposition: Optional[str] = None,
     force_closure: bool = False,
 ) -> Dict[str, Any]:
-    """Compile and persist an operator-ready structured closure note."""
+    """Compile and persist an operator-ready structured closure note.
+
+    ``disposition`` is advisory only: the note's conclusion is derived from
+    the evidence-backed investigation state (see derive_closure_disposition).
+    The operator's value is echoed back as ``operator_disposition`` with a
+    ``disposition_conflict`` flag so any divergence is auditable, and
+    ``field_values`` are rendered only as clearly attributed operator-recorded
+    facts — never as the conclusion.
+    """
     from db.models import (  # type: ignore
         AnalysisResult,
         ClosureNote,
@@ -185,8 +228,12 @@ def generate_structured_closure_note(
         "other": "Other",
         "undetermined": "Undetermined / Inconclusive",
     }
-    clean_disp_key = disposition.strip().lower().replace(" ", "_").replace("-", "_")
-    formatted_disposition = disposition_map.get(clean_disp_key, disposition)
+    # Judgment-flow rule (plan §6): the disposition is a conclusion derived
+    # from the evidence-backed state. The caller's value is advisory/audited
+    # only and never enters the note.
+    derived_disp_key = derive_closure_disposition(inv_state)
+    formatted_disposition = disposition_map.get(derived_disp_key, derived_disp_key)
+    disposition_conflict = bool(disposition) and _normalize_disposition_key(disposition) != derived_disp_key
 
     evidence_summary = inv_state.get("evidence_summary") or {}
     supports = int((evidence_summary.get("by_finding") or {}).get("supports") or 0)
@@ -202,11 +249,24 @@ def generate_structured_closure_note(
     compact_hypothesis = re.split(r"\s*\|\s*(?:Status|Time):", compact_hypothesis, maxsplit=1)[0].strip()
     compact_hypothesis = compact_hypothesis[:180].rstrip(" .,;:")
     analyst_context = (analyst_notes or "").strip()
-    generated_note = NL.join([
+    note_parts = [
         f"Investigation of {incident_summary} used {len(evidence_rows)} durable evidence items across the rule-specific follow-up checks ({supports} supporting, {refutes} refuting, and {neutral} neutral/no-result findings).",
         f"The evidence-driven conclusion was {formatted_disposition.lower()} for {rule_name}; closure readiness was {'verified' if readiness['is_ready'] else 'not met'} with {confidence_pct} confidence.",
         analyst_context if analyst_context else f"Key conclusion: {compact_hypothesis or 'the investigation was resolved through the collected evidence'}.",
-    ])
+    ]
+    # Operator-recorded closure fields are execution facts, not conclusions:
+    # render them under an explicit attribution header so they can never be
+    # mistaken for the AI-derived disposition.
+    field_lines = [
+        f"- {str(key).strip()}: {str(value).strip()}"
+        for key, value in (field_values or {}).items()
+        if str(value or "").strip()
+    ]
+    if field_lines:
+        note_parts.append(
+            "Operator-Recorded Closure Fields (execution facts, not conclusions):" + NL + NL.join(field_lines)
+        )
+    generated_note = NL.join(note_parts)
 
     closure_status = "closed" if readiness["is_ready"] else "submitted"
     closure_note = ClosureNote(
@@ -227,6 +287,10 @@ def generate_structured_closure_note(
         "case_id": case_id,
         "rule_name": rule_name,
         "disposition": formatted_disposition,
+        "disposition_key": derived_disp_key,
+        "disposition_source": "investigation_state",
+        "operator_disposition": disposition or "",
+        "disposition_conflict": disposition_conflict,
         "closure_status": closure_status,
         "readiness": readiness,
         "generated_note": generated_note,

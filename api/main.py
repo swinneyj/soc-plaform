@@ -5970,7 +5970,13 @@ def check_closure_readiness(case_id: str):
 
 @app.post("/api/db/closure-note", tags=["Rules"])
 def generate_closure_note(request: dict):
-    """Generate an operator-ready structured closure note backed by investigation state and evidence."""
+    """Generate an operator-ready structured closure note backed by investigation state and evidence.
+
+    Judgment-flow rule (plan §6): the note's disposition is derived from the
+    evidence-backed investigation state. A caller-supplied `disposition` is
+    advisory/audited only (echoed as operator_disposition with a
+    disposition_conflict flag) and never overrides the derived conclusion.
+    """
     try:
         sys.path.insert(0, get_platform_root())
         from db.models import SessionLocal
