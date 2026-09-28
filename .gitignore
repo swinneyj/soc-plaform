@@ -41,3 +41,6 @@ web/Old/app.js-pre-modular-monolith.bak
 *~
 .vercel
 .venv314/
+
+# Test/tool caches (never commit)
+.pytest_cache/
