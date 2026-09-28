@@ -445,8 +445,15 @@ def _build_investigation_state(
     supportive_results: List[Dict[str, Any]],
     analysis_stage: str,
     previous_state: Optional[Dict[str, Any]] = None,
+    evidence_verdicts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Calculate the complete investigation loop state with strict guardrails."""
+    """Calculate the complete investigation loop state with strict guardrails.
+
+    evidence_verdicts: optional structured per-card verdicts from the model's
+    PHASE2_EVIDENCE_JSON block ([{title, direction, rationale, ...}]). When
+    present, these take precedence over the Per-Evidence Assessment text
+    parser for matched titles (which itself precedes the global heuristic).
+    """
     previous_state = previous_state or {}
     sections = _extract_analysis_sections(analysis_text)
     initial_thoughts = sections.get("initial thoughts", "").strip()
@@ -472,6 +479,14 @@ def _build_investigation_state(
             for item in supportive_results
         ],
     )
+
+    # Phase 2: structured PHASE2_EVIDENCE_JSON verdicts take precedence over
+    # the text-section parser. Match verdicts to entries by normalized title.
+    structured_verdicts_by_title: Dict[str, Dict[str, Any]] = {}
+    for verdict in evidence_verdicts or []:
+        title = str(verdict.get("title") or "").strip()
+        if title:
+            structured_verdicts_by_title[re.sub(r"\s+", " ", title.lower()).strip()] = verdict
 
     evidence_by_finding = {"supports": 0, "refutes": 0, "neutral": 0}
     evidence_by_status = {
@@ -539,13 +554,24 @@ def _build_investigation_state(
                         item_index = pos
                         break
         per_card = per_card_assessments.get(item_index) if item_index else None
-        if per_card:
+        item_title = (item.get("query_title") if isinstance(item, dict) else "") or ""
+        structured = structured_verdicts_by_title.get(
+            re.sub(r"\s+", " ", str(item_title).strip().lower())
+        )
+        if structured:
+            finding_type = structured["direction"]
+            per_card_verdicts_applied += 1
+            per_card_rationale = structured.get("rationale") or ""
+            ai_verdict_source = "evidence_json"
+        elif per_card:
             finding_type = per_card["direction"]
             per_card_verdicts_applied += 1
             per_card_rationale = per_card["rationale"]
+            ai_verdict_source = "per_card"
         else:
             finding_type = ai_evidence_direction
             per_card_rationale = ""
+            ai_verdict_source = "analysis_text"
 
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:
@@ -610,7 +636,7 @@ def _build_investigation_state(
                 "source_system": source_system,
                 "result_status": result_status,
                 "finding_type": finding_type,
-                "ai_verdict_source": "per_card" if per_card else "analysis_text",
+                "ai_verdict_source": ai_verdict_source,
                 "ai_verdict_rationale": per_card_rationale,
                 "summary": observation_summary or "Pending analyst observation",
                 "has_substantive_observation": has_substantive,

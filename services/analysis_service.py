@@ -228,6 +228,13 @@ def format_grounded_phase2_section(phase2_queries: List[Dict[str, Any]]) -> str:
 def sanitize_analysis_text(response_text: str, phase2_queries: List[Dict[str, Any]]) -> str:
     """Clean raw model response of JSON markers and inject grounded recommendations."""
     cleaned = response_text or ""
+    # Strip the Phase 2 evidence-verdict JSON block (machine-readable only;
+    # the human-readable per-card verdicts live in Per-Evidence Assessment).
+    cleaned = re.sub(
+        r"\*{0,2}PHASE2_EVIDENCE_JSON_START\*{0,2}[\s\S]*?(?:\*{0,2}PHASE2_EVIDENCE_JSON_END\*{0,2}|$)",
+        "",
+        cleaned,
+    )
     cleaned = re.sub(
         r"\*{0,2}PHASE2_QUERIES_JSON_START\*{0,2}[\s\S]*?(?:\*{0,2}PHASE2_QUERIES_JSON_END\*{0,2}|$)",
         "",
@@ -256,6 +263,53 @@ def sanitize_analysis_text(response_text: str, phase2_queries: List[Dict[str, An
 
 
 
+def extract_phase2_evidence_json(response_text: str) -> List[Dict[str, Any]]:
+    """Parse the PHASE2_EVIDENCE_JSON block from model output (Phase 2).
+
+    Returns a list of {title, direction, rationale, confidence_delta_hint}
+    dicts. Malformed/missing blocks return [] — callers must fall back to the
+    existing Per-Evidence Assessment text parser and the global heuristic.
+    """
+    response_text = response_text or ""
+    start_marker = "PHASE2_EVIDENCE_JSON_START"
+    end_marker = "PHASE2_EVIDENCE_JSON_END"
+    start_idx = response_text.find(start_marker)
+    end_idx = response_text.find(end_marker)
+    if start_idx == -1 or end_idx == -1 or end_idx <= start_idx:
+        return []
+
+    raw_block = response_text[start_idx + len(start_marker):end_idx]
+    arr_start = raw_block.find("[")
+    arr_end = raw_block.rfind("]")
+    if arr_start == -1 or arr_end == -1 or arr_end <= arr_start:
+        return []
+    try:
+        parsed = json.loads(raw_block[arr_start:arr_end + 1])
+    except Exception:
+        return []
+    if not isinstance(parsed, list):
+        return []
+
+    valid_directions = {"supports", "refutes", "neutral"}
+    valid_hints = {"increase", "decrease", "none"}
+    verdicts: List[Dict[str, Any]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        direction = str(item.get("direction") or "").strip().lower()
+        if not title or direction not in valid_directions:
+            continue
+        hint = str(item.get("confidence_delta_hint") or "none").strip().lower()
+        verdicts.append({
+            "title": title,
+            "direction": direction,
+            "rationale": str(item.get("rationale") or "").strip(),
+            "confidence_delta_hint": hint if hint in valid_hints else "none",
+        })
+    return verdicts
+
+
 def build_analysis_prompt_intro(has_prior_analysis: bool) -> str:
     """Single source of truth for the live analysis prompt instructions.
 
@@ -279,7 +333,13 @@ def build_analysis_prompt_intro(has_prior_analysis: bool) -> str:
         "Do not assess notable fields individually and do not renumber the entries. "
         "Judge each entry only on its own observed result.\n\n"
         "Stay under 250 words per section. Use concise evidence-based language. List no more than three key questions. "
-        "Do not generate SPL, JSON, a verdict score, or closure notes. Distinguish observed facts from inference.\n"
+        "Do not generate SPL, a verdict score, or closure notes. Distinguish observed facts from inference.\n\n"
+        "After the four sections, append a machine-readable verdict block for every numbered entry:\n"
+        "PHASE2_EVIDENCE_JSON_START\n"
+        "[{\"title\": \"<entry title exactly as numbered above>\", \"direction\": \"supports|refutes|neutral\", "
+        "\"rationale\": \"one sentence\", \"confidence_delta_hint\": \"increase|decrease|none\"}]\n"
+        "PHASE2_EVIDENCE_JSON_END\n"
+        "This JSON block is required and must cover every entry. It is the only JSON you may emit.\n"
     )
     if has_prior_analysis:
         intro += (

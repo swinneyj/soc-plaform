@@ -48,6 +48,7 @@ from services.investigation_state import (
 )
 from services.analysis_service import (
     build_analysis_prompt_intro,
+    extract_phase2_evidence_json as _extract_phase2_evidence_json_impl,
     extract_phase2_queries as _extract_phase2_queries_impl,
     format_evidence_ledger_entries,
     ground_phase2_queries as _ground_phase2_queries_impl,
@@ -4805,6 +4806,10 @@ def analyze_case(request: AnalyzeRequest):
 
         response_text = result["response"] or ""
         phase2_queries = _extract_phase2_queries(response_text)
+        # Phase 2: structured per-card verdicts (title -> direction/rationale).
+        # Empty list = block absent/malformed; everything downstream falls back
+        # to the Per-Evidence Assessment text parser + global heuristic.
+        phase2_evidence_verdicts = _extract_phase2_evidence_json_impl(response_text)
 
 
         already_run_titles = _already_run_supportive_titles(prompt_supportive_results)
@@ -4871,6 +4876,7 @@ def analyze_case(request: AnalyzeRequest):
             supportive_results,
             analysis_stage,
             previous_state_payload,
+            evidence_verdicts=phase2_evidence_verdicts,
         )
         display_analysis = _apply_investigation_state_to_analysis_text(display_analysis, investigation_state)
         # Persist every completed AI iteration. The browser response is not
@@ -4904,7 +4910,7 @@ def analyze_case(request: AnalyzeRequest):
             ).all()
             for row in live_rows:
                 entry = timeline_by_id.get(row.id)
-                if not entry or entry.get("ai_verdict_source") != "per_card":
+                if not entry or entry.get("ai_verdict_source") not in ("per_card", "evidence_json"):
                     continue
                 try:
                     raw_obj = json.loads(row.raw_result) if row.raw_result else {}
@@ -4916,7 +4922,8 @@ def analyze_case(request: AnalyzeRequest):
                     continue
                 raw_obj["ai_finding_type"] = entry.get("finding_type")
                 raw_obj["ai_verdict_rationale"] = entry.get("ai_verdict_rationale") or ""
-                raw_obj["ai_verdict_source"] = "per_card"
+                raw_obj["ai_verdict_source"] = entry.get("ai_verdict_source")
+                raw_obj["ai_assessed_at"] = _utcnow().isoformat()
                 row.raw_result = json.dumps(raw_obj, ensure_ascii=False)
                 verdict_rows_updated += 1
         # Commit unconditionally: the AnalysisResult and InvestigationState
