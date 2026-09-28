@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 DUMMY_CLOSED = [
@@ -164,13 +164,18 @@ DUMMY_CLOSED = [
 ]
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now (platform convention) without the deprecated utcnow()."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _parse_time(value: str) -> datetime:
     for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
         try:
             return datetime.strptime(value, fmt)
         except ValueError:
             continue
-    return datetime.utcnow()
+    return _utcnow()
 
 
 def main() -> int:
@@ -189,7 +194,7 @@ def main() -> int:
     db = SessionLocal()
     try:
         created = 0
-        base_saved = datetime.utcnow()
+        base_saved = _utcnow()
 
         for i, item in enumerate(DUMMY_CLOSED):
             fields = {

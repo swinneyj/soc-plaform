@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -81,7 +81,7 @@ def main() -> int:
 
         cases = db.query(TriageResult).order_by(TriageResult.case_id.asc()).all()
         created = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         for case_index, case in enumerate(cases):
             hosts, users, extras = CASE_CONTEXT.get(
                 case.rule_id,

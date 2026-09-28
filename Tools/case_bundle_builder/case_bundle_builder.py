@@ -185,7 +185,7 @@ def build_case_bundle(source_dir):
 
     manifest = {
         'case_id': case_id,
-        'created_utc': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+        'created_utc': datetime.datetime.now(datetime.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         'source_dir': source_dir,
         'files': manifest_entries,
         'derived_outputs': derived_outputs,

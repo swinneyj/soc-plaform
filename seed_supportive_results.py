@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from db.models import SessionLocal, SupportiveQueryResult
 
@@ -124,7 +124,7 @@ def seed_supportive_results():
                 query_title=item["query_title"],
                 source_system=item.get("source_system", "splunk"),
                 raw_result=json.dumps(item["raw_result"]),
-                created_at=datetime.utcnow(),
+                created_at=datetime.now(timezone.utc).replace(tzinfo=None),
             )
             db.add(rec)
             created += 1

@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
@@ -225,7 +225,7 @@ def seed_test_cases():
     try:
         cases_created = 0
         events_created = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         for idx, case_def in enumerate(TEST_CASES):
             case_id = case_def["case_id"]

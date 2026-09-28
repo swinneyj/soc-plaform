@@ -15,16 +15,21 @@ You can override column names via CLI flags.
 import argparse
 import csv
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from db.models import SessionLocal, TriageResult
 
 
+def _utcnow() -> datetime:
+    """Naive UTC now (platform convention) without the deprecated utcnow()."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def parse_datetime(value: Optional[str]) -> datetime:
     """Best-effort parsing of timestamp; fall back to now if parsing fails."""
     if not value:
-        return datetime.utcnow()
+        return _utcnow()
 
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y %H:%M:%S"):
         try:
@@ -36,7 +41,7 @@ def parse_datetime(value: Optional[str]) -> datetime:
     try:
         return datetime.fromisoformat(value.strip())
     except Exception:
-        return datetime.utcnow()
+        return _utcnow()
 
 
 def ingest_notables(csv_path: str,
