@@ -21,6 +21,17 @@ CURRENT OPERATING MODEL:
 * If you intentionally want to overwrite local runtime state without exporting it first, use `Force_Restore_SOC_From_Handoff.bat`.
 * For current workflow details, read `docs\CURRENT_OPERATING_MODEL.md`.
 
+MACOS (DALTON'S MAC) START PATH:
+* Double-click launcher (equivalent of the Windows .bat story):
+  `SOC Platform.command` — keep a copy on the Desktop; it resolves the
+  checkout automatically (in-repo, scripts/, or Desktop copy all work).
+* What it does: ensures Ollama, preflights BWS secrets, starts the API
+  daemonized (survives shell teardown), opens the dashboard, tails the log.
+* Terminal equivalent (same pieces, foreground): `bash scripts/start`
+* Read-only status of every piece: `bash scripts/start --check`
+* Stop the API: `bash scripts/start --stop`
+* Database is Neon (cloud) — nothing to start locally, only reach.
+
 RESTART PATH:
 * Preferred one-command restart:
   .\scripts\start_platform.ps1 -EnsureOllama -OpenBrowser
