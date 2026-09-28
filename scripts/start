@@ -107,6 +107,12 @@ set -a
 # shellcheck disable=SC1090
 source .env
 set +a
+# Keychain fallback: fill unset credential keys (DATABASE_URL, API_KEY) from
+# the macOS Keychain (scripts/secrets-keychain). Explicit env values win;
+# BWS-injected values still win over everything at launch time.
+if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
+    eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
+fi
 if [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
     report "secrets" "BWS mode (token + cli present)"
     BWS_BIN="$(command -v bws || echo "$HOME/.local/bin/bws")"

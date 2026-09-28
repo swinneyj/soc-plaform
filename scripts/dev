@@ -68,6 +68,13 @@ else
     echo "⚠ No .env found at $ENV_FILE — continuing with environment only." >&2
 fi
 
+# Keychain fallback: fill unset credential keys (DATABASE_URL, API_KEY) from
+# the macOS Keychain (scripts/secrets-keychain). Explicit env values win;
+# bws-injected values still win over everything at launch time.
+if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
+    eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
+fi
+
 if command -v bws >/dev/null 2>&1; then
     BWS_BIN="bws"
 elif [ -x "$HOME/.local/bin/bws" ]; then

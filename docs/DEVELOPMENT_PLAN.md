@@ -1,16 +1,16 @@
 # SOC Platform — Development Plan
 
-*Last updated: 2026-09-16. Owner: Dalton Lewis · Repo: `swinneyj/soc-plaform`*
+*Last updated: 2026-09-28. Owner: Dalton Lewis · Repo: `swinneyj/soc-plaform`*
 
 ---
 
 ## 1. Where we are (snapshot)
 
-- **Code state:** `main` at `88b6153` — Justin's Windows snapshot (`c989730`) + five local commits queued for push (tests, model auto-resolution, prompt consolidation, resolved-model echo, closure-gate tests).
-- **Data state:** database wiped clean (0 cases / notables / analyses); rule playbooks, correlation rules, and placeholder aliases preserved. Nothing sensitive on disk; Desktop demo kit removed.
-- **Runtime:** API + dashboard on `127.0.0.1:8000` (launchd), Ollama `llama3.1:latest`, Postgres `:5432` — all loopback-only.
-- **Test suite:** 46 pure-unit tests, ~0.3 s runtime, covering evidence ledger validation, AI-derived direction scoring, Phase 3+ question-driven follow-ups, model-tag resolution, closure gating, confidence caps, and loop-status transitions.
-- **Known debt:** no CI, drifted docs, `services/analysis_service.py` still carries duplicated helpers (grounding/extraction) with `api/main.py` twins, analyst-facing judgment surfaces remain in the closure flow.
+- **Code state:** `dev-dalton` at `442319d` — Phase 1 hardening ✅ and Phase 2 per-card AI evidence verdicts ✅ (incl. confidence-hint polish) pushed; CI green on Python 3.14 + 3.9.
+- **Data state:** one shared **Neon** dataset — local API, Vercel prod, and Justin's instance all read/write the same database. Test rows must be clearly marked and deleted the same session; nothing destructive without explicit confirmation.
+- **Runtime:** one-command startup via `scripts/start` (Ollama + BWS preflight + daemonized API on `127.0.0.1:8000`), Ollama `llama3.1:latest`, Neon Postgres (cloud) — app ports loopback-only. Secrets: BWS vault is source of truth (`scripts/pull-secrets` regenerates `.env`); credential-bearing keys live in the **macOS Keychain** (`scripts/secrets-keychain`), not in plaintext `.env`.
+- **Test suite:** 141 pure-unit tests, <1 s runtime, dual-runtime (3.14 + 3.9) matrix in CI, covering evidence ledger validation, AI-derived direction scoring, per-card verdict parsing/precedence, question-driven follow-ups, model-tag resolution, closure gating, confidence caps/hints, loop-status transitions, boundary/latch, and report paths.
+- **Known debt:** analyst-facing judgment remnants (Phase 4), ops backlog (Phase 5: backups, retention, auth activation), `web/Old` deletion + Vercel env-var handoff pending Justin.
 
 ### Collaboration hazard (read this first)
 Justin has twice replaced repo history with fresh single-commit snapshots ("updated project files from WIndows"). Any local line not pushed is at risk of being orphaned. **Rule: push early, push often; re-verify his snapshots against the test suite before adopting them** (`pytest` catches regressions in <1 s).
@@ -19,9 +19,10 @@ Justin has twice replaced repo history with fresh single-commit snapshots ("upda
 
 ## 2. Immediate actions
 
-1. **Push the five queued commits** via GitHub Desktop (Push origin (5)).
-2. **Notify Justin:** his snapshot rewrote history — collaborators need to re-clone; also flag the now-fixed first-run 500 (`llama3.1:8b` not installed) so he pulls before his next demo.
-3. **Adopt-branch habit going forward:** do substantial work on `feature/*` branches, merge to `main` only after `pytest` passes.
+1. **Vercel env vars (Justin):** new Neon `DATABASE_URL` + `API_KEY` — the classic miss that breaks the next deploy; deploy.yml's `/api/health` smoke test catches it loudly.
+2. **API-gate activation decision (Dalton + Justin, ~10 min):** `API_KEY` is in the vault; setting it in Vercel + getting `SOC_CONFIG.apiKey` into the browser flips the gate on (unlocks `restricted` Splunk-boundary mode too).
+3. **Dependabot alerts toggle** (GitHub Settings → Security, ~2 min).
+4. **Then Phase 3** (read-only Splunk REST) — see §5; the mock `SearchBackend` means zero Splunk credentials needed to start.
 
 ---
 

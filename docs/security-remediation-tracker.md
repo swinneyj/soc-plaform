@@ -24,18 +24,18 @@
 - **What:** A stray empty `DATABASE_URL=` line (leftover from an interrupted `read -r -s` prompt) was overriding the real value, causing 500s on `/api/db/notables`.
 - **Remediation:** Removed today. A commented template line for the new Neon URL is in place. **Verify after rotation that the real URL lands on an uncommented line.**
 
-### 3. Local Postgres password lives in plaintext in `.env`
+### 3. Local Postgres password lives in plaintext in `.env` ✅ FIXED (Sept 28 — macOS Keychain)
 - **What:** `POSTGRES_PASSWORD=...` in `.env`. Not committed to git (confirmed clean), but it's on disk in plaintext and gets passed around manually between teammates.
 - **Remediation:**
   - [x] Confirm `.env` is in `.gitignore` (it is — `.gitignore:6`)
-  - [ ] Consider macOS Keychain / direnv / 1Password CLI instead of a plain shared file — the manual handoff pattern is how #1 happened
+  - [x] macOS Keychain instead of a plain shared file — Sept 28: `scripts/secrets-keychain` stores the credential-bearing keys (`DATABASE_URL`, `API_KEY`; `POSTGRES_PASSWORD`/`COMPOSE_DATABASE_URL` covered defensively) in the login keychain (service `soc-platform`). `.env` keeps `# NAME=@keychain` markers + the BWS bootstrap token + non-secret config only. `scripts/start`/`scripts/dev` inject keychain values (explicit env wins; BWS-injected values win at launch); `scripts/pull-secrets` re-migrates after every pull (idempotent). Verified live: digest round-trip, explicit-override precedence, keychain-only DB connect (11 tables on Neon), full restart via keychain path. Note: Docker compose interpolation reads `.env` directly — export from the keychain first if a compose flow returns (see script header).
 
-### 4. Unprotected DB dump in `~/Downloads`
+### 4. Unprotected DB dump in `~/Downloads` ✅ FIXED (Sept 28)
 - **What:** `current_soc_platform_dump.sql` sits in `~/Downloads` (a folder that may sync to iCloud). Repo is public; `.gitignore` blocks `*.sql` — good — but the dump itself may contain sensitive data sitting in an unencrypted folder.
-- **Remediation:**
-  - [ ] Inspect the dump for credentials/PII
-  - [ ] Move to `local-backups/` (gitignored) or delete if not needed
-  - [ ] Confirm never committed: `git log --all --oneline -- '**/*.sql'`
+- **Remediation (all done Sept 28):**
+  - [x] Inspected the dump (991 lines, Sep 11 pre-Neon schema): zero credential-pattern hits (`npg_`/private keys/tokens), the 9 "password"-word lines are playbook/query text (e.g. password-spraying checks) + `TEST-POWERSHELL-1`/`TEST-PINGFED-1` rows, and all 6 emails are `@corp.internal` synthetic corpus — no real PII
+  - [x] Moved to `local-backups/` (gitignored — `git check-ignore` confirms)
+  - [x] Confirmed never committed: `git log --all -- '*.sql'` = empty
 
 ---
 
@@ -67,7 +67,7 @@
 - **What:** Tracked, committed, public. Looks like a real-ish password (possibly reused elsewhere).
 - **Remediation:**
   - [x] Change to a clearly fake placeholder: `replace-with-a-long-random-password` — done Sept 25 (old value remains in git history, which is expected for a placeholder)
-  - [ ] If "theitguru" is/was a real password anywhere, rotate it there too
+  - [x] Sept 28: verified "theitguru" is not a live password anywhere reachable — SCRAM-SHA-256 hash of the only password-bearing local role (`soc_platform`) does not match it (local PG is `trust`-auth anyway), no `mini`/docker-PG role exists, all 4 BWS vault values differ, no `.env*` in either checkout contains it, zero shell-history hits. It survives only as the documented placeholder in docs + git history. **Human residual:** if it was ever reused as a real password outside this platform (other services/accounts), rotate there — outside this repo's reach.
 - **Effort:** one-line edit.
 
 ---
@@ -122,8 +122,8 @@
   launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/local.soc-platform.api.plist
   ```
 - **Follow-ups:**
-  - [ ] Decide whether auto-start should exist at all once BWS lands — preferred pattern is a `bws run` launcher started deliberately, not a login service
-  - [ ] Note for the record: `sh.brew.postgresql@16.plist` also auto-starts (Homebrew Postgres, localhost-only — low risk, documented here so the inventory is complete)
+  - [x] **Decision (Sept 28): no login auto-start.** BWS has landed (token + CLI live, `scripts/start` runs the API via `bws run`), and the deliberate-launcher pattern is confirmed as the way: `scripts/start` / the Desktop icon start everything on demand, `scripts/start --stop` stops it. The retired LaunchAgent plist stays on disk (disabled) purely as a documented escape hatch — do not re-enable without a fresh decision.
+  - [x] Noted for the record: `sh.brew.postgresql@16.plist` also auto-starts (Homebrew Postgres, localhost-only — low risk, kept in the inventory)
 
 ### E2. Generic USB mouse orphaned from macOS settings *(workstation note — no direct security impact)*
 - **What:** The no-name `" USB OPTICAL MOUSE"` binds to the generic `AppleUserHIDEventDriver`, and a live flip test (`com.apple.swipescrolldirection` true↔false with zero behavioral change) proved it ignores macOS's scroll-direction pipeline entirely; its cheap encoder also double-fires detents.
@@ -177,16 +177,16 @@
 - CORS origins are an explicit allowlist, not `*`
 - `allow_credentials=False` (reduces CSRF-style risk)
 - Every push secret-scanned before it left the machine (pattern: `npg_*` + password/token/secret assignments)
-- Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9 at the time; **124/124 as of Sept 28, 2026** (3 tests added since this note)
+- Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9 at the time; 124/124 earlier Sept 28; **141/141 as of Sept 28, 2026** (Phase 2 verdict suite + confidence-hint tests landed)
 - **pip-audit (Sept 28, 2026)**: `pip-audit 2.10.1` against `requirements.txt`, `requirements-dev.txt`, and the full installed 3.14 venv (includes transitive deps) — **no known vulnerabilities** in any pass (PyPI advisory DB, as of that date). Watch list per #11 unchanged (`fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`) — re-run on dependency bumps.
 - **Repo-wide credential sweep (Sept 28, 2026)**: pattern classes run across all 248 tracked files — `npg_`/Neon URLs, `sk-`/`ghp_`/`AKIA`-style keys, JWT/Bearer tokens, private-key blocks, `postgres://user:pass@` URLs, generic `(password|secret|token|api_key)=value` assignments, `.pem/.key/.db`-type tracked files. **Zero live findings.** `.env.example` still fully placeholder-ized (#8 fix holding); `deploy.yml` uses `${{ secrets.* }}` references only; `admin.jlee`/`WIN-APP-042` corpus confirmed synthetic per `CHAT_HANDOFF.md`. Caveats: (1) the 5 tracked `.pptx`/`.docx` binaries are not text-searchable — unaudited by this pass, low risk, spot-check once if desired; (2) dead credentials remain in git history by design (`theitguru` placeholder, rotated `remoteguest` password scrubbed from the working tree the same day)
 
 ## Open items, in order
-1. **BWS access token** (coworker) → then: verify secret names, build the `bws run` launcher, slim `.env` to just the token
-2. **New Neon URL distribution** → `.env` + **Vercel env vars** (the classic miss that breaks the next deploy)
+1. ~~BWS access token / `bws run` launcher / slim `.env`~~ ✅ done (token live, `scripts/start` runs the API via `bws run`; `.env` is now token + non-secret config + keychain markers — #3 fix)
+2. **New Neon URL distribution** → local side ✅ done (Sept 28 cutover); **Vercel env vars still pending (Justin)** — the classic miss that breaks the next deploy
 3. **Auth activation decision** (coworker conversation) → `API_KEY` in Vercel + `SOC_CONFIG.apiKey` injection in the pages
-4. **Dependabot alerts** (GitHub Settings → Security, ~2 min, you or Justin) + one-time `pip-audit`
+4. **Dependabot alerts** (GitHub Settings → Security, ~2 min, you or Justin) — `pip-audit` already run clean (see "Checked and found OK")
 5. **Deprecation cleanup** from the 3.14 warnings (`utcnow()` → timezone-aware; `httpx2`)
    - [x] **`utcnow()` — done Sept 28, 2026** (commits `e3b91fb` + `b816291`): shared `_utcnow()` helper (`now(timezone.utc)` stripped to naive — byte-identical output to the old calls, so the platform's naive-UTC storage convention is untouched) across `db/models.py` (11 Column defaults), `api/main.py`, `api/routes/system.py`, `services/closure_service.py`, `services/evidence_service.py`, and 6 seed/ingest/tool scripts. Suite: **124 passed, 1 warning** on Python 3.14 **and 124 passed on Python 3.9** (dual-runtime verified the same day — the helpers deliberately use `timezone.utc`, not the 3.11+ `datetime.UTC` shorthand, so both supported interpreters stay green). The only remaining warning is third-party (`anyio.BlockingPortal` via starlette's TestClient), not fixable here. SQLite roundtrip verified: model defaults still store naive UTC. One deliberate exception: `add_code_review.py` keeps its utcnow — dead one-shot migration kept as historical record (its output already landed in `db/models.py`).
    - [ ] `httpx2`/TestClient preference — gated on starlette upstream; no action today
-6. **Small decisions**: `triage.db` keep/delete; Safari history cleanup for the old Neon URL
+6. **Small decisions**: ~~`triage.db` keep/delete~~ ✅ archived per #12; Safari history cleanup for the old Neon URL (manual, TCC-blocked for tooling)
