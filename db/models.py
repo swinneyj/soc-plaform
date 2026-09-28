@@ -4,7 +4,7 @@ The platform runtime database is PostgreSQL only. Legacy SQLite backup
 files are no longer used as a fallback at runtime.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import os
 
 from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine
@@ -18,6 +18,12 @@ def get_default_postgres_url() -> str:
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL", get_default_postgres_url())
+
+
+def _utcnow() -> datetime:
+    """Naive UTC now (platform convention) without the deprecated
+    datetime.utcnow() — safe as a Column default/callable."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def normalize_database_url(database_url: str) -> str:
@@ -54,7 +60,7 @@ class TriageResult(Base):
     confidence_score = Column(Float)  # 0.0 to 1.0
     analysis_summary = Column(Text)
     remediation_steps = Column(Text)
-    triaged_at = Column(DateTime, default=datetime.utcnow, index=True)
+    triaged_at = Column(DateTime, default=_utcnow, index=True)
 
 class SplunkEvent(Base):
     """Ingested Splunk events for local analysis."""
@@ -66,7 +72,7 @@ class SplunkEvent(Base):
     host = Column(String, index=True)
     raw = Column(Text)  # Raw event data
     timestamp = Column(DateTime, index=True)
-    ingested_at = Column(DateTime, default=datetime.utcnow)
+    ingested_at = Column(DateTime, default=_utcnow)
     
 class AnalysisResult(Base):
     """AI-generated analysis results using Ollama."""
@@ -78,7 +84,7 @@ class AnalysisResult(Base):
     query = Column(Text)  # The prompt sent to Ollama
     analysis = Column(Text)  # The LLM response
     confidence = Column(Float)  # Model's confidence
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 class ESCorrelationRule(Base):
     """Splunk Enterprise Security correlation rules."""
@@ -94,8 +100,8 @@ class ESCorrelationRule(Base):
     required_closure_fields = Column(Text)  # JSON array
     closure_template = Column(Text)
     enabled = Column(Integer, default=1)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
 class ClosureNote(Base):
     """Generated closure notes for incidents."""
@@ -107,7 +113,7 @@ class ClosureNote(Base):
     analyst_notes = Column(Text)
     generated_note = Column(Text)
     status = Column(String, default="draft")  # draft, submitted, closed
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
     submitted_at = Column(DateTime)
 
 class SupportiveQuery(Base):
@@ -119,7 +125,7 @@ class SupportiveQuery(Base):
     title = Column(String, index=True)
     description = Column(Text)
     spl_query = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 
 class SupportiveQueryResult(Base):
@@ -137,7 +143,7 @@ class SupportiveQueryResult(Base):
     query_title = Column(String, index=True)
     source_system = Column(String, default="splunk")  # e.g., splunk, sql, other
     raw_result = Column(Text)  # JSON or text blob of the query output
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 
 class InvestigationState(Base):
@@ -162,7 +168,7 @@ class InvestigationState(Base):
     recommended_next_actions = Column(Text)  # JSON array
     evidence_summary = Column(Text)  # JSON object
     last_analysis_stage = Column(String, default="initial")
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow, index=True)
 
 
 class PlaceholderAlias(Base):
@@ -193,7 +199,7 @@ class CodeReview(Base):
     language = Column(String, default="python")
     review_result = Column(Text)
     model_name = Column(String, default="llama3.1:latest")
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
 
 
 class ToolRun(Base):
@@ -209,7 +215,7 @@ class ToolRun(Base):
     stderr = Column(Text)
     exit_code = Column(Integer)
     artifact_paths = Column(Text)  # JSON array of repo-relative paths
-    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    created_at = Column(DateTime, default=_utcnow, index=True)
     completed_at = Column(DateTime)
 
 def get_db():

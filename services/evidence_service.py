@@ -366,7 +366,7 @@ def build_parse_assessment(fields: Dict[str, str], raw_text: str = "", history: 
 def synthesize_source_notable_from_case(case) -> Dict[str, Any]:
     """Generate a structured, realistic notable fallback when no SplunkEvent row exists."""
     now_iso = getattr(case, "triaged_at", None)
-    now_str = now_iso.isoformat() if hasattr(now_iso, "isoformat") else datetime.datetime.utcnow().isoformat()
+    now_str = now_iso.isoformat() if hasattr(now_iso, "isoformat") else datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
 
     summary = (getattr(case, "analysis_summary", "") or "").strip()
     rule_name = (getattr(case, "rule_name", "") or "Security Detection").strip()

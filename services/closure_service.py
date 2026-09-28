@@ -170,7 +170,7 @@ def generate_structured_closure_note(
         AnalysisResult.case_id == case_id
     ).order_by(AnalysisResult.created_at.asc()).all()
 
-    now = datetime.datetime.utcnow()
+    now = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
     date_str = now.strftime("%Y-%m-%d %H:%M:%S UTC")
 
     rule_name = rule.rule_name if rule else (case.rule_name or "")

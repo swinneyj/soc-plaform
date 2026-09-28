@@ -5,6 +5,7 @@ Serves web UI at root path. Includes database and AI analysis endpoints.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime as _dt, timezone as _tz
 from fastapi import FastAPI, HTTPException, BackgroundTasks, File, UploadFile, Query, Depends, Header
 from typing import Optional
 from fastapi.middleware.cors import CORSMiddleware
@@ -1501,7 +1502,7 @@ def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
         "artifacts": result.get("artifacts", []),
-        "completed_at": datetime.datetime.utcnow().isoformat()
+        "completed_at": _utcnow().isoformat()
     })
     _persist_tool_run(jobs[job_id])
 
@@ -2441,9 +2442,16 @@ def render_notable_fields(parsed_fields: Dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def _utcnow() -> "_dt":
+    """Naive UTC now — timezone-aware internally, stripped to match the
+    platform's naive-UTC storage convention (and to avoid the deprecated
+    datetime.utcnow())."""
+    return _dt.now(_tz.utc).replace(tzinfo=None)
+
+
 def parse_notable_timestamp(value: str):
     if not value:
-        return datetime.datetime.utcnow()
+        return _utcnow()
 
     candidate = value.strip()
     try:
@@ -2456,7 +2464,7 @@ def parse_notable_timestamp(value: str):
         except ValueError:
             pass
 
-    return datetime.datetime.utcnow()
+    return _utcnow()
 
 
 def build_notable_dedup_key(fields: Dict[str, str], sanitized_text: str = "") -> Optional[str]:
@@ -2507,7 +2515,7 @@ def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dic
     active_dir = os.path.join(platform_root, "Data", "Active_Workspace")
     os.makedirs(active_dir, exist_ok=True)
 
-    timestamp = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = _utcnow().strftime("%Y%m%d_%H%M%S")
     text_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.txt")
     fields_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.fields.json")
     mapping_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.map.json")
@@ -2845,7 +2853,7 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
         "job_id": job_id,
         "status": JobStatus.PENDING.value,
         "tool_name": request.tool_name,
-        "created_at": datetime.datetime.utcnow().isoformat(),
+        "created_at": _utcnow().isoformat(),
         "completed_at": None,
         "stdout": None,
         "stderr": None,
@@ -2910,7 +2918,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
             row_status = _job_status_value(row.status)
             row_stderr = row.stderr
             if row_status in {JobStatus.PENDING.value, JobStatus.RUNNING.value} and row.created_at:
-                age_seconds = (datetime.datetime.utcnow() - row.created_at).total_seconds()
+                age_seconds = (_utcnow() - row.created_at).total_seconds()
                 if age_seconds > STALE_JOB_SECONDS:
                     row_status = JobStatus.FAILED.value
                     row_stderr = (row_stderr or "") + ("\n" if row_stderr else "") + "Job did not report completion and was marked interrupted after 10 minutes."
@@ -2919,7 +2927,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
                         cleanup_db = _SessionLocal()
                         row.status = row_status
                         row.stderr = row_stderr
-                        row.completed_at = datetime.datetime.utcnow()
+                        row.completed_at = _utcnow()
                         cleanup_db.merge(row)
                         cleanup_db.commit()
                         cleanup_db.close()
@@ -3396,7 +3404,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
                     "question_resolution": (entry.question_resolution or "not_resolved").strip() or "not_resolved",
                     "target_questions": [str(q).strip() for q in (entry.target_questions or []) if str(q).strip()],
                     "result_status": result_status,
-                    "collection_time": getattr(entry, "collection_time", None) or datetime.datetime.utcnow().isoformat(),
+                    "collection_time": getattr(entry, "collection_time", None) or _utcnow().isoformat(),
                     "source_system": getattr(entry, "source_system", source_system) or source_system,
                 },
                 ensure_ascii=False,
@@ -3917,7 +3925,7 @@ def paste_notable(request: PastedNotableRequest):
                     "sanitized_text": sanitized_text,
                     "history": sanitized_history,
                     "parse_assessment": parse_assessment,
-                    "saved_at": datetime.datetime.utcnow().isoformat(),
+                    "saved_at": _utcnow().isoformat(),
                     "artifact_paths": artifact_paths,
                     "historical": request.historical,
                     "segment_index": index,
@@ -4176,7 +4184,7 @@ def backfill_historical_closure_notes():
 
         generated = []
         skipped = []
-        now = datetime.datetime.utcnow()
+        now = _utcnow()
         for event in rows:
             try:
                 payload = json.loads(event.raw or "{}")
@@ -4498,12 +4506,12 @@ def promote_notable_to_triage(event_id: int):
             confidence_score=confidence,
             analysis_summary=analysis_summary,
             remediation_steps=remediation_steps,
-            triaged_at=event.timestamp or datetime.datetime.utcnow(),
+            triaged_at=event.timestamp or _utcnow(),
         )
         db.add(triage_case)
 
         payload["promoted_case_id"] = case_id
-        payload["promoted_at"] = datetime.datetime.utcnow().isoformat()
+        payload["promoted_at"] = _utcnow().isoformat()
         event.raw = json.dumps(payload)
 
         db.commit()
