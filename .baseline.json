@@ -1,5 +1,5 @@
 {
-  "test_files": 7,
+  "test_files": 8,
   "python": "Python 3.14.7",
   "launch_mode": "bws",
   "services": {
