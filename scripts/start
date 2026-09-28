@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+# scripts/start — one-command startup for the SOC Platform.
+#
+# Starts every piece the platform needs, in dependency order, idempotently
+# (safe to re-run; already-running pieces are detected and left alone):
+#
+#   1. Ollama (local LLM server, port 11434) — launched only if not running
+#   2. Secrets preflight — BWS token + CLI present? (.env fallback per scripts/dev)
+#   3. API (uvicorn, port 8000, secrets via `bws run`) — daemonized so it
+#      survives the launching shell (double-fork/setsid pattern; plain nohup
+#      does NOT survive tool-shell teardown on this machine — see AGENTS.md)
+#   4. Health verification — /api/health until 200 or fail with log tail
+#
+# Neon (the database) is cloud-side: nothing to start locally, only reach.
+#
+# Usage:
+#   scripts/start              # start everything, verify, exit (daemon stays)
+#   scripts/start --check      # report status of every piece, start nothing
+#   scripts/start --stop       # stop the API daemon (Ollama left running)
+#   scripts/start --port 8001  # custom API port
+#
+# Exit codes: 0 = all healthy, 1 = something failed (see output).
+
+set -euo pipefail
+
+PORT="${SOC_PORT:-8000}"
+DO_CHECK=0
+DO_STOP=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check) DO_CHECK=1 ;;
+        --stop)  DO_STOP=1 ;;
+        --port)  PORT="$2"; shift ;;
+        *) echo "unknown arg: $1" >&2; exit 1 ;;
+    esac
+    shift
+done
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$ROOT"
+
+LOG_FILE="/tmp/soc-api.log"
+API_BASE="http://127.0.0.1:${PORT}"
+API_TIMEOUT_SECS=45
+
+api_health() {
+    curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${API_BASE}/api/health" 2>/dev/null || echo "000"
+}
+
+ollama_health() {
+    curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:11434/api/version 2>/dev/null || echo "000"
+}
+
+report() {
+    printf "  %-12s %s\n" "$1" "$2"
+}
+
+if [ "$DO_STOP" -eq 1 ]; then
+    PIDS="$(pgrep -f 'uvicorn api.main' || true)"
+    if [ -n "$PIDS" ]; then
+        # kill the whole process group of the daemonized launcher (bws + uvicorn)
+        pkill -f "bws run -- .*uvicorn api.main" 2>/dev/null || true
+        pkill -f "uvicorn api.main" 2>/dev/null || true
+        sleep 1
+    fi
+    [ "$(api_health)" = "000" ] && echo "✓ API stopped." || echo "✗ API still responding on :${PORT}" >&2
+    exit 0
+fi
+
+echo "── SOC Platform startup ──────────────────────────────"
+
+# ── 1. Ollama ────────────────────────────────────────────────────────
+# (--check is read-only status; start nothing)
+if [ "$DO_CHECK" -eq 1 ]; then
+    OH="$(ollama_health)"
+    [ "$OH" = "200" ] && report "ollama" "running (:11434)" || report "ollama" "not running"
+else
+if [ "$(ollama_health)" = "200" ]; then
+    report "ollama" "already running (:11434)"
+else
+    if command -v ollama >/dev/null 2>&1; then
+        report "ollama" "starting…"
+        nohup ollama serve > /tmp/ollama.log 2>&1 &
+        disown 2>/dev/null || true
+        for _ in $(seq 1 10); do
+            sleep 1
+            [ "$(ollama_health)" = "200" ] && break
+        done
+        [ "$(ollama_health)" = "200" ] && report "ollama" "started (:11434)" \
+            || { report "ollama" "✗ failed to start (see /tmp/ollama.log)"; exit 1; }
+    else
+        report "ollama" "not installed — AI analysis will be unavailable"
+        echo "    (install: https://ollama.com — the platform runs without it,"
+        echo "     but /api/db/analyze endpoints will 503)"
+    fi
+fi
+fi
+
+# ── 2. Secrets preflight (same contract as scripts/dev) ─────────────────
+if [ ! -f ".env" ]; then
+    report "secrets" "✗ no .env found — run scripts/pull-secrets after BWS setup"
+    exit 1
+fi
+set -a
+# shellcheck disable=SC1090
+source .env
+set +a
+if [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
+    report "secrets" "BWS mode (token + cli present)"
+    BWS_BIN="$(command -v bws || echo "$HOME/.local/bin/bws")"
+    if ! "$BWS_BIN" project list >/dev/null 2>&1; then
+        report "secrets" "✗ BWS_ACCESS_TOKEN rejected — fix token or drop it from .env"
+        exit 1
+    fi
+else
+    report "secrets" "env-only mode (.env values, no BWS injection)"
+    BWS_BIN=""
+fi
+
+# NOTE: BWS-injected values win at launch time (bws run), so this local
+# DATABASE_URL read is only a status hint — the launcher's copy is what matters.
+if [ -n "${DATABASE_URL:-}" ]; then
+    case "$DATABASE_URL" in
+        *neon.tech*) report "database" "Neon (cloud) — nothing to start locally" ;;
+        *localhost*) report "database" "local Postgres — expected on :5432/:5433" ;;
+        *)           report "database" "custom target" ;;
+    esac
+else
+    report "database" "⚠ no DATABASE_URL — API will run degraded (health-only)"
+fi
+
+# ── 3. API (idempotent: skip if already healthy) ────────────────────────
+if [ "$(api_health)" = "200" ]; then
+    report "api" "already running (:${PORT})"
+else
+    report "api" "starting (daemonized, log: $LOG_FILE)…"
+    # Double-fork + setsid so the daemon re-parents to init and survives
+    # this shell's teardown. Plain nohup does NOT survive here.
+    python3 - "$ROOT" "$PORT" "$LOG_FILE" "$BWS_BIN" <<'PYEOF'
+import os, sys
+root, port, log_path, bws_bin = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    os.chdir(root)
+    devnull = os.open("/dev/null", os.O_RDONLY)
+    log = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(devnull, 0); os.dup2(log, 1); os.dup2(log, 2)
+    launcher = f'bash scripts/dev --port {port}' if os.path.basename(bws_bin or "x") != "bws" \
+        else f'"{bws_bin}" run -- bash scripts/dev --port {port}'
+    os.execvp("bash", ["bash", "-lc", f'cd {root} && exec {launcher}'])
+else:
+    os.waitpid(pid, 0)
+PYEOF
+    for _ in $(seq 1 "$((API_TIMEOUT_SECS / 3))"); do
+        sleep 3
+        [ "$(api_health)" = "200" ] && break
+    done
+    [ "$(api_health)" = "200" ] && report "api" "started (:${PORT}, pid $(pgrep -f 'uvicorn api.main' | head -1))" \
+        || { report "api" "✗ failed to become healthy in ${API_TIMEOUT_SECS}s — log tail:"; tail -10 "$LOG_FILE" >&2; exit 1; }
+fi
+
+# ── 4. Final health summary ──────────────────────────────────────────────
+if [ "$DO_CHECK" -eq 1 ]; then
+    echo "── status only (nothing was started if already up) ───"
+fi
+echo "──────────────────────────────────────────────────────"
+if [ "$(api_health)" = "200" ]; then
+    echo "✓ Platform healthy."
+    echo "  API:        ${API_BASE}/api/health"
+    echo "  Dashboard:  ${API_BASE}/index.modular.html"
+    echo "  Stop:       scripts/start --stop"
+    echo "  Logs:       tail -f $LOG_FILE"
+    exit 0
+else
+    echo "✗ API unhealthy after startup sequence." >&2
+    exit 1
+fi
