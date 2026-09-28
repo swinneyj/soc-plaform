@@ -3,6 +3,7 @@
 **Prepared:** Sept 16, 2026 · **Repo:** `swinneyj/soc-plaform` (public) · **Branch:** `dev-dalton`
 **Updated:** Sept 25, 2026 — added environment notes (E1/E2) + finding #14; synced item statuses with commits `1775c10` (Downloads) / `be4c644` (`~/soc-platform`)
 **Updated (session 2, Sept 25):** #15 fixed & deployed-verified; Python pinned 3.14; frontend auth wiring (config-only activation); Splunk boundary ("the latch") architecture landed — see "Architecture hardening" below. Suite is now 121/121 on both Python 3.14 and 3.9. All work lives on `origin/dev-dalton` in `~/soc-platform` (commits `00c7e69`…`908b6d5`).
+**Updated Sept 28:** added E3 — AI agent harness (Freebuff Desktop) workstation exposure; canonical risk notes + operating rules live in `AGENTS.md` → "Freebuff Desktop risk notes". Also this session: verified the git restore path (0.040s, sha256-identical) and cleared a stale `postmaster.pid` after unclean shutdown (see AGENTS.md machine quirks).
 **Scope:** code/`git grep` inspection of the working copy at `~/Downloads/soc-plaform-main`. Not a pen-test — a prioritized list of concrete, actionable findings.
 
 ---
@@ -131,6 +132,14 @@
 - **Follow-ups:**
   - [ ] Clear Safari history entries containing the old Neon URL (History → Show All History → search "neon" → delete)
   - [ ] Consider replacing the mouse — encoder jitter is hardware; Mos only masks it
+
+### E3. AI agent harness: Freebuff Desktop on this workstation (Sept 28)
+- **What:** Freebuff Desktop (`com.freebuff.desktop`, Electron, auto-updating) is the coding-agent harness in use on this repo. Vendor: Freebuff, Inc. (YC F24, ~4 people) — **ad-funded**: prompts/messages may be analyzed to personalize ads, chat threads are retained **server-side indefinitely** (until a deletion request completes; support@codebuff.com), and device fingerprinting is part of auth.
+- **Why it's in this tracker:** an agent harness with filesystem + terminal access to this checkout, run by a vendor whose open tracker carries unfixed security issues (#1146 out-of-scope `rm -rf` deletion with no confirmation gate; #1231 unmerged XSS fix; #1306 MCP tool parameters dropped). Combined with the unauthenticated-API findings (#5/#6), it widens the local exposure surface.
+- **Canonical notes:** full risk summary, tracker citations with check-dates, and the binding operating rules (keep the tree committed; review destructive commands; no MCP connectors; never the Space Bunny Alpha model; no secrets in prompts) live in **`AGENTS.md` → "Freebuff Desktop risk notes"** — that section is the single source of truth and should be re-verified against the vendor tracker before trusting; this entry only cross-references it.
+- **Mitigations in place this session:** both new files committed and pushed to origin; restore drill validated (tracked-file deletion → `git restore --source=origin/dev-dalton` → byte-identical in 0.040s); working tree clean.
+- **Follow-up:**
+  - [ ] Decide whether to send the server-side thread-history deletion request (draft scope in this conversation, 2026-09-28); re-check AGENTS.md against the vendor tracker first
 
 ---
 
