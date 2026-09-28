@@ -19,6 +19,8 @@ Justin has twice replaced repo history with fresh single-commit snapshots ("upda
 
 ## 2. Immediate actions
 
+*Owner triage Sept 28, 2026: all deferred as non-blocking (see tracker "Open items, in order") — Phase 3 can start now.*
+
 1. **Vercel env vars (Justin):** new Neon `DATABASE_URL` + `API_KEY` — the classic miss that breaks the next deploy; deploy.yml's `/api/health` smoke test catches it loudly.
 2. **API-gate activation decision (Dalton + Justin, ~10 min):** `API_KEY` is in the vault; setting it in Vercel + getting `SOC_CONFIG.apiKey` into the browser flips the gate on (unlocks `restricted` Splunk-boundary mode too).
 3. **Dependabot alerts toggle** (GitHub Settings → Security, ~2 min).
