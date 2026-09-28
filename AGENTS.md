@@ -88,7 +88,7 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 - ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; one Vercel env var flips it on
 - 🔧 **CI pytest-on-push** (Dalton, after checking Justin's CI) `[V — only deploy.yml exists locally]`: the 124-test suite doesn't run in CI yet
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)
-- 🔧 **remoteguest SSH** `[V — staged, failing with no diagnostic]`: token-enabled, key installed, perms correct, password valid — SSH still closes pre-auth. macOS bug hypothesis `[A]`. Retest after OS updates; rotate its `12345` password before real use
+- 🔧 **remoteguest SSH** `[V — staged, failing with no diagnostic]`: token-enabled, key installed, perms correct, password **rotated Sep 28, 2026** (old value scrubbed from all docs — never re-document passwords here; new value lives only in Dalton's password manager) — SSH still closes pre-auth. macOS bug hypothesis `[A]`. Retest after OS updates
 - 🔧 **Boot persistence** (decision) `[V — currently manual]`: point launchd at `scripts/dev` for vault-injected auto-start, or keep manual launches
 - ⚪ **`friend` account** `[V — fully deleted Sep 25]`: record + home gone. If anything ever recreates accounts by terminal, re-read the quirks section first
 

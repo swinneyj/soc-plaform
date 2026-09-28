@@ -75,7 +75,7 @@ for p in 445 548 22; do nc -z -G 2 100.88.143.23 $p >/dev/null 2>&1 && echo "$p 
 | Account | Purpose | Status |
 |---|---|---|
 | `daltonlewis` | Owner (admin) | SSH works via `~/.ssh/authorized_keys` (ed25519 key) |
-| `remoteguest` (full name "Remote Guest", pw `12345`) | Future SSH guest account, created via GUI | **Exists & token-enabled, but SSH blocked by macOS bug — see below. Will start working after an OS fix, no re-setup needed.** |
+| `remoteguest` (full name "Remote Guest", pw rotated Sep 28 2026 — value never stored in docs) | Future SSH guest account, created via GUI | **Exists & token-enabled, but SSH blocked by macOS bug — see below. Will start working after an OS fix, no re-setup needed.** |
 | ~~`friend`~~ | Deleted Sep 25 (GUI) | Gone — record + home dir. The SecureToken saga's casualty; see AGENTS.md if recreating accounts |
 
 **Golden rule discovered today:** accounts created via **System Settings GUI** get a SecureToken automatically and work; accounts created via terminal (`sysadminctl`/`dscl`) get a broken half-initialized password record. Always use the GUI for new accounts on this Mac.
@@ -119,7 +119,7 @@ open https://login.tailscale.com/admin/machines
 - **Canonical BWS org** — if Justin's org (with the "real" project) materializes, decide which org is canonical and migrate; avoid a permanent split
 - **Syncthing** — auto-synced folder, no mounts, no passwords. The durable evolution of the drop zone.
 - **SSH for Jay** — either (a) wait for the macOS fix and his key lands in `remoteguest`, or (b) now: install his `.pub` into `~/.ssh/authorized_keys` (owner account, full access, revocable by deleting one line).
-- **Cleanup** — ~~delete the `friend` husk~~ done. Optional: rotate `12345` to something stronger via GUI (it's tailnet-only exposure, low risk).
+- **Cleanup** — ~~delete the `friend` husk~~ done. remoteguest password rotation: **done Sep 28, 2026** — old value was in these docs (and so in git history), now dead.
 - **Rotate guest SMB off** if a third party ever joins the tailnet — guest folder is writable by anyone on the tailnet.
 
 ## Fail-safe: if everything breaks
