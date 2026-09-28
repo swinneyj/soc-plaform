@@ -312,6 +312,22 @@ class TestPerCardVerdicts:
         assert any("Conflicting evidence" in b for b in state["closure_blockers"])
         assert state["loop_status"] != "ready_for_closure"
 
+    def test_stored_per_card_verdict_survives_state_rebuild(self):
+        """Rows persist ai_finding_type from a prior /db/analyze run. A
+        rebuild with no analysis text (e.g. after an evidence save) must keep
+        those AI-derived directions instead of degrading to neutral."""
+        item = evidence("Q1")
+        item["raw_result"]["ai_finding_type"] = "supports"
+        item["raw_result"]["ai_verdict_source"] = "per_card"
+        item["raw_result"]["ai_verdict_rationale"] = "Outbound certutil transfer observed."
+        state = build_state("", [item])
+        timeline = state["evidence_summary"]["timeline"]
+        assert timeline[0]["finding_type"] == "supports"
+        assert timeline[0]["ai_verdict_source"] == "per_card"
+        assert timeline[0]["ai_verdict_rationale"] == "Outbound certutil transfer observed."
+        assert state["evidence_summary"]["by_finding"]["supports"] == 1
+        assert not any("neutral only" in b for b in state["closure_blockers"])
+
     def test_per_card_refutes_flips_no_results_to_refuting_evidence(self):
         # A no_results entry is only substantive when the verdict direction
         # is refutes; a per-card refutes verdict must trigger that path.

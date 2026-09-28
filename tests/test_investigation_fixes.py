@@ -266,8 +266,10 @@ class TestPhaseFollowUpGeneration:
             assert card.get("is_variant") is True
             assert card["title"].startswith("Phase 4:")
             assert card.get("target_questions"), "variant must carry its question"
-            # Variants are grounded: SPL comes from a real template
-            assert card["spl"] in {TEMPLATE_A.spl_query, TEMPLATE_B.spl_query}
+            # Variants are grounded: SPL comes from a real template, with a
+            # phase-scoped time re-scope so each phase is a genuinely new query.
+            assert any(t.spl_query in card["spl"] for t in (TEMPLATE_A, TEMPLATE_B))
+            assert f"earliest=-{4}h" in card["spl"]
 
     def test_variant_targets_match_open_questions(self):
         results = [evidence_item("Process execution check"),
@@ -280,16 +282,60 @@ class TestPhaseFollowUpGeneration:
         for question in STATE_WITH_QUESTIONS["unresolved_questions"]:
             assert question in targeted
 
-    def test_no_questions_and_no_unused_templates_means_no_cards(self):
-        """Only when nothing is open AND everything ran is an empty list
-        acceptable."""
+    def test_no_cards_only_when_loop_is_done(self):
+        """Empty is correct only when the loop has converged: nothing open AND
+        closure-ready. (This test previously pinned the empty-cards dead end
+        for any exhausted playbook — the SPL phase-degradation bug.)"""
         results = [evidence_item("Process execution check"),
                    evidence_item("Outbound destination check")]
+        done_state = {
+            "unresolved_questions": [],
+            "closure_blockers": [],
+            "loop_status": "ready_for_closure",
+        }
         cards = api_main._build_question_driven_followup_queries(
-            [TEMPLATE_A, TEMPLATE_B], {"unresolved_questions": [], "closure_blockers": []},
+            [TEMPLATE_A, TEMPLATE_B], done_state,
             results, phase_number=4,
         )
         assert cards == []
+
+    def test_exhausted_playbook_still_yields_verification_rechecks(self):
+        """No questions, no blockers, loop still needs work -> keep offering
+        fresh re-scoped re-checks instead of dead-ending (DEVELOPMENT_PLAN §8)."""
+        results = [evidence_item("Process execution check"),
+                   evidence_item("Outbound destination check")]
+        state = {
+            "unresolved_questions": [],
+            "closure_blockers": [],
+            "loop_status": "needs_more_evidence",
+            "current_hypothesis": "Staging activity on the impacted host.",
+        }
+        cards = api_main._build_question_driven_followup_queries(
+            [TEMPLATE_A, TEMPLATE_B], state,
+            results, phase_number=4,
+        )
+        assert cards
+        for card in cards:
+            assert card.get("is_variant") is True
+            assert card.get("target_questions")
+        assert any(
+            "Staging activity" in t
+            for card in cards for t in card["target_questions"]
+        )
+
+    def test_current_response_questions_become_targets_immediately(self):
+        """Questions the current analysis just raised are open work NOW."""
+        results = [evidence_item("Process execution check"),
+                   evidence_item("Outbound destination check")]
+        cards = api_main._build_question_driven_followup_queries(
+            [TEMPLATE_A, TEMPLATE_B],
+            {"unresolved_questions": [], "closure_blockers": []},
+            results, phase_number=3,
+            current_questions=["Was lateral movement observed?"],
+        )
+        assert cards
+        targeted = {t for c in cards for t in c.get("target_questions", [])}
+        assert "Was lateral movement observed?" in targeted
 
     def test_phase_2_returns_empty_from_this_builder(self):
         """Phase 2 uses the classic fallback path, not this builder."""

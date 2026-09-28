@@ -560,6 +560,7 @@ def _build_investigation_state(
         # Legacy analyst-entered finding_type is kept in raw_result for audit
         # only; scoring always uses an AI-derived direction: the per-card
         # verdict from the model's Per-Evidence Assessment when available,
+        # then any per-card verdict persisted by a prior analysis run, and
         # otherwise the global analysis-text heuristic.
         item_index = None
         for pos, entry in enumerate(supportive_results, 1):
@@ -591,9 +592,19 @@ def _build_investigation_state(
             per_card_rationale = per_card["rationale"]
             ai_verdict_source = "per_card"
         else:
-            finding_type = ai_evidence_direction
-            per_card_rationale = ""
-            ai_verdict_source = "analysis_text"
+            # Durable per-card verdicts persisted by a prior /db/analyze run
+            # (ai_finding_type in raw_result) take precedence over the global
+            # text heuristic so AI-assessed directions survive state rebuilds
+            # (e.g. after evidence saves) instead of degrading to neutral.
+            stored_direction = (raw_result.get("ai_finding_type") or "").strip().lower()
+            if stored_direction in ("supports", "refutes", "neutral"):
+                finding_type = stored_direction
+                per_card_rationale = raw_result.get("ai_verdict_rationale") or ""
+                ai_verdict_source = raw_result.get("ai_verdict_source") or "per_card"
+            else:
+                finding_type = ai_evidence_direction
+                per_card_rationale = ""
+                ai_verdict_source = "analysis_text"
 
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:

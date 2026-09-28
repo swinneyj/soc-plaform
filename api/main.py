@@ -554,12 +554,32 @@ def _evidence_entry_is_valid(entry) -> bool:
     return status not in ("", "success")
 
 
+def _rescope_variant_spl(spl: str, phase_number: int) -> str:
+    """Give a re-check variant a genuinely distinct, phase-scoped SPL.
+
+    Re-running an identical query is not a new query: variants re-scope the
+    search-time window (``earliest=-<phase>h``) so each iteration can surface
+    fresh rows instead of replaying a saved card's SPL under a new title.
+    """
+    text = (spl or "").strip()
+    if not text:
+        return text
+    window = f"earliest=-{max(1, int(phase_number))}h"
+    if re.search(r"\bearliest=\S+", text):
+        return re.sub(r"\bearliest=\S+", window, text, count=1)
+    pipe_idx = text.find("|")
+    if pipe_idx == -1:
+        return f"{text} {window}"
+    return f"{text[:pipe_idx]}{window} {text[pipe_idx:]}"
+
+
 def _build_question_driven_followup_queries(
     supportive_query_defs,
     previous_state_payload: Dict[str, Any],
     prompt_supportive_results: List[Dict[str, Any]],
     phase_number: int,
     max_queries: int = 3,
+    current_questions: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """Build follow-up cards for later phases that target the CURRENT open
     questions, even after every playbook template has already been run.
@@ -567,13 +587,16 @@ def _build_question_driven_followup_queries(
     Strategy, in order:
     1. Unused playbook templates (grounded, never run) — preferred.
     2. Fresh variants of already-run templates: clone the closest-matching
-       template for each open question, annotate it with the phase number and
-       the question it targets, and mark it as a variant so the analyst
-       understands it is a re-scoped run (e.g. narrower time window or added
-       context), not a replay.
+       template for each open question/blocker, annotate it with the phase
+       number and the target it addresses, and mark it as a variant so the
+       analyst understands it is a re-scoped run (phase-specific time
+       window), not a replay.
+    3. No explicit targets but the loop has not converged
+       (loop_status != ready_for_closure): hypothesis-verification re-checks,
+       so a follow-up phase never dead-ends while the case still needs work.
 
-    This guarantees the UI never shows an empty/stale query list while open
-    questions remain — the Phase 3+ dead end.
+    This guarantees the UI never shows an empty/stale query list — the
+    Phase 3+ dead end ("SPL phase degradation", DEVELOPMENT_PLAN §8).
     """
     if phase_number <= 2:
         return []
@@ -595,14 +618,28 @@ def _build_question_driven_followup_queries(
     # 2) All templates used — build question-targeted variants of the
     #    closest-matching already-run templates.
     questions = [str(q).strip() for q in (previous_state_payload.get("unresolved_questions") or []) if str(q).strip()]
+    # Questions this analysis just raised are open work NOW — merge them in so
+    # the loop reacts immediately instead of one iteration later.
+    for question in (current_questions or []):
+        text = str(question).strip()
+        if text and text not in questions:
+            questions.append(text)
     blockers = [
         str(b).strip()
         for b in (previous_state_payload.get("closure_blockers") or [])
         if str(b).strip() and "remain unresolved" not in str(b).lower()
     ]
     targets = questions + blockers
+
+    # 3) No explicit targets but the loop has not converged: keep it alive
+    #    with hypothesis-verification re-checks. A follow-up phase must never
+    #    dead-end while the case still needs work (the phase-degradation bug).
     if not targets:
-        return []
+        loop_status = (previous_state_payload.get("loop_status") or "").strip().lower()
+        if loop_status == "ready_for_closure":
+            return []
+        hypothesis = (previous_state_payload.get("current_hypothesis") or "").strip()
+        targets = [hypothesis or "Verify the disposition-driving evidence before concluding the investigation"]
 
     defs = []
     for query_def in supportive_query_defs or []:
@@ -620,28 +657,33 @@ def _build_question_driven_followup_queries(
         return []
 
     variants = []
+    used_in_batch: set = set()
     for target in targets[:max_queries]:
         target_words = set(re.findall(r"[a-z0-9]+", target.lower()))
-        best = None
-        best_overlap = -1
+        ranked = []
         for candidate in defs:
             candidate_text = " ".join([
                 candidate["title"], candidate["description"], candidate["spl"],
             ]).lower()
             overlap = len(target_words & set(re.findall(r"[a-z0-9]+", candidate_text)))
-            if overlap > best_overlap:
-                best_overlap = overlap
-                best = candidate
+            ranked.append((overlap, candidate))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        # Prefer a template this batch has not already re-checked (variety);
+        # fall back to the best match so every target still gets a card.
+        best = next((c for _o, c in ranked if c["title"] not in used_in_batch), None)
+        if best is None and ranked:
+            best = ranked[0][1]
         if not best:
             continue
+        used_in_batch.add(best["title"])
         short_question = target if len(target) <= 90 else target[:87].rstrip() + "..."
         variants.append({
             "title": f"Phase {phase_number}: {best['title']} (targeted re-check)",
-            "spl": best["spl"],
+            "spl": _rescope_variant_spl(best["spl"], phase_number),
             "description": (
-                f"Re-scoped Phase {phase_number} run of '{best['title']}' to resolve the remaining open question: "
+                f"Re-scoped Phase {phase_number} run of '{best['title']}' targeting: "
                 f"\"{short_question}\". Refine the time window or add context before running; the AI will "
-                "assess the new result against this question."
+                "assess the new result against this target."
             ),
             "target_questions": [target],
             "is_variant": True,
@@ -5092,6 +5134,9 @@ def analyze_case(request: AnalyzeRequest):
                 previous_state_payload or {},
                 prompt_supportive_results,
                 requested_phase_number,
+                current_questions=_extract_question_items(
+                    _extract_analysis_sections(response_text).get("key questions", "")
+                ),
             )
             if not phase2_queries:
                 phase2_queries = _build_supportive_phase2_fallback(

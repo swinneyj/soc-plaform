@@ -295,6 +295,139 @@ def seed_supportive_query(client, rule_id, title, spl):
     db.close()
 
 
+class CleanVerdictOllamaClient(FakeOllamaClient):
+    """Analysis-only fake for loop-stress runs: a decisive malicious verdict,
+    no Key Questions section, no Per-Evidence Assessment — every ledger entry
+    falls back to the global 'supports' heuristic. Mirrors a mature
+    investigation where the model has stopped asking new questions (the
+    reported SPL phase-degradation shape)."""
+
+    def generate(self, prompt, model=None, temperature=None, options=None):
+        self.calls.append(prompt)
+        return {
+            "success": True,
+            "model": model or self.model,
+            "response": (
+                "### Initial Thoughts\nCertutil outbound transfer supports the hypothesis "
+                "of unauthorized tool staging.\n\n"
+                "### Investigative Analysis\nThe collected rows indicate malicious activity "
+                "consistent with compromise.\n\n"
+                "### Triage Verdict\nMalicious — true positive.\n"
+            ),
+        }
+
+
+def _norm_spl(spl):
+    return " ".join((spl or "").split()).lower()
+
+
+def _post_analyze(client, case_id, phase, stage=None):
+    return client.post("/api/db/analyze", json={
+        "case_id": case_id,
+        "analysis_stage": stage or ("initial" if phase <= 1 else "follow_up"),
+        "analysis_phase": phase,
+        "prior_analysis": "prior iteration analysis",
+    })
+
+
+def _save_phase_evidence(client, case_id, phase, title, spl=""):
+    return client.post(
+        f"/api/db/triage/{case_id}/evidence",
+        json={
+            "source_system": f"phase{phase}_manual",
+            "replace_existing": True,
+            "entries": [{
+                "query_title": title,
+                "query_text": spl,
+                "result_text": "Multiple substantive observed rows indicating staging activity on the impacted host.",
+                "finding_type": "neutral",
+                "result_status": "success",
+            }],
+        },
+    )
+
+
+class TestFollowUpLoopStress:
+    """Loop-stress harness — the SPL phase-degradation regression guard
+    (DEVELOPMENT_PLAN §8).
+
+    Auto-drives a mock case through N follow-up iterations, one saved
+    evidence row per phase, with only 2 playbook templates so the playbook
+    is exhausted early. Contract: while the loop still needs work, every
+    follow-up analysis must return follow-up cards AND surface at least one
+    card carrying a query not yet saved — re-running an identical SPL under
+    a new title is not a new query. The loop must never dead-end or replay
+    stale SPL, no matter how many iterations run."""
+
+    def test_follow_up_loop_never_dead_ends_or_replays(self, api_client, monkeypatch):
+        fake = CleanVerdictOllamaClient()
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: fake)
+        case_id = seed_case(api_client)
+        seed_supportive_query(
+            api_client, "test_rule", "Process execution check",
+            "sourcetype=linux_secure user=$user$",
+        )
+        seed_supportive_query(
+            api_client, "test_rule", "Outbound destination check",
+            "sourcetype=linux_secure host=$host$",
+        )
+
+        resp = _post_analyze(api_client, case_id, phase=1)
+        assert resp.status_code == 200, resp.text
+
+        saved_spls = set()
+        for phase in range(2, 9):  # 7 follow-up iterations vs 2 templates
+            resp = _post_analyze(api_client, case_id, phase=phase)
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            state = body.get("investigation_state") or {}
+            cards = body.get("phase2_queries") or []
+
+            # The harness only means something while the loop still needs work.
+            assert state.get("loop_status") != "ready_for_closure", (
+                f"phase {phase}: harness assumption broken — loop reached closure early"
+            )
+            assert cards, (
+                f"phase {phase}: loop dead-ended — no follow-up cards while the "
+                f"state still needs work (loop_status={state.get('loop_status')})"
+            )
+            fresh_cards = [
+                c for c in cards
+                if _norm_spl(c.get("spl")) not in saved_spls
+            ]
+            assert fresh_cards, (
+                f"phase {phase}: no new query surfaced — every card replays an "
+                "already-saved SPL (the 'stopped giving new queries' degradation)"
+            )
+
+            pick = fresh_cards[0]
+            title = (pick.get("title") or "").strip()
+            saved_spls.add(_norm_spl(pick.get("spl")))
+            ev = _save_phase_evidence(api_client, case_id, phase, title, pick.get("spl") or "")
+            assert ev.status_code == 200, ev.text
+
+    def test_follow_up_prompts_keep_all_saved_evidence(self, api_client, monkeypatch):
+        """phase3_manual+ evidence must stay visible to later prompts — the
+        'just stopped working overall' regression (DEVELOPMENT_PLAN §8)."""
+        fake = CleanVerdictOllamaClient()
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: fake)
+        case_id = seed_case(api_client)
+
+        resp = _post_analyze(api_client, case_id, phase=1)
+        assert resp.status_code == 200
+        for phase in (2, 3):
+            resp = _post_analyze(api_client, case_id, phase=phase)
+            assert resp.status_code == 200
+            ev = _save_phase_evidence(api_client, case_id, phase, f"Phase {phase} check")
+            assert ev.status_code == 200
+
+        resp = _post_analyze(api_client, case_id, phase=4)
+        assert resp.status_code == 200
+        prompt = fake.calls[-1]
+        assert "Phase 2 check" in prompt, "phase2_manual evidence missing from the later prompt"
+        assert "Phase 3 check" in prompt, "phase3_manual evidence missing from the later prompt"
+
+
 class TestSplunkSearchOneEndpoint:
     def _prepare(self, client, fields=None):
         case_id = seed_case(client)
