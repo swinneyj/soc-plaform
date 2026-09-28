@@ -51,6 +51,28 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 4. **macOS config changes**: verify effects after acting — elevated commands here have a history of "exit 0 but didn't happen" and "errored but did happen." `[V]`
 5. **Check Justin's existing work before building CI anything.** `[I]` (born from the duplicate smoke-test collision; re-derived below)
 
+## Freebuff Desktop risk notes
+
+*Freebuff Desktop (`com.freebuff.desktop`, Electron) is the agent harness in use on this repo. Vendor: Freebuff, Inc. (YC F24, ~4 people, San Francisco) — ad-funded, ~$500K raised. Public tracker checked 2026-09-28; re-check before trusting.* `[V]` (public URLs below re-derivable)
+
+**Data handling (from their privacy policy + README, 2026-09-25/28):** chat threads are stored **server-side indefinitely** — retained until a deletion request completes; no automatic expiry. Prompts/messages may be analyzed to personalize ads. Device fingerprinting is part of auth (`~/.config/manicode/credentials.json` stores `fingerprintId` + `fingerprintHash`, per issue #947). Ads are injected into model responses (`common/src/util/lazy-response-ads.ts`, per PR #1243). AI training only where a model/feature is labeled for it. Deletion requests: support@codebuff.com (CCPA 45d / GDPR 1mo clocks).
+
+**Open security issues in the public tracker (none shipped fixed as of 2026-09-28):**
+
+- **#1146 — out-of-scope `rm -rf` deletion**: agent deleted files outside the project on Windows/Git Bash, permanently (no Recycle Bin), no confirmation gate. Shell-generic failure mode; applies here.
+- **#1231 — XSS in `escapeString`** (`common/src/util/string.ts`): doesn't escape `< > & '`; fix PR unmerged (`pr:needs-work`). Electron renderer XSS is escalation-class.
+- **#1306 — MCP tool parameters arrive as `{}`** (~100% repro, 2 models, still broken in 0.0.172; fix #1259 unshipped): any MCP connector is broken AND unsupervised.
+- Public repo lags the shipped app: fixes are labeled `pr:port-candidate` — "worth porting into the private source tree." Auditability is partial.
+
+**Operating rules (binding for agent sessions on this repo):**
+
+1. **Keep the tree committed.** Git is the undo for agent mistakes; origin is the off-machine copy. Working-tree drift = elevated risk window.
+2. **Review every destructive terminal command before confirming.** `rm -rf`, anything outside the repo path, anything touching `~/` beyond this checkout = hard stop, ask the user.
+3. **No MCP connectors in Desktop** until #1306 ships fixed.
+4. **Never select the Space Bunny Alpha model** — anonymous provider that retains prompts, per Freebuff's own README. Prefer the unmetered open-weight models (GLM 5.3 Flash, DeepSeek V4.1 Flash).
+5. **No credentials or secrets in prompts or thread content** — extension of protocol 1/2: threads persist server-side on an ad-funded platform, so treat every prompt as retained-until-deleted and ad-profiled.
+6. For sensitive work, prefer routing locally installed Claude Code/Codex agents through Desktop (own provider accounts → own provider's data terms) over Freebuff's included catalog.
+
 ## Non-derivable history (the "why" memories)
 
 - **The credential incident** `[I]`: a Neon password was once pasted into a chat and leaked → rotation → the entire BWS workflow exists so it can't recur. (Inherited from prior transcripts; consistent with all current protocol design. The BWS org itself is `[V]` — the incident story is the inherited *why*.)
