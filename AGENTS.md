@@ -87,7 +87,12 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 
 ## Open threads (owners marked)
 
-- ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). **Remaining: Justin updates Vercel `DATABASE_URL`** (deploy-breaker). First stale-URL detail + no-other-copies sweep in tracker item #1. Local API runs against the shared cloud DB now — treat destructive testing accordingly
+- ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). Prod (Vercel) probed same day: **also Neon-backed, same 7 rows** — Justin's side evidently already works; remaining is a one-line confirmation of WHICH string lives in Vercel (rotation hygiene). First stale-URL detail + no-other-copies sweep in tracker item #1
+- ⚠️ **One shared production dataset** `[V]`: local API, prod Vercel, and Justin's instance all read/write the SAME Neon database. Consequences:
+  - `wipe_db.py`, the delete-all/batch-delete evidence endpoints, case deletes, and `Restore_SOC_From_Handoff.bat`-style dump restores hit **real shared data**, not a sandbox
+  - Test rows created locally appear on prod immediately — use clearly-marked titles (e.g. the `NEON WRITE-PATH SMOKE TEST` + `writepath_smoketest` source_system pattern) and delete them in the same session
+  - The Splunk-boundary batch purge is the sanctioned undo for ingest mistakes; nothing analogous exists for wipe_db — it has no undo
+  - Before ANY destructive DB action: `scripts/start --check`, confirm which DB you're on (neon.tech in DATABASE_URL = shared prod), and get explicit user confirmation
 - ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; one Vercel env var flips it on
 - ✅ **CI pytest-on-push** `[V — live since Sept 28]`: `.github/workflows/tests.yml` runs the 124-test suite on every push/PR, Python 3.14 + 3.9 matrix. First runs green. Node20 deprecation annotations are cosmetic.
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)
