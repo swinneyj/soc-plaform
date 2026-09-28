@@ -178,6 +178,7 @@
 - `allow_credentials=False` (reduces CSRF-style risk)
 - Every push secret-scanned before it left the machine (pattern: `npg_*` + password/token/secret assignments)
 - Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9
+- **Repo-wide credential sweep (Sept 28, 2026)**: pattern classes run across all 248 tracked files — `npg_`/Neon URLs, `sk-`/`ghp_`/`AKIA`-style keys, JWT/Bearer tokens, private-key blocks, `postgres://user:pass@` URLs, generic `(password|secret|token|api_key)=value` assignments, `.pem/.key/.db`-type tracked files. **Zero live findings.** `.env.example` still fully placeholder-ized (#8 fix holding); `deploy.yml` uses `${{ secrets.* }}` references only; `admin.jlee`/`WIN-APP-042` corpus confirmed synthetic per `CHAT_HANDOFF.md`. Caveats: (1) the 5 tracked `.pptx`/`.docx` binaries are not text-searchable — unaudited by this pass, low risk, spot-check once if desired; (2) dead credentials remain in git history by design (`theitguru` placeholder, rotated `remoteguest` password scrubbed from the working tree the same day)
 
 ## Open items, in order
 1. **BWS access token** (coworker) → then: verify secret names, build the `bws run` launcher, slim `.env` to just the token
