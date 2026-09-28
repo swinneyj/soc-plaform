@@ -46,6 +46,11 @@ ollama pull llama3.1:latest
 ./scripts/start_platform.sh
 ~~~
 
+**Model note:** the platform auto-resolves an installed model at request time —
+an explicit request wins, then `OLLAMA_MODEL` from `.env`, then a best-match
+preference (`llama3.1:latest` preferred). Any pulled `llama3.1*` tag works;
+set `OLLAMA_MODEL` in `.env` to pin a specific one.
+
 Open http://127.0.0.1:8000/index.modular.html and verify:
 
 ~~~bash
