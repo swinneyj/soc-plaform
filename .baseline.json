@@ -7,7 +7,7 @@
     "postgres_5432": "up",
     "smb_445": "up",
     "ssh_22": "up",
-    "api_8000": "down"
+    "api_8000": "up"
   },
   "tailscale_nodes": [
     "daltons-macbook-pro-1",

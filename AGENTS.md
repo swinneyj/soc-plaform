@@ -10,11 +10,14 @@
 
 ```bash
 bash scripts/next        # computed to-do list + blockers (read-only)
-bash scripts/dev --check # config/secret mode (env-only vs bws), Python, port
+bash scripts/start --check # status of every piece (ollama/secrets/db/api) — read-only
+bash scripts/start       # ONE-COMMAND START: ollama + BWS preflight + daemonized API + health
 bash scripts/baseline --verify # am I still me? (drift check vs committed baseline; exit 1 = investigate)
 git status -sb && git log --oneline -5
-curl -s -m 3 http://localhost:8000/api/health   # local API (may be down — manual launch, see below)
+curl -s -m 3 http://localhost:8000/api/health   # local API (down = launch via scripts/start)
 ```
+
+Desktop icon: `SOC Platform.command` (Desktop + ~/Applications) — double-click = scripts/start + dashboard, survives shell teardown via the daemonized launcher. Repo copy: `scripts/soc-platform.command` (resolves the checkout from its own location).
 Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-tracker.md` (security state), `docs/DEVELOPMENT_PLAN.md` (roadmap). You are now operational.
 
 ## Who's who
@@ -86,10 +89,10 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 
 - ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). **Remaining: Justin updates Vercel `DATABASE_URL`** (deploy-breaker). First stale-URL detail + no-other-copies sweep in tracker item #1. Local API runs against the shared cloud DB now — treat destructive testing accordingly
 - ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; one Vercel env var flips it on
-- 🔧 **CI pytest-on-push** (Dalton, after checking Justin's CI) `[V — only deploy.yml exists locally]`: the 124-test suite doesn't run in CI yet
+- ✅ **CI pytest-on-push** `[V — live since Sept 28]`: `.github/workflows/tests.yml` runs the 124-test suite on every push/PR, Python 3.14 + 3.9 matrix. First runs green. Node20 deprecation annotations are cosmetic.
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)
 - 🔧 **remoteguest SSH** `[V — staged, failing with no diagnostic]`: token-enabled, key installed, perms correct, password **rotated Sep 28, 2026** (old value scrubbed from all docs — never re-document passwords here; new value lives only in Dalton's password manager) — SSH still closes pre-auth. macOS bug hypothesis `[A]`. Retest after OS updates
-- 🔧 **Boot persistence** (decision) `[V — currently manual]`: point launchd at `scripts/dev` for vault-injected auto-start, or keep manual launches
+- 🔧 **Boot persistence** (decision) `[V — currently one-command]`: `scripts/start` + the Desktop icon make startup one step; the remaining option is a LaunchAgent for zero-interaction login auto-start. Manual launches work fine — decide only if the icon step ever feels heavy
 - ⚪ **`friend` account** `[V — fully deleted Sep 25]`: record + home gone. If anything ever recreates accounts by terminal, re-read the quirks section first
 
 ## Doc index

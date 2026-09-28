@@ -25,15 +25,15 @@ Justin has twice replaced repo history with fresh single-commit snapshots ("upda
 
 ---
 
-## 3. Phase 1 — Hardening (small, high-value)
+## 3. Phase 1 — Hardening (small, high-value) ✅ COMPLETE (Sept 28, 2026)
 
-| Item | Description | Size |
-|---|---|---|
-| CI workflow | GitHub Actions: `pip install -r requirements.txt pytest` on every push/PR; green badge on README | S |
-| API-level tests | FastAPI `TestClient` coverage for `/db/triage/{id}/evidence`, `/db/analyze` (mocked Ollama), promote/delete flows | M |
-| Doc alignment | README/SOP/SETUP still say `llama3.1:8b`; document auto-resolution + `OLLAMA_MODEL` env override; remove references to removed dropdowns | S |
-| Helper de-dup | `analysis_service.py` vs `api/main.py` still twin `_extract_phase2_queries` / `_ground_phase2_queries` / `_normalize_phase2_text`; route main.py imports through the service | M |
-| Stray-file guardrail | `.gitignore` for `*.bak`, `* - Copy.*`, `.pytest_cache/`; delete `web/Old/**` if Justin agrees | S |
+| Item | Status |
+|---|---|
+| CI workflow | ✅ `.github/workflows/tests.yml` — 124-test suite on every push/PR, Python 3.14 + 3.9 matrix; first runs green (run 36437812481 + successors) |
+| API-level tests | ✅ pre-existing — `tests/test_api_analyze_flow.py` + key-gate + report-download suites cover the TestClient surface (124 total) |
+| Doc alignment | ✅ `20e5dba` — README/SOP document the auto-resolution order + `OLLAMA_MODEL` pinning; SETUP.md already correct; no stale 8b requirements |
+| Helper de-dup | ✅ `ff07707` — service copy is the strict superset; api/main.py keeps thin aliases; net −84 LOC |
+| Stray-file guardrail | ✅ `*.bak`/Copy patterns pre-existing; `.pytest_cache/` added `be2143f`. `web/Old/**` deletion pending Justin's call |
 
 **Exit criteria:** CI green on GitHub; no duplicated prompt/grounding logic; docs match runtime behavior.
 
