@@ -133,10 +133,10 @@ class TestEvidenceEntryValidation:
 # 2. AI-derived direction scoring
 # ---------------------------------------------------------------------------
 
-def build_state(analysis_text, items, verdict=""):
+def build_state(analysis_text, items, verdict="", previous_state=None):
     case = FakeCase(verdict=verdict)
     return isvc._build_investigation_state(
-        case, analysis_text, [], items, "initial", {}
+        case, analysis_text, [], items, "initial", previous_state or {}
     )
 
 
@@ -350,6 +350,67 @@ class TestPhaseFollowUpGeneration:
 # ---------------------------------------------------------------------------
 # 4. Ollama model tag resolution
 # ---------------------------------------------------------------------------
+
+class TestTargetedEvidenceResolution:
+    """Evidence-targeted question resolution (live gap 2026-09-29).
+
+    Auto-collected splunk_auto rows never carry an analyst
+    question_resolution click, so inquiries could only resolve via a brittle
+    keyword heuristic — real rows say "geo=Bucharest", never "location", and
+    the loop could never converge. A substantive row executed against
+    specific inquiries (target_questions) now resolves them; the model
+    re-raises anything it still doubts in the next phase's Key Questions.
+    """
+
+    QUESTION = (
+        "Can we verify the user's location and IP address at the time of "
+        "the login attempts?"
+    )
+    ANALYSIS = (
+        "### Initial Thoughts\nVPN geo-velocity violation for user bjones.\n\n"
+        "### Key Questions\n- " + QUESTION + "\n\n"
+        "### Investigative Analysis\nGeo evidence is under review.\n\n"
+        "### Triage Verdict\nSuspicious.\n"
+    )
+    # Result text deliberately free of the question's own keywords so only
+    # the targeting linkage can resolve it (the keyword heuristic cannot).
+    ROW = "src_ip=10.20.30.77 geo=Bucharest app=ssh"
+
+    def test_substantive_targeted_row_resolves_question(self):
+        items = [evidence_item(
+            "Successful logins by user", status="success", result_text=self.ROW,
+            target_questions=[self.QUESTION],
+        )]
+        state = build_state(self.ANALYSIS, items)
+        assert self.QUESTION not in state["unresolved_questions"]
+        assert self.QUESTION in state["evidence_summary"]["resolved_questions"]
+
+    def test_failed_targeted_row_keeps_question_open(self):
+        items = [evidence_item(
+            "Geo lookup", status="query_failed", result_text="",
+            target_questions=[self.QUESTION],
+        )]
+        state = build_state(self.ANALYSIS, items)
+        assert self.QUESTION in state["unresolved_questions"]
+
+    def test_untargeted_substantive_row_does_not_resolve(self):
+        items = [evidence_item(
+            "Unrelated check", status="success", result_text=self.ROW,
+        )]
+        state = build_state(self.ANALYSIS, items)
+        assert self.QUESTION in state["unresolved_questions"]
+
+    def test_resolution_survives_row_replacement(self):
+        items = [evidence_item(
+            "Successful logins by user", status="success", result_text=self.ROW,
+            target_questions=[self.QUESTION],
+        )]
+        first = build_state(self.ANALYSIS, items)
+        # Re-saving evidence replaces rows; a rebuild with the replaced (empty)
+        # ledger must keep the resolution via the durable carry-over.
+        second = build_state(self.ANALYSIS, [], previous_state=first)
+        assert self.QUESTION not in second["unresolved_questions"]
+
 
 class TestModelResolution:
     def _client(self, installed):

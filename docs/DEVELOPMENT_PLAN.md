@@ -80,7 +80,7 @@ Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 
 - Closure-note generation: **done (Sep 28, 2026)** — the disposition is now derived server-side from the evidence-backed `investigation_state.provisional_disposition` (`closure_service.derive_closure_disposition`); the caller's value is advisory/audited only (`operator_disposition` + `disposition_conflict` in the response) and the UI disposition select is disabled. Rule-required `field_values` render only under an attributed "Operator-Recorded Closure Fields (execution facts, not conclusions)" header and can never reach the conclusion sentence — pinned by tests in `test_closure_gate.py` / `test_api_analyze_flow.py`.
 - Triage verdict entry on promote: baseline confidence semantics — document or derive. *(open)*
-- Inquiry resolution remnants in Phase 2 state (analyst `question_resolution` values still stored): make them advisory-only, audited, or remove. *(open)*
+- Inquiry resolution remnants in Phase 2 state (analyst `question_resolution` values still stored): make them advisory-only, audited, or remove. *(open — partially displaced Sept 29: substantive evidence carrying `target_questions` now resolves its targeted inquiries automatically, so the analyst-entered flag is no longer the only resolution path and the loop can converge on auto-collected evidence alone.)*
 
 **Size:** S–M each. **Exit criteria:** the only analyst inputs anywhere are execution facts and observations.
 

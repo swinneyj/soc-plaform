@@ -662,6 +662,18 @@ def _build_investigation_state(
             else:
                 pending_evidence_count += 1
 
+        # Evidence-targeted resolution: a substantive row that was executed to
+        # answer specific inquiries (target_questions) addresses those
+        # inquiries. The analyst records execution facts only — resolution is
+        # derived from the evidence itself, and the model re-raises anything it
+        # still doubts in the next phase's Key Questions (self-correcting loop).
+        if has_substantive:
+            explicitly_resolved_questions.update(
+                str(question).strip()
+                for question in (raw_result.get("target_questions") or [])
+                if str(question).strip()
+            )
+
         if title:
             evidence_timeline.append({
                 "id": item.get("id"),
