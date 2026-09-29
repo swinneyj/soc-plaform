@@ -70,6 +70,8 @@ If you are new to this repo, read in this order:
   Shared utility code used across Commander and tools
 - `Tools\`
   Individual SOC tools, grouped by function
+- `scripts\attic\`
+  Retired one-shot migration/patch scripts moved out of the repo root (kept for history; part of no workflow)
 
 ### Data and Local State
 
