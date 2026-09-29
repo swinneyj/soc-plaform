@@ -257,9 +257,12 @@
             return post('/db/supportive-queries/import-results', payload);
         },
 
-        // ---- Closure (legacy spelling: no canonical alias server-side) ----------
+        // ---- Closure (legacy spellings: no canonical aliases server-side) -------
         closureNote(payload) {
             return post('/db/closure-note', payload);
+        },
+        closureReadiness(caseId) {
+            return get('/db/triage/' + encodeURIComponent(caseId) + '/closure-readiness');
         },
 
         // ---- Code Review --------------------------------------------------------

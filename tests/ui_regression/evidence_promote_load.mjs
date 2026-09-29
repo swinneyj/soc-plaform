@@ -496,8 +496,8 @@ const scenarios = {
 
         await comp.loadClosureReadiness('MOCK-CASE-001');
 
-        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/db/triage/MOCK-CASE-001/closure-readiness',
-            'readiness GET url wrong: ' + JSON.stringify(gets.calls.map(c => c[0])));
+        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/cases/MOCK-CASE-001/closure-readiness',
+            'readiness GET url wrong (canonical cases family expected): ' + JSON.stringify(gets.calls.map(c => c[0])));
         assert(comp.closureReadiness && comp.closureReadiness.blockers.length === 3,
             'readiness punch list not stored: ' + JSON.stringify(comp.closureReadiness));
         assert(errorCalls.length === 0, 'readiness load logged errors: ' + JSON.stringify(errorCalls));

@@ -44,10 +44,9 @@
             // Follow-up analysis can produce a definitive verdict after the
             // original triage row was created. Prefer that persisted state
             // when suggesting the closure disposition.
-            axios
-                .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state')
-                .then(res => {
-                    const disposition = (res.data && res.data.provisional_disposition || '').toLowerCase();
+            API.triageInvestigationState(caseId)
+                .then(data => {
+                    const disposition = ((data && data.provisional_disposition) || '').toLowerCase();
                     if (disposition === 'malicious') {
                         this.closureForm.disposition = 'True Positive';
                         this.closureSuggestedDisposition = 'True Positive';
@@ -62,10 +61,9 @@
             // the analysis stage that resolves each one).
             this.loadClosureReadiness(caseId);
 
-            axios
-                .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
-                .then(res => {
-                    this.closureSourceNotable = res.data;
+            API.triageNotable(caseId)
+                .then(data => {
+                    this.closureSourceNotable = data;
 
                     // Choose the most appropriate rule for closure based on
                     // the triage case's rule_name when none is selected yet.
@@ -103,8 +101,8 @@
                 return;
             }
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/closure-readiness');
-                this.closureReadiness = res.data || null;
+                const data = await API.closureReadiness(caseId);
+                this.closureReadiness = data || null;
             } catch (err) {
                 console.warn('Failed to load closure readiness:', err);
                 this.closureReadiness = null;
@@ -167,7 +165,7 @@
         async generateClosureNote(force = false) {
             this.closureGenerating = true;
             try {
-                const res = await axios.post(this.apiUrl + '/db/closure-note', {
+                const data = await API.closureNote({
                     rule_id: this.closureForm.ruleId,
                     case_id: this.closureForm.caseId,
                     field_values: this.closureForm.fieldValues,
@@ -175,11 +173,11 @@
                     disposition: this.closureForm.disposition,
                     force_closure: force
                 });
-                if (res.data && res.data.blocked) {
+                if (data && data.blocked) {
                     // Keep the punch list current: show exactly what blocked
                     // this generate attempt (routed with the default action
                     // when the readiness payload carries no per-blocker one).
-                    const readiness = res.data.readiness || {};
+                    const readiness = data.readiness || {};
                     if (!readiness.blocker_actions) {
                         readiness.blocker_actions = (readiness.blockers || []).map(() => ({ stage: 4, label: 'Continue investigation' }));
                     }
@@ -195,7 +193,7 @@
                     }
                     return;
                 }
-                this.closureResult = res.data;
+                this.closureResult = data;
             } catch (err) {
                 alert('Error: ' + (err.response?.data?.detail || err.message));
             } finally {
