@@ -892,5 +892,82 @@ class TestClosureNoteDispositionDerivation:
         assert "known false positive pattern" in note
 
 
+class TestPlaybookFamilyGuard:
+    """Regression (live bug 2026-09-29): a rule that owns DB-backed supportive
+    queries must keep its family — fuzzy text matching against the checked-in
+    supportive_rules.json catalog must never rewrite case.rule_id for such a
+    rule. The catalog fallback exists only for imported notables carrying
+    custom UUIDs with no playbook of their own.
+
+    Both tests install a crafted catalog whose entry overlaps the seeded case
+    anchor ("Test Rule - Certutil Staging") by >= 2 normalized tokens, so the
+    pre-fix fuzzy matcher always fired and hijacked the family.
+    """
+
+    @staticmethod
+    def _install_catalog(monkeypatch, tmp_path, rules):
+        (tmp_path / "supportive_rules.json").write_text(
+            json.dumps({"rules": rules}), encoding="utf-8"
+        )
+        monkeypatch.setattr(api_main, "get_platform_root", lambda: str(tmp_path))
+
+    @staticmethod
+    def _hijack_catalog_entry():
+        return {
+            "rule_id": "catalog_rule_stealer",
+            "rule_name": "Certutil Staging Rule",
+            "supportive_queries": [
+                {
+                    "title": "certutil staging check",
+                    "description": "",
+                    "spl_query": "index=main certutil",
+                    "phase_min": 2,
+                }
+            ],
+        }
+
+    def test_db_backed_rule_is_never_hijacked_by_catalog_fuzzy_match(
+        self, api_client, monkeypatch, tmp_path
+    ):
+        seed_case(api_client, case_id="GUARD-1")
+        seed_supportive_query(
+            api_client, "test_rule", "Failed logins for user",
+            "sourcetype=linux_secure action=failure",
+        )
+        self._install_catalog(monkeypatch, tmp_path, [self._hijack_catalog_entry()])
+
+        resp = _post_analyze(api_client, "GUARD-1", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "test_rule"
+        assert data["supportive_playbook_available"] is True
+        assert [q["title"] for q in data["supportive_queries"]] == [
+            "Failed logins for user"
+        ]
+
+        db = api_client.test_session()
+        case = (
+            db.query(db_models.TriageResult).filter_by(case_id="GUARD-1").first()
+        )
+        assert case.rule_id == "test_rule"
+        db.close()
+
+    def test_playbookless_rule_still_adopts_catalog_family(
+        self, api_client, monkeypatch, tmp_path
+    ):
+        # Imported-notable flow: a custom rule id with NO DB queries — the
+        # fuzzy fallback must still resolve the catalog family.
+        seed_case(api_client, case_id="GUARD-2")
+        self._install_catalog(monkeypatch, tmp_path, [self._hijack_catalog_entry()])
+
+        resp = _post_analyze(api_client, "GUARD-2", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "catalog_rule_stealer"
+        assert [q["title"] for q in data["supportive_queries"]] == [
+            "certutil staging check"
+        ]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

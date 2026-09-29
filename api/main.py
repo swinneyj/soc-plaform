@@ -4892,12 +4892,23 @@ def analyze_case(request: AnalyzeRequest):
                 ] if value
             )
             normalized_anchor = _normalize_rule_match_text(anchor_text)
+            # A rule that owns DB-backed supportive queries is the authoritative
+            # family for this case: text similarity to an unrelated catalog
+            # entry must never hijack its rule_id (seeded/custom playbooks
+            # otherwise lost their cards mid-investigation, leaving Stage 4
+            # with no queries and no generator).
+            case_has_db_queries = bool(
+                supportive_rule_id
+                and db.query(SupportiveQuery.id)
+                .filter(SupportiveQuery.rule_id == supportive_rule_id)
+                .first()
+            )
             exact_catalog = next(
                 (item for item in catalog_rules
                  if (item.get("rule_id") or "").strip() == supportive_rule_id),
                 None,
             )
-            if not exact_catalog:
+            if not exact_catalog and not case_has_db_queries:
                 anchor_tokens = set(normalized_anchor.split())
                 best_catalog = None
                 best_score = 0
