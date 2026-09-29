@@ -713,6 +713,29 @@ class TestSharedPromptBuilders:
         assert "legacy string blob" in blocks[0]
 
 
+def run_ui_harness_scenario(harness: Path, scenario: str) -> None:
+    """Run one scenario of a node-vm UI regression harness (tests/ui_regression/).
+
+    The harness loads the real web/modules/*.js into a node:vm sandbox with
+    stubbed axios/window and canaries for window.alert / console.error. Any
+    assertion failure exits non-zero with a FAIL line on stderr.
+    """
+    node = shutil.which("node")
+    assert node, "node is required for the UI regression harness"
+    proc = subprocess.run(
+        [node, str(harness), scenario],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        cwd=PLATFORM_ROOT,
+    )
+    assert proc.returncode == 0, (
+        f"scenario '{scenario}' failed (exit {proc.returncode})\n"
+        f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+    assert "OK " + scenario in proc.stdout, f"unexpected harness output: {proc.stdout!r}"
+
+
 class TestRunSplunkSearchInlineStatus:
     """UI regression (live bug 2026-09-29): runSplunkSearch must report status
     via the per-card inline chip (running -> complete | error) and must never
@@ -726,20 +749,7 @@ class TestRunSplunkSearchInlineStatus:
     HARNESS = PLATFORM_ROOT / "tests" / "ui_regression" / "run_splunk_search_status.mjs"
 
     def _run_scenario(self, scenario: str) -> None:
-        node = shutil.which("node")
-        assert node, "node is required for the runSplunkSearch UI regression harness"
-        proc = subprocess.run(
-            [node, str(self.HARNESS), scenario],
-            capture_output=True,
-            text=True,
-            timeout=60,
-            cwd=PLATFORM_ROOT,
-        )
-        assert proc.returncode == 0, (
-            f"scenario '{scenario}' failed (exit {proc.returncode})\n"
-            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-        )
-        assert "OK " + scenario in proc.stdout, f"unexpected harness output: {proc.stdout!r}"
+        run_ui_harness_scenario(self.HARNESS, scenario)
 
     def test_success_chip_transitions_without_alert(self):
         self._run_scenario("success")
@@ -755,6 +765,56 @@ class TestRunSplunkSearchInlineStatus:
 
     def test_midflight_running_chip_observed(self):
         self._run_scenario("running_to_complete_transitions")
+
+
+class TestUIEvidencePromoteLoadFlows:
+    """UI regression harness for the evidence save / promote / saved-evidence
+    load flows (live bug 2026-09-25, fixed in 6942458: loadSavedPhase2Evidence
+    wrote to removed phase2Resolution* state keys and its catch block swallowed
+    the crash into console.error, silently losing every saved-evidence load).
+
+    Same zero-dependency node:vm approach as TestRunSplunkSearchInlineStatus:
+    the real web/modules/analysis.js and web/modules/database.js run in a
+    sandbox with stubbed axios and canaries for window.alert (blocking modals),
+    console.error (swallowed crashes), and console.warn (guarded aborts). The
+    load-path scenario is mutation-checked: restoring the crashy lines must
+    fail it (hydration lost + canary fires).
+    """
+
+    HARNESS = PLATFORM_ROOT / "tests" / "ui_regression" / "evidence_promote_load.mjs"
+
+    def _run(self, scenario: str) -> None:
+        run_ui_harness_scenario(self.HARNESS, scenario)
+
+    def test_supportive_save_payload_and_state_handoff(self):
+        self._run("save_supportive")
+
+    def test_phase2_save_payload_advisory_labels_and_edits(self):
+        self._run("save_phase2")
+
+    def test_busy_save_never_double_posts(self):
+        self._run("save_busy_guard")
+
+    def test_saved_evidence_load_survives_legacy_raw_result_keys(self):
+        self._run("load_saved_evidence")
+
+    def test_saved_evidence_load_failure_logs_without_throwing(self):
+        self._run("load_saved_error")
+
+    def test_saved_evidence_load_without_case_skips_network(self):
+        self._run("load_saved_no_case")
+
+    def test_promote_posts_refreshes_and_clears_busy_flag(self):
+        self._run("promote")
+
+    def test_promote_historical_guard_blocks_unpromoted(self):
+        self._run("promote_historical_guard")
+
+    def test_promote_failure_logs_without_alert_or_refresh(self):
+        self._run("promote_failure")
+
+    def test_bulk_promote_filters_continues_and_refreshes_once(self):
+        self._run("promote_all_open")
 
 
 class TestNotableParsing:

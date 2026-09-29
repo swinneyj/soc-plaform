@@ -12,48 +12,18 @@
  * Scenarios: success | failure | no_case | empty_spl
  * Exit code 0 = all assertions held.
  */
-import { readFile } from 'node:fs/promises';
-import vm from 'node:vm';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import {
+    assert,
+    makeSandbox,
+    makeComponent as makeComponentBase,
+    loadModuleMethods,
+    runScenarios,
+} from './harness_core.mjs';
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ANALYSIS_JS = path.join(ROOT, 'web', 'modules', 'analysis.js');
-
-function fail(msg) {
-    console.error('FAIL: ' + msg);
-    process.exit(1);
-}
-
-function assert(cond, msg) {
-    if (!cond) fail(msg);
-}
-
-function makeSandbox(axiosImpl) {
-    const alertCalls = [];
-    const sandboxWindow = {
-        location: { origin: 'http://localhost:8001' },
-        // Canary: any alert() call is a regression.
-        alert(msg) { alertCalls.push(String(msg)); },
-    };
-    sandboxWindow.window = sandboxWindow;
-    const sandbox = {
-        window: sandboxWindow,
-        alert: sandboxWindow.alert,
-        axios: { post: axiosImpl },
-        setTimeout, clearTimeout, console, URL, URLSearchParams,
-    };
-    sandbox.globalThis = sandbox;
-    return { vm: vm.createContext(sandbox), alertCalls };
-}
-
-async function loadAnalysisMethods(vmCtx) {
-    const source = await readFile(ANALYSIS_JS, 'utf8');
-    vm.runInContext(source, vmCtx, { filename: 'web/modules/analysis.js' });
-    // The module's UMD tail prefers `window` when present (our sandbox has one).
-    const methods = vm.runInContext('(window.AnalysisMethods || globalThis.AnalysisMethods)', vmCtx);
-    if (!methods || typeof methods.runSplunkSearch !== 'function') {
-        fail('analysis.js did not expose AnalysisMethods.runSplunkSearch');
+async function loadAnalysisMethods(ctx) {
+    const methods = await loadModuleMethods(ctx, 'web/modules/analysis.js', 'AnalysisMethods');
+    if (typeof methods.runSplunkSearch !== 'function') {
+        assert(false, 'analysis.js did not expose AnalysisMethods.runSplunkSearch');
     }
     return methods;
 }
@@ -79,19 +49,10 @@ function makeComponent(methods, overrides = {}) {
             ? methods.getPhase2Key.bind(null)
             : (q) => 'phase2:' + String((q && q.title) || '').toLowerCase().replace(/\s+/g, '_'),
     };
-    const comp = { ...base, ...overrides };
-    // Bind every real method onto the component so `this` is faithful.
-    for (const [name, fn] of Object.entries(methods)) {
-        if (typeof fn === 'function' && !(name in comp)) {
-            comp[name] = fn;
-        }
-    }
-    for (const name of ['runSplunkSearch', 'runAllSupportiveSplunk', '_setSplunkRunStatus']) {
-        if (typeof methods[name] === 'function') {
-            comp[name] = methods[name].bind(comp);
-        }
-    }
-    return comp;
+    return makeComponentBase(methods, {
+        base: { ...base, ...overrides },
+        bind: ['runSplunkSearch', 'runAllSupportiveSplunk', '_setSplunkRunStatus'],
+    });
 }
 
 const QUERY = { id: 7, title: 'Failed logins for user', spl_query: 'sourcetype=linux_secure action=failure user=bjones | stats count by host' };
@@ -99,10 +60,10 @@ const QUERY = { id: 7, title: 'Failed logins for user', spl_query: 'sourcetype=l
 const scenarios = {
     async success() {
         const calls = [];
-        const { vm: ctx, alertCalls } = makeSandbox(async (url, body) => {
+        const { ctx, alertCalls } = makeSandbox({ post: async (url, body) => {
             calls.push({ url, body });
             return { data: { success: true, result_status: 'success', row_count: 1, rows: [{ host: 'VPN-GW-01', count: 6 }], spl: body.spl } };
-        });
+        } });
         const methods = await loadAnalysisMethods(ctx);
         const comp = makeComponent(methods);
         await comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
@@ -120,11 +81,11 @@ const scenarios = {
     },
 
     async failure() {
-        const { vm: ctx, alertCalls } = makeSandbox(async () => {
+        const { ctx, alertCalls } = makeSandbox({ post: async () => {
             const err = new Error('Request failed with status code 502');
             err.response = { data: { detail: 'Splunk backend unavailable' } };
             throw err;
-        });
+        } });
         const methods = await loadAnalysisMethods(ctx);
         const comp = makeComponent(methods);
         await comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
@@ -138,9 +99,9 @@ const scenarios = {
     },
 
     async no_case() {
-        const { vm: ctx, alertCalls } = makeSandbox(async () => {
+        const { ctx, alertCalls } = makeSandbox({ post: async () => {
             throw new Error('should not reach the network');
-        });
+        } });
         const methods = await loadAnalysisMethods(ctx);
         const comp = makeComponent(methods, { analysisCaseId: '' });
         await comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
@@ -151,9 +112,9 @@ const scenarios = {
     },
 
     async empty_spl() {
-        const { vm: ctx, alertCalls } = makeSandbox(async () => {
+        const { ctx, alertCalls } = makeSandbox({ post: async () => {
             throw new Error('should not reach the network');
-        });
+        } });
         const methods = await loadAnalysisMethods(ctx);
         const comp = makeComponent(methods);
         await comp.runSplunkSearch({ q: { id: 8, title: 'Empty SPL card', spl_query: '   ' }, kind: 'supportive' });
@@ -171,12 +132,12 @@ const scenarios = {
         const gate = new Promise((res) => { release = res; });
         let comp;
         const during = [];
-        const { vm: ctx, alertCalls } = makeSandbox(async () => {
+        const { ctx, alertCalls } = makeSandbox({ post: async () => {
             const current = Object.values(comp.splunkRunStatus || {})[0] || null;
             during.push(current);
             await gate;
             return { data: { success: true, result_status: 'success', row_count: 0, rows: [] } };
-        });
+        } });
         const methods = await loadAnalysisMethods(ctx);
         comp = makeComponent(methods);
         const pending = comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
@@ -192,18 +153,4 @@ const scenarios = {
     },
 };
 
-const scenario = process.argv[2];
-if (!scenario || !scenarios[scenario]) {
-    console.error('usage: node run_splunk_search_status.mjs <' + Object.keys(scenarios).join('|') + '>');
-    process.exit(2);
-}
-scenarios[scenario]().then(
-    () => {
-        console.log('OK ' + scenario);
-        process.exit(0);
-    },
-    (err) => {
-        console.error('FAIL: ' + (err && err.stack || err));
-        process.exit(1);
-    }
-);
+runScenarios(scenarios, 'run_splunk_search_status.mjs');
