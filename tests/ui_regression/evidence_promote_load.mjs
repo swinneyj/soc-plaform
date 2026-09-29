@@ -65,6 +65,7 @@ async function loadAnalysis(ctx) {
 }
 
 async function loadDatabase(ctx) {
+    await installApiGlobal(ctx); // M2: database.js resolves the API global
     const methods = await loadModuleMethods(ctx, 'web/modules/database.js', 'DatabaseMethods');
     assert(typeof methods.promoteNotableToTriage === 'function'
         && typeof methods.promoteAllOpenPastedNotables === 'function',
@@ -348,7 +349,7 @@ const scenarios = {
         await pending;
 
         assert(posts.calls.length === 1, 'expected one promote POST, got ' + posts.calls.length);
-        assert(posts.calls[0][0] === '/api/db/notables/42/promote', 'promote url wrong: ' + posts.calls[0][0]);
+        assert(posts.calls[0][0] === '/api/notables/42/promote', 'promote url wrong (canonical expected): ' + posts.calls[0][0]);
         assert(counters.refreshes === 4, 'promote must refresh notables+triage+analysis+stats (4 calls), got ' + counters.refreshes);
         assert(comp.notablePromotingId === null, 'busy flag must reset to null, got ' + comp.notablePromotingId);
         assert(alertCalls.length === 0, 'promote must not alert: ' + JSON.stringify(alertCalls));
@@ -371,7 +372,7 @@ const scenarios = {
 
         // Already-promoted historical notables pass the guard and re-promote.
         await comp.promoteNotableToTriage({ id: 44, historical: true, promoted_case_id: 'CASE-9' });
-        assert(posts.calls.length === 1 && posts.calls[0][0] === '/api/db/notables/44/promote',
+        assert(posts.calls.length === 1 && posts.calls[0][0] === '/api/notables/44/promote',
             'promoted historical notable must be allowed to re-promote');
     },
 
@@ -399,7 +400,7 @@ const scenarios = {
     async promote_all_open() {
         const attempted = [];
         const posts = spy(async (url) => {
-            const id = Number(url.split('/db/notables/')[1].split('/')[0]);
+            const id = Number(url.split('/notables/')[1].split('/')[0]);
             attempted.push(id);
             if (id === 1) {
                 const err = new Error('boom');
@@ -655,14 +656,14 @@ const scenarios = {
         });
         const deleted = [];
         const posts = spy(async (url, body) => {
-            if (url.includes('/evidence/batch-delete')) {
+            if (url.includes('/batch-delete')) {
                 deleted.push(...(body.ids || []));
                 return { data: { deleted: (body.ids || []).length } };
             }
             return { data: {} };
         });
         const { ctx, sandbox, errorCalls, warnCalls } = makeSandbox({ get: gets, post: posts });
-        const dbMethods = await loadModuleMethods(ctx, 'web/modules/database.js', 'DatabaseMethods');
+        const dbMethods = await loadDatabase(ctx); // installs the API global (M2)
         const comp = makeComponent(dbMethods, {
             base: {
                 apiUrl: '/api',
@@ -683,8 +684,8 @@ const scenarios = {
         // Happy path: rows land, loading clears.
         comp.evidenceLedgerCaseId = 'MOCK-CASE-001';
         await comp.loadCaseEvidenceLedger();
-        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/db/triage/MOCK-CASE-001/evidence',
-            'ledger GET url wrong: ' + gets.calls[0][0]);
+        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/evidence/MOCK-CASE-001',
+            'ledger GET url wrong (canonical evidence family expected): ' + gets.calls[0][0]);
         assert(comp.evidenceLedgerItems.length === 2 && comp.evidenceLedgerError === '',
             'ledger rows not stored: ' + JSON.stringify(comp.evidenceLedgerItems));
         assert(comp.evidenceLedgerLoading === false, 'loading flag must clear');

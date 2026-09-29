@@ -148,6 +148,15 @@
         triageStats() {
             return get('/db/stats');
         },
+        operations() {
+            return get('/db/operations');
+        },
+        notable(id) {
+            return get('/db/notables/' + id);
+        },
+        deleteNotable(id) {
+            return post('/db/notables/' + id + '/delete');
+        },
         triageNotable(caseId) {
             return get('/db/triage/' + encodeURIComponent(caseId) + '/notable');
         },
