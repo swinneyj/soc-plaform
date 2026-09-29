@@ -77,13 +77,33 @@ class MockSplunkBackend:
     # SPL parsing (bounded, honest subset)
     # ------------------------------------------------------------------
     @staticmethod
-    def _parse_spl(spl: str) -> Tuple[Dict[str, str], List[str], List[Dict[str, Any]]]:
-        """Split into base kv-terms, free-text terms, and pipeline ops."""
+    def _parse_spl(
+        spl: str,
+    ) -> Tuple[Dict[str, str], List[str], List[Dict[str, Any]], str, str]:
+        """Split into base kv-terms, free-text terms, pipeline ops, and any
+        ``earliest=``/``latest=`` search-time qualifiers embedded in the SPL.
+
+        Re-check variants re-scope their time window inline (``earliest=-4h``,
+        see ``_rescope_variant_spl`` in api/main.py). Treating those
+        qualifiers as field-match terms (``earliest == "-4h"``) would
+        silently match no events, so they are consumed here and applied as
+        the search window instead — matching real Splunk, where an explicit
+        ``earliest=`` in the search string overrides the job default.
+        """
         stages = [s.strip() for s in spl.split("|") if s.strip()]
         base_terms: Dict[str, str] = {}
         free_terms: List[str] = []
+        embedded_earliest = ""
+        embedded_latest = ""
         for key, _whole, qval, val in _KV_RE.findall(stages[0]):
-            base_terms[key] = qval or val
+            value = qval or val
+            if key == "earliest":
+                embedded_earliest = value
+                continue
+            if key == "latest":
+                embedded_latest = value
+                continue
+            base_terms[key] = value
         base_free = _KV_RE.sub("", stages[0])
         free_terms = [t for t in base_free.split() if t]
         ops = []
@@ -92,7 +112,7 @@ class MockSplunkBackend:
             op_name = parts[0].lower()
             op_args = parts[1] if len(parts) > 1 else ""
             ops.append({"op": op_name, "args": op_args})
-        return base_terms, free_terms, ops
+        return base_terms, free_terms, ops, embedded_earliest, embedded_latest
 
     @staticmethod
     def _fields(raw: str) -> Dict[str, str]:
@@ -140,7 +160,11 @@ class MockSplunkBackend:
         latest: str = "now",
         limit: int = 500,
     ) -> List[Dict[str, Any]]:
-        base_terms, free_terms, ops = self._parse_spl(spl)
+        base_terms, free_terms, ops, spl_earliest, spl_latest = self._parse_spl(spl)
+        # An explicit qualifier inside the SPL text wins over the caller's
+        # job-level window (same precedence as real Splunk).
+        earliest = spl_earliest or earliest
+        latest = spl_latest or latest
 
         rows: List[Dict[str, Any]] = []
         for event in self._events:

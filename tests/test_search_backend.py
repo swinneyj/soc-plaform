@@ -270,3 +270,38 @@ def test_render_query_template_reports_unresolved_tokens():
     rendered, unresolved = render_query_template("host=$host$ user={who}", {})
     assert "$host$" in rendered and "{who}" in rendered
     assert unresolved == ["host", "who"]
+
+
+# ---------------------------------------------------------------------------
+# Embedded search-time qualifiers (earliest=/latest= inside the SPL text)
+# ---------------------------------------------------------------------------
+
+
+def test_embedded_earliest_overrides_caller_window(backend):
+    # Re-check variants embed a phase-scoped window in the SPL text itself
+    # (api.main._rescope_variant_spl); it must win over the job-level window.
+    assert len(backend.search("sourcetype=linux_secure user=bjones", earliest="all")) == 3
+    rows = backend.search("sourcetype=linux_secure user=bjones earliest=-2d", earliest="all")
+    assert len(rows) == 1  # the 3-day-old and 30-day-old events drop out
+
+
+def test_embedded_earliest_is_not_treated_as_a_field_match(backend):
+    # Regression: parsing earliest=-2h as an earliest=="-2h" kv-term matched
+    # nothing, so every re-check variant silently returned 0 rows.
+    rows = backend.search("sourcetype=linux_secure user=bjones earliest=-2h", earliest="all")
+    assert len(rows) == 1
+    assert "src_ip=10.0.0.1" in rows[0]["raw"]
+
+
+def test_embedded_latest_narrows_upper_bound(backend):
+    rows = backend.search("sourcetype=linux_secure earliest=all latest=-2d")
+    assert len(rows) == 2  # only the 3-day-old and 30-day-old events
+
+
+def test_embedded_qualifiers_survive_pipe_ops(backend):
+    rows = backend.search(
+        "sourcetype=linux_secure user=bjones earliest=-2d | stats count by host",
+        earliest="all",
+    )
+    assert len(rows) == 1
+    assert rows[0]["count"] == 1

@@ -20,6 +20,7 @@ the UI does.
 import json
 import sys
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -426,6 +427,189 @@ class TestFollowUpLoopStress:
         prompt = fake.calls[-1]
         assert "Phase 2 check" in prompt, "phase2_manual evidence missing from the later prompt"
         assert "Phase 3 check" in prompt, "phase3_manual evidence missing from the later prompt"
+
+
+class _InlineSeedBackend(search_backend_mod.MockSplunkBackend):
+    """MockSplunkBackend bound to an inline seed file (no clock/seed drift)."""
+
+
+def _install_inline_backend(monkeypatch, tmp_path, events):
+    """Point get_search_backend() at a hermetic inline-seed mock backend.
+
+    The search-one endpoint imports get_search_backend at call time from
+    services.search_backend, so patching the module attribute is enough —
+    the same seam the timeout test uses, one level higher.
+    """
+    seed_path = tmp_path / "seed_events.jsonl"
+    with open(seed_path, "w", encoding="utf-8") as fh:
+        for event in events:
+            fh.write(json.dumps(event) + "\n")
+    backend = _InlineSeedBackend(seed_path=seed_path)
+    monkeypatch.setattr(
+        search_backend_mod, "get_search_backend", lambda name=None: backend
+    )
+    return backend
+
+
+def _recent_seed_events(minutes_ago=30):
+    """One just-happened bjones failure so every phase window (-2h, -3h, ...)
+    contains rows — the event a mid-loop re-scoped re-check must find."""
+    stamp = (datetime.now() - timedelta(minutes=minutes_ago)).isoformat()
+    return [{
+        "source": "/var/log/secure",
+        "sourcetype": "linux_secure",
+        "host": "VPN-GW-01",
+        "timestamp": stamp,
+        "raw": f"{stamp} VPN-GW-01 sshd[9001]: Accepted/Failed auth action=failure "
+               "user=bjones src_ip=10.20.30.101 geo=Ashburn app=ssh",
+    }]
+
+
+def _run_search_one(client, case_id, title, spl):
+    resp = client.post("/api/splunk/search-one", json={
+        "case_id": case_id,
+        "query_title": title,
+        "spl": spl,
+        "earliest": "all",
+    })
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+class TestSearchOneMidLoop:
+    """Extends the loop-stress contract to analyst-driven Splunk runs: the
+    'Run in Splunk' button mid-loop must actually execute against the search
+    backend, ledger exactly one splunk_auto row per (case, query), and the
+    next follow-up phase must see that auto-collected evidence in its
+    prompt. Together with TestFollowUpLoopStress this covers the full loop:
+    AI proposes a card -> analyst executes it -> the loop consumes it."""
+
+    def test_analyst_search_one_runs_mid_loop_and_feeds_next_phase(
+        self, api_client, monkeypatch, tmp_path
+    ):
+        _install_inline_backend(monkeypatch, tmp_path, _recent_seed_events())
+        fake = CleanVerdictOllamaClient()
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: fake)
+        case_id = seed_case(api_client)
+        seed_notable_event(api_client, case_id, {"host": "VPN-GW-01", "user": "bjones"})
+        seed_supportive_query(
+            api_client, "test_rule", "Process execution check",
+            "sourcetype=linux_secure user=$user$",
+        )
+        seed_supportive_query(
+            api_client, "test_rule", "Outbound destination check",
+            "sourcetype=linux_secure host=$host$",
+        )
+
+        resp = _post_analyze(api_client, case_id, phase=1)
+        assert resp.status_code == 200, resp.text
+
+        auto_titles = []
+        for phase in range(2, 6):  # 4 follow-up phases, each with a mid-loop run
+            resp = _post_analyze(api_client, case_id, phase=phase)
+            assert resp.status_code == 200, resp.text
+            body = resp.json()
+            state = body.get("investigation_state") or {}
+            assert state.get("loop_status") != "ready_for_closure", (
+                f"phase {phase}: harness assumption broken — loop reached closure early"
+            )
+            cards = body.get("phase2_queries") or []
+            assert cards, f"phase {phase}: loop dead-ended mid simulation"
+
+            pick = cards[0]
+            title = (pick.get("title") or "").strip()
+            auto = _run_search_one(api_client, case_id, title, pick.get("spl") or "")
+            # The run must actually find the recent seed event: the embedded
+            # `earliest=-<phase>h` re-scope must widen nothing away.
+            assert auto["result_status"] == "success", (
+                f"phase {phase}: mid-loop run of '{title}' returned "
+                f"{auto['result_status']} — variant re-scope lost the rows"
+            )
+            # The hermetic inline-seed backend answered, not the committed seed file.
+            assert auto["backend"] == "_InlineSeedBackend"
+            assert auto["row_count"] >= 1
+            assert "10.20.30.101" in " ".join(str(r.get("raw")) for r in auto["rows"])
+            auto_titles.append(title)
+
+        # Exactly one splunk_auto ledger row per executed query, one completed
+        # ToolRun each — the analyst action is audited, not duplicated.
+        db = api_client.test_session()
+        auto_rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        tool_runs = db.query(db_models.ToolRun).filter(
+            db_models.ToolRun.tool_name == "splunk_search_one"
+        ).all()
+        db.close()
+        assert len(auto_rows) == len(auto_titles) == 4
+        assert {r.query_title for r in auto_rows} == set(auto_titles)
+        assert len(tool_runs) == 4
+        assert all(t.status == "completed" for t in tool_runs)
+
+        # The next follow-up prompt must carry the auto-collected evidence:
+        # titles, splunk_auto labels, and the observed rows.
+        resp = _post_analyze(api_client, case_id, phase=6)
+        assert resp.status_code == 200, resp.text
+        prompt = fake.calls[-1]
+        for title in auto_titles:
+            assert title in prompt, f"splunk_auto evidence '{title}' missing from the next prompt"
+        assert "splunk_auto" in prompt
+        assert "10.20.30.101" in prompt
+
+    def test_auto_run_replaces_row_and_fresh_cards_avoid_replay(
+        self, api_client, monkeypatch, tmp_path
+    ):
+        _install_inline_backend(monkeypatch, tmp_path, _recent_seed_events())
+        fake = CleanVerdictOllamaClient()
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: fake)
+        case_id = seed_case(api_client)
+        seed_notable_event(api_client, case_id, {"host": "VPN-GW-01", "user": "bjones"})
+        seed_supportive_query(
+            api_client, "test_rule", "Process execution check",
+            "sourcetype=linux_secure user=$user$",
+        )
+        seed_supportive_query(
+            api_client, "test_rule", "Outbound destination check",
+            "sourcetype=linux_secure host=$host$",
+        )
+
+        resp = _post_analyze(api_client, case_id, phase=1)
+        assert resp.status_code == 200
+        resp = _post_analyze(api_client, case_id, phase=2)
+        assert resp.status_code == 200
+        card = (resp.json().get("phase2_queries") or [])[0]
+
+        # Re-running the same query replaces the prior auto row (per
+        # (case, query_title)) — the ledger must not grow on every click.
+        first = _run_search_one(api_client, case_id, card["title"], card.get("spl") or "")
+        second = _run_search_one(api_client, case_id, card["title"], card.get("spl") or "")
+        assert first["result_status"] == second["result_status"] == "success"
+        db = api_client.test_session()
+        auto_rows = db.query(db_models.SupportiveQueryResult).filter(
+            db_models.SupportiveQueryResult.case_id == case_id,
+            db_models.SupportiveQueryResult.source_system == "splunk_auto",
+        ).all()
+        db.close()
+        assert len(auto_rows) == 1
+
+        saved_spls = {_norm_spl(card.get("spl"))}
+        for phase in (3, 4):
+            resp = _post_analyze(api_client, case_id, phase=phase)
+            assert resp.status_code == 200, resp.text
+            cards = resp.json().get("phase2_queries") or []
+            assert cards, f"phase {phase}: loop dead-ended after the auto-run"
+            fresh = [c for c in cards if _norm_spl(c.get("spl")) not in saved_spls]
+            assert fresh, (
+                f"phase {phase}: every card replays the already-executed SPL — "
+                "the analyst's mid-loop run poisoned the loop's view of what is new"
+            )
+            # The analyst executes the fresh card (search-one saves its result
+            # as splunk_auto evidence) before the next iteration.
+            pick = fresh[0]
+            auto = _run_search_one(api_client, case_id, pick["title"], pick.get("spl") or "")
+            assert auto["result_status"] == "success", auto
+            saved_spls.add(_norm_spl(pick.get("spl")))
 
 
 class TestSplunkSearchOneEndpoint:
