@@ -22,6 +22,7 @@
  *   load_saved_evidence      load_saved_error     load_saved_no_case
  *   promote                  promote_historical_guard
  *   promote_failure          promote_all_open
+ *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  * Exit code 0 = all assertions held.
  */
 import {
@@ -418,6 +419,129 @@ const scenarios = {
         comp.bulkPromoteNotablesRunning = true;
         await comp.promoteAllOpenPastedNotables();
         assert(attempted.length === 2, 're-entrant bulk promote must not post again');
+    },
+
+    // S9: closure readiness punch list loads, survives failure, and its
+    // blocker buttons route to the right analysis stage.
+    async closure_readiness_punchlist() {
+        const gets = spy(async (url) => {
+            if (url.includes('/closure-readiness')) {
+                return { data: {
+                    is_ready: false,
+                    status: 'collecting_evidence',
+                    blockers: [
+                        'No saved investigative evidence exists yet for this case.',
+                        '2 investigative question(s) remain unresolved.',
+                        "Something entirely novel the UI has never classified.",
+                    ],
+                    blocker_actions: [
+                        { stage: 1, label: 'Run initial analysis' },
+                        { stage: 4, label: 'Resolve open questions' },
+                        { stage: 4, label: 'Continue investigation' },
+                    ],
+                } };
+            }
+            return { data: {} };
+        });
+        const { ctx, errorCalls } = makeSandbox({ get: gets });
+        const methods = await loadAnalysis(ctx);
+        // Also load closure methods into the same sandbox namespace.
+        const closureMethods = await loadModuleMethods(ctx, 'web/modules/closure.js', 'ClosureMethods');
+        assert(typeof closureMethods.loadClosureReadiness === 'function'
+            && typeof closureMethods.goResolveBlocker === 'function',
+            'closure.js is missing the readiness punch-list methods');
+        const goToStageCalls = [];
+        const comp = makeComponent({ ...methods, ...closureMethods }, {
+            base: {
+                apiUrl: '/api',
+                closureForm: { caseId: 'MOCK-CASE-001', ruleId: '', fieldValues: {}, analystNotes: '', disposition: '' },
+                closureReadiness: null,
+                currentTab: 'closure',
+                analysisCaseId: '',
+                $refs: { analysisTabRef: { goToStage(stage) { goToStageCalls.push(stage); } } },
+            },
+        });
+
+        await comp.loadClosureReadiness('MOCK-CASE-001');
+
+        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/db/triage/MOCK-CASE-001/closure-readiness',
+            'readiness GET url wrong: ' + JSON.stringify(gets.calls.map(c => c[0])));
+        assert(comp.closureReadiness && comp.closureReadiness.blockers.length === 3,
+            'readiness punch list not stored: ' + JSON.stringify(comp.closureReadiness));
+        assert(errorCalls.length === 0, 'readiness load logged errors: ' + JSON.stringify(errorCalls));
+
+        // Deep-link routing: evidence blocker -> stage 1, questions -> stage 4.
+        comp.goResolveBlocker(0);
+        assert(comp.currentTab === 'analysis' && comp.analysisCaseId === 'MOCK-CASE-001',
+            'blocker link must jump to the Analysis tab for the same case');
+        assert(goToStageCalls.length === 1 && goToStageCalls[0] === 1,
+            'evidence blocker must route to stage 1, got: ' + JSON.stringify(goToStageCalls));
+        comp.currentTab = 'closure';
+        comp.goResolveBlocker(1);
+        assert(goToStageCalls[1] === 4, 'unresolved-questions blocker must route to stage 4');
+        comp.goResolveBlocker(2);
+        assert(goToStageCalls[2] === 4, 'unclassified blocker must fall back to stage 4');
+
+        // Out-of-range index falls back to stage 4 rather than crashing.
+        comp.goResolveBlocker(99);
+        assert(goToStageCalls[3] === 4, 'unknown blocker index must fall back to stage 4');
+
+        // Empty case clears the punch list.
+        await comp.loadClosureReadiness('');
+        assert(comp.closureReadiness === null, 'empty caseId must clear readiness');
+    },
+
+    // S9: a blocked generate surfaces the punch list (no blind force), and
+    // declining the override confirm never posts twice.
+    async closure_blocked_generate_punchlist() {
+        let postImpl = async () => ({ data: {
+            blocked: true,
+            readiness: {
+                is_ready: false,
+                status: 'collecting_evidence',
+                blockers: ['Saved evidence is marked neutral only; no supporting or refuting direction established.'],
+            },
+        } });
+        const posts = spy((...args) => postImpl(...args));
+        const { ctx, alertCalls, errorCalls, confirmCalls, setConfirmReturn } = makeSandbox({ post: posts });
+        setConfirmReturn(false); // analyst declines the force override
+        const methods = await loadAnalysis(ctx);
+        const closureMethods = await loadModuleMethods(ctx, 'web/modules/closure.js', 'ClosureMethods');
+        const comp = makeComponent({ ...methods, ...closureMethods }, {
+            base: {
+                apiUrl: '/api',
+                closureForm: { caseId: 'MOCK-CASE-001', ruleId: 'RULE-1', fieldValues: {}, analystNotes: '', disposition: 'Undetermined' },
+                closureReadiness: null,
+                closureResult: null,
+                closureGenerating: false,
+            },
+        });
+
+        await comp.generateClosureNote();
+
+        assert(posts.calls.length === 1, 'blocked generate must POST exactly once when the override is declined, got ' + posts.calls.length);
+        assert(confirmCalls.length === 1 && confirmCalls[0].includes('closure criteria not yet fully met'),
+            'blocked generate must ask before forcing: ' + JSON.stringify(confirmCalls));
+        assert(comp.closureReadiness && comp.closureReadiness.blockers.length === 1,
+            'blocked generate must surface the punch list: ' + JSON.stringify(comp.closureReadiness));
+        assert(comp.closureReadiness.blocker_actions && comp.closureReadiness.blocker_actions[0].stage === 4,
+            'punch list from the blocked response must carry default routing: ' + JSON.stringify(comp.closureReadiness.blocker_actions));
+        assert(comp.closureResult === null, 'declined override must not adopt a closure result');
+        assert(alertCalls.length === 0, 'blocked generate must not alert: ' + JSON.stringify(alertCalls));
+        assert(errorCalls.length === 0, 'blocked generate logged errors: ' + JSON.stringify(errorCalls));
+
+        // Force path: confirming the override re-posts and stores the note.
+        posts.calls.length = 0;
+        setConfirmReturn(true);
+        postImpl = async (url, body) => ({ data: { disposition: 'True Positive', generated_note: 'NOTE' } });
+        await comp.generateClosureNote(true);
+
+        assert(posts.calls.length === 1, 'forced generate must POST exactly once, got ' + posts.calls.length);
+        assert(posts.calls[0][1] && posts.calls[0][1].force_closure === true,
+            'forced generate must send force_closure: true');
+        assert(comp.closureResult && comp.closureResult.generated_note === 'NOTE',
+            'forced generate must adopt the closure result: ' + JSON.stringify(comp.closureResult));
+        assert(alertCalls.length === 0, 'forced generate must not alert: ' + JSON.stringify(alertCalls));
     },
 };
 

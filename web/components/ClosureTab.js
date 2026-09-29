@@ -7,7 +7,8 @@ window.ClosureTab = {
         'closureResult',
         'closureGenerating',
         'closureSuggestedRuleName',
-        'closureSuggestedDisposition'
+        'closureSuggestedDisposition',
+        'closureReadiness'
     ],
     emits: [
         'update:closure-form',
@@ -15,7 +16,8 @@ window.ClosureTab = {
         'select-rule',
         'generate-closure-note',
         'copy-closure-note',
-        'download-closure-note'
+        'download-closure-note',
+        'resolve-blocker'
     ],
     template: `
         <div class="space-y-6">
@@ -132,6 +134,43 @@ window.ClosureTab = {
                 </div>
 
                 <div class="space-y-4">
+                    <!-- S9: closure readiness punch list; each blocker
+                         deep-links to the analysis stage that resolves it -->
+                    <div
+                        v-if="closureForm.caseId && closureReadiness"
+                        class="rounded-lg p-4 border"
+                        :class="closureReadiness.is_ready
+                            ? 'bg-emerald-950/40 border-emerald-700/70'
+                            : 'bg-amber-950/40 border-amber-700/70'"
+                    >
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <h3 class="text-sm font-bold" :class="closureReadiness.is_ready ? 'text-emerald-300' : 'text-amber-300'">
+                                {{ closureReadiness.is_ready ? '✓ Ready for closure' : 'Closure readiness' }}
+                            </h3>
+                            <button
+                                @click="$emit('load-closure-readiness')"
+                                class="text-[11px] px-2 py-0.5 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-gray-300"
+                                title="Re-check readiness against the latest evidence"
+                            >Re-check</button>
+                        </div>
+                        <p v-if="closureReadiness.is_ready" class="text-xs text-emerald-200">
+                            All gating criteria are met — you can generate the closure note.
+                        </p>
+                        <ul v-else class="space-y-1.5">
+                            <li
+                                v-for="(blocker, i) in (closureReadiness.blockers || [])"
+                                :key="'blocker-' + i"
+                                class="flex items-start justify-between gap-2 text-xs text-amber-100"
+                            >
+                                <span class="min-w-0">• {{ blocker }}</span>
+                                <button
+                                    @click="$emit('resolve-blocker', i)"
+                                    class="flex-shrink-0 px-2 py-0.5 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200"
+                                    :title="'Go to Analysis stage ' + ((closureReadiness.blocker_actions || [])[i] || {}).stage + ' to resolve this'"
+                                >{{ ((closureReadiness.blocker_actions || [])[i] || {}).label || 'Resolve' }} →</button>
+                            </li>
+                        </ul>
+                    </div>
                     <div class="bg-gray-800 border border-green-600 rounded-lg p-6 h-full flex flex-col sticky top-24">
                         <h3 class="text-lg font-bold text-green-400 mb-3">Generated Note</h3>
                         <p

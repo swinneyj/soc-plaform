@@ -154,6 +154,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     },
                     closureResult: null,
                     closureGenerating: false,
+                    closureReadiness: null,
                     selectedToolForExecution: null,
 
                     // Code Review

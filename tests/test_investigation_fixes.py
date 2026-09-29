@@ -816,6 +816,12 @@ class TestUIEvidencePromoteLoadFlows:
     def test_bulk_promote_filters_continues_and_refreshes_once(self):
         self._run("promote_all_open")
 
+    def test_closure_readiness_punchlist_routes_blockers(self):
+        self._run("closure_readiness_punchlist")
+
+    def test_blocked_generate_surfaces_punchlist_and_force_path(self):
+        self._run("closure_blocked_generate_punchlist")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by

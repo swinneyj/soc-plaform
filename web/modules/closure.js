@@ -58,6 +58,10 @@
                 })
                 .catch(() => {});
 
+            // S9: readiness punch list for this case (blockers deep-link to
+            // the analysis stage that resolves each one).
+            this.loadClosureReadiness(caseId);
+
             axios
                 .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
                 .then(res => {
@@ -93,6 +97,37 @@
                     this.closureSourceNotable = null;
                 });
         },
+        async loadClosureReadiness(caseId) {
+            if (!caseId) {
+                this.closureReadiness = null;
+                return;
+            }
+            try {
+                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/closure-readiness');
+                this.closureReadiness = res.data || null;
+            } catch (err) {
+                console.warn('Failed to load closure readiness:', err);
+                this.closureReadiness = null;
+            }
+        },
+
+        // Deep-link: jump to the Analysis tab at the stage whose cards resolve
+        // this blocker (1 initial assessment, 2 supportive queries,
+        // 4 follow-up analysis / evidence re-assessment).
+        goResolveBlocker(index) {
+            const actions = (this.closureReadiness && this.closureReadiness.blocker_actions) || [];
+            const action = actions[index] || { stage: 4 };
+            const caseId = this.closureForm.caseId;
+            if (!caseId) {
+                return;
+            }
+            this.currentTab = 'analysis';
+            this.analysisCaseId = caseId;
+            if (this.$refs && this.$refs.analysisTabRef && typeof this.$refs.analysisTabRef.goToStage === 'function') {
+                this.$refs.analysisTabRef.goToStage(action.stage || 4);
+            }
+        },
+
         onRuleSelected() {
             this.selectedRule = this.availableRules.find(r => r.rule_id === this.closureForm.ruleId) || null;
             this.closureForm.fieldValues = {};
@@ -141,7 +176,15 @@
                     force_closure: force
                 });
                 if (res.data && res.data.blocked) {
-                    const blockersList = (res.data.readiness && res.data.readiness.blockers) || [];
+                    // Keep the punch list current: show exactly what blocked
+                    // this generate attempt (routed with the default action
+                    // when the readiness payload carries no per-blocker one).
+                    const readiness = res.data.readiness || {};
+                    if (!readiness.blocker_actions) {
+                        readiness.blocker_actions = (readiness.blockers || []).map(() => ({ stage: 4, label: 'Continue investigation' }));
+                    }
+                    this.closureReadiness = readiness;
+                    const blockersList = readiness.blockers || [];
                     const nl = String.fromCharCode(10);
                     const msg = 'Investigation closure criteria not yet fully met:' + nl + nl +
                         '- ' + blockersList.join(nl + '- ') + nl + nl +

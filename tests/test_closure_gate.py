@@ -16,6 +16,7 @@ sys.path.insert(0, str(PLATFORM_ROOT))
 
 from services import closure_service as csvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
+from api.routes import closure as closure_routes  # noqa: E402
 
 
 class FakeCase:
@@ -376,6 +377,75 @@ class TestDerivedClosureDisposition:
         assert csvc._normalize_disposition_key("Benign Positive") == "benign_positive"
         assert csvc._normalize_disposition_key("garbage input") == "undetermined"
         assert csvc._normalize_disposition_key(None) == "undetermined"
+
+
+class TestBlockerActionRouting:
+    """S9: every closure blocker deep-links to the analysis stage that
+    resolves it. The routing table lives next to the readiness endpoint so
+    the UI punch list can jump the analyst straight to the right work."""
+
+    def test_evidence_and_state_blockers_route_to_stage_1(self):
+        actions = closure_routes.classify_blocker_actions([
+            "No saved investigative evidence exists yet for this case.",
+            "No persisted investigation state yet. Run analysis to initialize the loop.",
+        ])
+        assert actions == [
+            {"stage": 1, "label": "Run initial analysis"},
+            {"stage": 1, "label": "Run initial analysis"},
+        ]
+
+    def test_execution_and_data_gap_blockers_route_to_stage_2(self):
+        actions = closure_routes.classify_blocker_actions([
+            "Query execution failed on 'Failed logins' (supportive_manual) - rerun or resolve syntax.",
+            "Required telemetry unavailable for 'Zero results' (phase2_manual) - data gap exists.",
+        ])
+        assert [a["stage"] for a in actions] == [2, 2]
+        assert {a["label"] for a in actions} == {"Fix failed queries", "Address data gaps"}
+
+    def test_assessment_blockers_route_to_stage_4(self):
+        actions = closure_routes.classify_blocker_actions([
+            "2 investigative question(s) remain unresolved.",
+            "Saved evidence is marked neutral only; no supporting or refuting direction established.",
+            "Conflicting evidence: detection exhibits both supporting and refuting findings.",
+            "Disposition is tentative ('suspicious' or 'undetermined') and requires conclusive findings.",
+        ])
+        assert [a["stage"] for a in actions] == [4, 4, 4, 4]
+
+    def test_unclassified_blocker_falls_back_to_stage_4(self):
+        actions = closure_routes.classify_blocker_actions(["Something entirely novel"])
+        assert actions == [{"stage": 4, "label": "Continue investigation"}]
+
+    def test_readiness_endpoint_annotates_blocker_actions(self, monkeypatch):
+        import api.main as api_main
+        from fastapi.testclient import TestClient
+
+        # Hermetic DB: no investigation-state row for the probe case.
+        class _FakeQuery:
+            def filter(self, *a, **k):
+                return self
+
+            def first(self):
+                return None
+
+        class _FakeDB:
+            def query(self, *a, **k):
+                return _FakeQuery()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("db.models.SessionLocal", lambda: _FakeDB())
+        client = TestClient(api_main.app)
+        # Empty/unknown case: readiness carries the no-state blocker plus its
+        # routing action, not a 500.
+        res = client.get("/api/db/triage/NO-SUCH-CASE/closure-readiness")
+        assert res.status_code == 200
+        payload = res.json()
+        assert isinstance(payload.get("blockers"), list)
+        assert len(payload["blocker_actions"]) == len(payload["blockers"])
+        for action in payload["blocker_actions"]:
+            assert action["stage"] in (1, 2, 4)
+            assert isinstance(action["label"], str) and action["label"]
 
 
 if __name__ == "__main__":

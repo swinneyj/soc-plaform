@@ -36,6 +36,8 @@ export function makeSandbox(axiosImpls = {}) {
     const alertCalls = [];
     const errorCalls = [];
     const warnCalls = [];
+    const confirmCalls = [];
+    let confirmReturn = false;
     const unexpected = (verb) => async () => {
         throw new Error('unexpected axios.' + verb + ' (no network expected in this scenario)');
     };
@@ -43,6 +45,9 @@ export function makeSandbox(axiosImpls = {}) {
         location: { origin: 'http://localhost:8001' },
         // Canary: any alert() call is a regression (blocking modal).
         alert(msg) { alertCalls.push(String(msg)); },
+        // Stubbed decision dialog: records prompts, defaults to declining
+        // (force/override paths must be explicitly opted into by scenarios).
+        confirm(msg) { confirmCalls.push(String(msg)); return confirmReturn; },
     };
     sandboxWindow.window = sandboxWindow;
     const sandboxConsole = {
@@ -55,6 +60,7 @@ export function makeSandbox(axiosImpls = {}) {
     const sandbox = {
         window: sandboxWindow,
         alert: sandboxWindow.alert,
+        confirm: sandboxWindow.confirm,
         axios: {
             get: axiosImpls.get || unexpected('get'),
             post: axiosImpls.post || unexpected('post'),
@@ -64,7 +70,7 @@ export function makeSandbox(axiosImpls = {}) {
         URL, URLSearchParams,
     };
     sandbox.globalThis = sandbox;
-    return { ctx: vm.createContext(sandbox), alertCalls, errorCalls, warnCalls };
+    return { ctx: vm.createContext(sandbox), alertCalls, errorCalls, warnCalls, confirmCalls, setConfirmReturn(v) { confirmReturn = v; } };
 }
 
 /**

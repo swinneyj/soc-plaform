@@ -223,12 +223,15 @@
                 :closure-generating="closureGenerating"
                 :closure-suggested-rule-name="closureSuggestedRuleName"
                 :closure-suggested-disposition="closureSuggestedDisposition"
+                :closure-readiness="closureReadiness"
                 @update:closure-form="closureForm = $event"
                 @select-case="onCaseSelected"
                 @select-rule="onRuleSelected"
                 @generate-closure-note="generateClosureNote"
                 @copy-closure-note="copyToClipboard"
                 @download-closure-note="downloadClosureNote"
+                @load-closure-readiness="loadClosureReadiness(closureForm.caseId)"
+                @resolve-blocker="goResolveBlocker"
             ></closure-tab>
 
             <!-- Jobs -->
@@ -328,7 +331,7 @@
     <script src="modules/database.js?v=18"></script>
     <script src="modules/analysis.js?v=17"></script>
     <script src="modules/tools.js?v=11"></script>
-    <script src="modules/closure.js?v=9"></script>
+    <script src="modules/closure.js?v=10"></script>
     <script src="modules/codeReview.js?v=9"></script>
 
     <!-- components (UI) -->
@@ -337,7 +340,7 @@
     <script src="components/ToolsTab.js?v=11"></script>
     <script src="components/DatabaseTab.js?v=27"></script>
     <script src="components/AnalysisTab.js?v=16"></script>
-    <script src="components/ClosureTab.js?v=9"></script>
+    <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=15"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
