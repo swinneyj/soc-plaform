@@ -37,6 +37,10 @@ from db.models import (  # noqa: E402
     TriageResult,
     SessionLocal,
 )
+from services.judgment_normalization import (  # noqa: E402
+    PHASE4_INTAKE_CONFIDENCE,
+    PHASE4_INTAKE_VERDICT,
+)
 from services.search_backend import MockSplunkBackend  # noqa: E402
 
 SEED_DIR = ROOT / "services" / "mock_splunk" / "seed"
@@ -53,8 +57,6 @@ SCENARIOS = [
         "category": "authentication",
         "severity": "high",
         "case_id": "MOCK-CASE-001",
-        "verdict": "suspicious",
-        "confidence": 0.72,
         "summary": " VPN geo-velocity violation for user bjones: Virginia then Romania 11 minutes apart.",
         "queries": [
             {
@@ -74,8 +76,6 @@ SCENARIOS = [
         "category": "malware",
         "severity": "critical",
         "case_id": "MOCK-CASE-002",
-        "verdict": "malicious",
-        "confidence": 0.94,
         "summary": "Malicious binary dropped by WINWORD on HOST-FIN-04 and blocked by EDR.",
         "queries": [
             {
@@ -95,8 +95,6 @@ SCENARIOS = [
         "category": "network",
         "severity": "medium",
         "case_id": "MOCK-CASE-003",
-        "verdict": "benign",
-        "confidence": 0.61,
         "summary": "Cloud-backup job explains the outbound volume burst on HOST-DEV-02.",
         "queries": [
             {
@@ -283,8 +281,10 @@ def seed_db(backend: MockSplunkBackend, reset: bool) -> dict:
                         case_id=scenario["case_id"],
                         rule_name=scenario["rule_name"],
                         rule_id=scenario["rule_id"],
-                        verdict=scenario["verdict"],
-                        confidence_score=scenario["confidence"],
+                        # Phase 4 intake contract: the verdict field carries
+                        # no analyst judgment (services/judgment_normalization).
+                        verdict=PHASE4_INTAKE_VERDICT,
+                        confidence_score=PHASE4_INTAKE_CONFIDENCE,
                         analysis_summary=scenario["summary"],
                     )
                 )

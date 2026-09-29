@@ -913,5 +913,68 @@ class TestNotableParsing:
         ]
 
 
+class TestSeedContractConformance:
+    """Seeding must reproduce the Phase 4 intake contract.
+
+    Documented debt (fixed Sept 29): re-seeding via seed_mock_splunk /
+    seed_test_cases re-introduced legacy judgment semantics (per-scenario
+    verdicts like benign/0.61). Both seeders now write the contract constants,
+    and every seeded triage row must be invisible to the migration sweep —
+    plan_triage_normalization(row) is None means "already conformant".
+    """
+
+    def _load_seed_mock_module(self):
+        import importlib.util
+
+        path = PLATFORM_ROOT / "scripts" / "seed_mock_splunk.py"
+        spec = importlib.util.spec_from_file_location("seed_mock_splunk", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _fresh_session_factory(self, monkeypatch, seeder_module):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+
+        from db.models import Base
+
+        engine = create_engine("sqlite://")
+        Base.metadata.create_all(bind=engine)
+        factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        monkeypatch.setattr(seeder_module, "SessionLocal", factory)
+        return factory
+
+    def _assert_rows_conformant(self, factory, triage_model):
+        from services import judgment_normalization as jn
+
+        db = factory()
+        try:
+            rows = db.query(triage_model).all()
+        finally:
+            db.close()
+        assert rows, "seeder produced no triage rows"
+        for row in rows:
+            assert jn.plan_triage_normalization(row) is None, (
+                f"seeded row {row.case_id} carries legacy judgment "
+                f"({row.verdict}/{row.confidence_score}); re-seeding would "
+                f"reintroduce pre-Phase-4 semantics"
+            )
+
+    def test_seed_test_cases_rows_are_phase4_conformant(self, monkeypatch):
+        import seed_test_cases as stc
+
+        factory = self._fresh_session_factory(monkeypatch, stc)
+        stc.seed_test_cases()
+        self._assert_rows_conformant(factory, stc.TriageResult)
+
+    def test_seed_mock_splunk_rows_are_phase4_conformant(self, monkeypatch):
+        from services.search_backend import MockSplunkBackend
+
+        seed_mock = self._load_seed_mock_module()
+        factory = self._fresh_session_factory(monkeypatch, seed_mock)
+        seed_mock.seed_db(MockSplunkBackend(), reset=False)
+        self._assert_rows_conformant(factory, seed_mock.TriageResult)
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
