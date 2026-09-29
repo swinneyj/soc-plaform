@@ -1,7 +1,7 @@
 """Tests for the API-key gate on dangerous routes.
 
 The gate is a no-op unless API_KEY is set in the environment, so these tests
-monkeypatch the module-level _API_KEY value directly to exercise both modes.
+monkeypatch api.auth._API_KEY (the single auth seam) to exercise both modes.
 """
 
 import os
@@ -14,6 +14,7 @@ CORS_TEST_ORIGIN = os.environ["CORS_ORIGINS"].split(",")[0].strip()
 import pytest
 from fastapi.testclient import TestClient
 
+import api.auth as api_auth
 import api.main as api_main
 
 
@@ -24,7 +25,7 @@ def client():
 
 @pytest.fixture()
 def with_api_key(monkeypatch):
-    monkeypatch.setattr(api_main, "_API_KEY", "test-secret-key")
+    monkeypatch.setattr(api_auth, "_API_KEY", "test-secret-key")
     yield "test-secret-key"
 
 def test_gate_is_noop_without_api_key(client):

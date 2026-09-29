@@ -35,7 +35,9 @@ sys.path.insert(0, str(PLATFORM_ROOT))
 import db.models as db_models  # noqa: E402
 import services.ollama_service as ollama_service  # noqa: E402
 from api.main import app  # noqa: E402
+import api.auth as api_auth  # noqa: E402
 import api.main as api_main  # noqa: E402
+import api.routes.splunk as splunk_routes  # noqa: E402
 import services.search_backend as search_backend_mod  # noqa: E402
 
 
@@ -771,7 +773,7 @@ class TestSplunkSearchOneEndpoint:
 
     def test_timeout_maps_to_query_failed(self, api_client, monkeypatch):
         case_id = self._prepare(api_client)
-        monkeypatch.setattr(api_main, "_SEARCH_ONE_TIMEOUT_SECONDS", 0.05)
+        monkeypatch.setattr(splunk_routes, "_SEARCH_ONE_TIMEOUT_SECONDS", 0.05)
 
         def slow_search(self, spl, earliest="-7d", latest="now", limit=500):
             time.sleep(0.5)
@@ -1138,7 +1140,7 @@ class TestApiKeyActivation:
         }
 
     def test_unauthenticated_mutation_is_rejected(self, api_client, monkeypatch):
-        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-1")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence", json=self._evidence_body()
@@ -1147,7 +1149,7 @@ class TestApiKeyActivation:
         assert "API key" in resp.json()["detail"]
 
     def test_header_key_allows_mutation(self, api_client, monkeypatch):
-        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-2")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence",
@@ -1157,7 +1159,7 @@ class TestApiKeyActivation:
         assert resp.status_code == 200, resp.text
 
     def test_query_param_key_allows_mutation(self, api_client, monkeypatch):
-        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-3")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence?api_key=sekret",
@@ -1166,7 +1168,7 @@ class TestApiKeyActivation:
         assert resp.status_code == 200, resp.text
 
     def test_wrong_key_is_rejected(self, api_client, monkeypatch):
-        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-4")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence",
@@ -1176,7 +1178,7 @@ class TestApiKeyActivation:
         assert resp.status_code == 401
 
     def test_reads_and_health_stay_open(self, api_client, monkeypatch):
-        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-5")
         assert api_client.get(f"/api/db/triage/{case_id}/evidence").status_code == 200
         assert api_client.get("/api/health").status_code == 200

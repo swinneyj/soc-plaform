@@ -307,9 +307,9 @@ def test_http_write_endpoints_require_api_key(monkeypatch):
     handler logic runs. (With no key configured the gate is a no-op for
     local dev — covered elsewhere.)
     """
-    from api import main as api_main
+    from api import auth as api_auth
 
-    monkeypatch.setattr(api_main, "_API_KEY", "test-secret-key")
+    monkeypatch.setattr(api_auth, "_API_KEY", "test-secret-key")
     client = _client()
     admit = client.post(
         "/api/splunk-boundary/admit",

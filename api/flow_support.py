@@ -10,6 +10,8 @@ the routers can import it without circular imports.
 import json
 import os
 import re
+from datetime import datetime as _dt, timezone as _tz
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
@@ -25,6 +27,21 @@ from services.analysis_service import (
 # Same normalization as normalize_phase2_text (lowercase, non-alphanumerics
 # -> spaces); the correlation-rule resolver depends on it.
 _normalize_rule_match_text = _normalize_phase2_text
+
+
+class JobStatus(str, Enum):
+    """Lifecycle of an async tool/job run (shared by tools + search-one)."""
+    PENDING = "pending"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+def _utcnow() -> "_dt":
+    """Naive UTC now — timezone-aware internally, stripped to match the
+    platform's naive-UTC storage convention (and to avoid the deprecated
+    datetime.utcnow())."""
+    return _dt.now(_tz.utc).replace(tzinfo=None)
 
 
 # Priority order for compact key-fields shown on collapsed triage cards.
