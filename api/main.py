@@ -90,16 +90,19 @@ async def lifespan(app: FastAPI):
 _enable_docs = os.environ.get("ENABLE_DOCS", "") == "1"
 
 # ---------------------------------------------------------------------------
-# API-key auth for dangerous routes.
+# API-key auth (Phase 5 groundwork: ready to activate).
 #
-# The public deployment exposes process-execution and mutation endpoints that
-# must never be reachable without a shared secret. Setting API_KEY activates
-# gating on those routes; leaving it unset keeps local development friction
-# free (localhost-only exposure), matching the previous behavior.
-#
-# Deliberately NOT gated (read-only / health / static UI): /api/health,
-# /api/db/stats and other GETs, the mounted web UI. Gating those can follow
-# once the frontend learns to send the key.
+# Setting API_KEY activates gating; leaving it unset keeps local development
+# friction free (localhost-only exposure). Coverage (Phase 5):
+#   - middleware below: EVERY mutating /api/* request (POST/PUT/PATCH/DELETE)
+#     — this is the default, so future routes are gated the moment they exist;
+#   - explicit `dependencies=[Depends(require_api_key)]` on the dangerous
+#     routes below stays as defense in depth.
+# Deliberately NOT gated (read-only / health / static UI): /api/health and
+# other GETs, the mounted web UI. The frontend already stamps X-API-Key on
+# every axios request (web/utils/auth.js reads window.SOC_CONFIG.apiKey or
+# ?apiKey= for local testing), so activation is: put API_KEY in the BWS vault
+# + .env, set SOC_CONFIG.apiKey in the deployed HTML, restart.
 # ---------------------------------------------------------------------------
 _API_KEY = os.environ.get("API_KEY", "").strip()
 
@@ -127,6 +130,28 @@ app = FastAPI(
     redoc_url=None,
     openapi_url="/openapi.json" if _enable_docs else None,
 )
+
+
+@app.middleware("http")
+async def _api_key_mutation_gate(request, call_next):
+    """Reject unauthenticated mutating /api/* requests when API_KEY is set.
+
+    Read-only GETs, /api/health (deploy smoke test), and the static UI stay
+    open per the contract above. The key is accepted as the X-API-Key header
+    (what web/utils/auth.js sends) or an ?api_key= query parameter.
+    """
+    if (
+        _API_KEY
+        and request.method in ("POST", "PUT", "PATCH", "DELETE")
+        and request.url.path.startswith("/api/")
+    ):
+        header = request.headers.get("X-API-Key")
+        query = request.query_params.get("api_key")
+        if header != _API_KEY and query != _API_KEY:
+            return JSONResponse(
+                {"detail": "Invalid or missing API key"}, status_code=401
+            )
+    return await call_next(request)
 
 # The hosted branch preview can call a locally running API through a secure
 # HTTPS tunnel. Keep the allowlist explicit; do not enable wildcard CORS for

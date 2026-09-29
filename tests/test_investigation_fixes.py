@@ -17,6 +17,7 @@ All tests are pure unit tests: no database, no HTTP, no Ollama.
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ sys.path.insert(0, str(PLATFORM_ROOT))
 
 import api.main as api_main  # noqa: E402
 import services.evidence_service as esvc  # noqa: E402
+import services.retention_service as rsvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
 
 
@@ -501,6 +503,71 @@ class TestAdvisoryAnalystLabels:
         """The disposition->verdict mapper was the analyst-judgment leak;
         promoted verdicts are now fixed to "suspicious"."""
         assert not hasattr(api_main, "derive_triage_verdict")
+
+
+class _FakeAnalysisRow:
+    """Duck-typed AnalysisResult row for the pure retention selection."""
+
+    def __init__(self, row_id, case_id, created_at):
+        self.id = row_id
+        self.case_id = case_id
+        self.created_at = created_at
+
+
+class TestAnalysisRetentionSelection:
+    """Phase 5 retention policy (pure): keep the newest N analyses per case;
+    closure-linked cases are permanent record and are never pruned."""
+
+    def _rows(self, specs):
+        return [_FakeAnalysisRow(*spec) for spec in specs]
+
+    def test_keeps_newest_n_per_case(self):
+        rows = self._rows([
+            (1, "A", datetime(2026, 9, 1, 10)),
+            (2, "A", datetime(2026, 9, 1, 11)),
+            (3, "A", datetime(2026, 9, 1, 12)),
+            (4, "A", datetime(2026, 9, 1, 13)),
+        ])
+        assert rsvc.select_prunable_analysis_ids(rows, keep_last_n=2) == [1, 2]
+
+    def test_closure_linked_case_is_never_pruned(self):
+        # B has two rows so that without the protection rule one of them
+        # would fall under keep_last_n=1 — the rule must actually bite.
+        rows = self._rows([
+            (1, "A", datetime(2026, 9, 1, 10)),
+            (2, "A", datetime(2026, 9, 1, 11)),
+            (3, "A", datetime(2026, 9, 1, 12)),
+            (4, "B", datetime(2026, 9, 1, 10)),
+            (5, "B", datetime(2026, 9, 1, 11)),
+        ])
+        prunable = rsvc.select_prunable_analysis_ids(
+            rows, keep_last_n=1, protected_case_ids={"B"}
+        )
+        assert prunable == [1, 2]
+
+    def test_cases_are_independent(self):
+        rows = self._rows([
+            (1, "A", datetime(2026, 9, 1, 10)),
+            (2, "A", datetime(2026, 9, 1, 11)),
+            (3, "B", datetime(2026, 9, 1, 12)),
+            (4, "B", datetime(2026, 9, 1, 13)),
+        ])
+        assert rsvc.select_prunable_analysis_ids(rows, keep_last_n=1) == [1, 3]
+
+    def test_created_at_ties_break_by_id(self):
+        rows = self._rows([
+            (1, "A", datetime(2026, 9, 1, 10)),
+            (2, "A", datetime(2026, 9, 1, 10)),
+            (3, "A", datetime(2026, 9, 1, 10)),
+        ])
+        assert rsvc.select_prunable_analysis_ids(rows, keep_last_n=1) == [1, 2]
+
+    def test_keep_zero_prunes_every_unprotected_row(self):
+        rows = self._rows([
+            (1, "A", datetime(2026, 9, 1, 10)),
+            (2, "B", datetime(2026, 9, 1, 11)),
+        ])
+        assert rsvc.select_prunable_analysis_ids(rows, keep_last_n=0) == [1, 2]
 
 
 class TestModelResolution:

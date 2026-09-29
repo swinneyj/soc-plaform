@@ -1044,5 +1044,135 @@ class TestPromoteJudgmentFlow:
         assert result["case_id"] == f"NOTABLE-{event_id}"
 
 
+class TestAnalysisRetentionPrune:
+    """Phase 5: analysis_results retention — keep the newest N per case,
+    closure-linked cases untouched; dry-run by default."""
+
+    def _seed_analysis(self, client, case_id, count, base_minute=0):
+        db = client.test_session()
+        rows = []
+        for i in range(count):
+            row = db_models.AnalysisResult(
+                case_id=case_id,
+                model_name="fake-model:latest",
+                query=f"prompt {i}",
+                analysis=f"analysis {i} for {case_id}",
+                confidence=0.5,
+                created_at=datetime(2026, 9, 1, 12, base_minute + i),
+            )
+            db.add(row)
+            rows.append(row)
+        db.commit()
+        ids = [r.id for r in rows]
+        db.close()
+        return ids
+
+    def _seed_closure(self, client, case_id):
+        db = client.test_session()
+        db.add(db_models.ClosureNote(
+            case_id=case_id,
+            rule_id="test_rule",
+            analyst_notes="",
+            generated_note="Closed note",
+            status="closed",
+        ))
+        db.commit()
+        db.close()
+
+    def test_dry_run_reports_without_deleting(self, api_client):
+        from services.retention_service import prune_analysis_results
+
+        ids = self._seed_analysis(api_client, "RET-A", 5)
+        db = api_client.test_session()
+        summary = prune_analysis_results(db, keep_last_n=2, dry_run=True)
+        remaining = [r.id for r in db.query(db_models.AnalysisResult).all()]
+        db.close()
+        assert summary["prunable"] == 3
+        assert summary["deleted"] == 0
+        assert sorted(remaining) == sorted(ids)
+
+    def test_apply_keeps_newest_and_protects_closure_cases(self, api_client):
+        from services.retention_service import prune_analysis_results
+
+        ids_a = self._seed_analysis(api_client, "RET-A", 5)  # trim to 2 → 3 prunable
+        ids_b = self._seed_analysis(api_client, "RET-B", 3, base_minute=10)
+        self._seed_closure(api_client, "RET-B")  # closure-linked → all kept
+        ids_c = self._seed_analysis(api_client, "RET-C", 4, base_minute=20)  # 2 prunable
+
+        db = api_client.test_session()
+        summary = prune_analysis_results(db, keep_last_n=2, dry_run=False)
+        by_case = {}
+        for r in db.query(db_models.AnalysisResult).all():
+            by_case.setdefault(r.case_id, []).append(r.id)
+        db.close()
+
+        assert summary["deleted"] == 5
+        assert sorted(by_case["RET-A"]) == sorted(ids_a[-2:])
+        assert sorted(by_case["RET-B"]) == sorted(ids_b)
+        assert sorted(by_case["RET-C"]) == sorted(ids_c[-2:])
+
+
+class TestApiKeyActivation:
+    """Phase 5 auth groundwork: with API_KEY set, every mutating /api/*
+    request needs the key (X-API-Key header or ?api_key=); reads and
+    /api/health stay open. Unset API_KEY keeps local dev open — that mode is
+    what every other test exercises."""
+
+    def _evidence_body(self):
+        return {
+            "entries": [{
+                "query_title": "Q1",
+                "query_text": "index=test",
+                "result_text": "rows here",
+                "result_status": "success",
+            }],
+            "source_system": "phase2_manual",
+        }
+
+    def test_unauthenticated_mutation_is_rejected(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        case_id = seed_case(api_client, "AUTH-1")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence", json=self._evidence_body()
+        )
+        assert resp.status_code == 401
+        assert "API key" in resp.json()["detail"]
+
+    def test_header_key_allows_mutation(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        case_id = seed_case(api_client, "AUTH-2")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence",
+            json=self._evidence_body(),
+            headers={"X-API-Key": "sekret"},
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_query_param_key_allows_mutation(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        case_id = seed_case(api_client, "AUTH-3")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence?api_key=sekret",
+            json=self._evidence_body(),
+        )
+        assert resp.status_code == 200, resp.text
+
+    def test_wrong_key_is_rejected(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        case_id = seed_case(api_client, "AUTH-4")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence",
+            json=self._evidence_body(),
+            headers={"X-API-Key": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    def test_reads_and_health_stay_open(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_main, "_API_KEY", "sekret")
+        case_id = seed_case(api_client, "AUTH-5")
+        assert api_client.get(f"/api/db/triage/{case_id}/evidence").status_code == 200
+        assert api_client.get("/api/health").status_code == 200
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
