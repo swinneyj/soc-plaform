@@ -1007,7 +1007,12 @@ class TestCanonicalRestPaths:
         assert m("/api/notables/historical") == "/api/db/notables/historical"
         assert m("/api/notables/42/promote") == "/api/db/notables/42/promote"
         assert m("/api/cases/CASE-1/notable") == "/api/db/triage/CASE-1/notable"
+        assert m("/api/cases/CASE-1") == "/api/db/triage/CASE-1"
+        assert m("/api/cases/CASE-1/delete") == "/api/db/triage/CASE-1/delete"
+        assert m("/api/cases/batch-delete") == "/api/db/triage/batch-delete"
         assert m("/api/cases/CASE-1/investigation-state") == "/api/db/triage/CASE-1/investigation-state"
+        # Unknown tails rewrite too (and 404 at routing exactly like legacy).
+        assert m("/api/cases/CASE-1/unknown-subresource") == "/api/db/triage/CASE-1/unknown-subresource"
         assert m("/api/cases/CASE-1/closure-readiness") == "/api/db/triage/CASE-1/closure-readiness"
         assert m("/api/cases/CASE-1/evidence") == "/api/db/triage/CASE-1/evidence"
         assert m("/api/cases/CASE-1/evidence/batch-delete") == "/api/db/triage/CASE-1/evidence/batch-delete"
@@ -1018,8 +1023,8 @@ class TestCanonicalRestPaths:
         m = api_main.canonical_to_legacy_path
         for path in (
             "/api/health", "/api/db/triage", "/api/db/notables/historical",
-            "/", "/index.html", "/api/cases/CASE-1/unknown-subresource",
-            "/api/notable", "/api/evidencex", "/api/cases/CASE-1",
+            "/", "/index.html",
+            "/api/notable", "/api/evidencex",
         ):
             assert m(path) is None, "path must not rewrite: " + path
 

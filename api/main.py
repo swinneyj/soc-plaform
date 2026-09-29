@@ -113,12 +113,13 @@ def canonical_to_legacy_path(path):
         rest = m.group("rest")
         return "/api/db/notables" + (("/" + rest) if rest else "")
 
-    m = re.match(
-        r"^/api/cases/(?P<cid>[^/]+)/(?P<rest>notable|investigation-state|closure-readiness|evidence(?:/.*)?)$",
-        path,
-    )
+    m = re.match(r"^/api/cases/(?P<cid>[^/]+)(?P<rest>/.*)?$", path)
     if m:
-        return "/api/db/triage/%s/%s" % (m.group("cid"), m.group("rest"))
+        # The /api/cases/* tree mirrors /api/db/triage/* 1:1 (detail,
+        # notable, investigation-state, closure-readiness, evidence* and its
+        # delete subroutes, case delete, batch-delete), so any tail maps
+        # straight through; unknown subresources 404 identically either way.
+        return "/api/db/triage/%s%s" % (m.group("cid"), m.group("rest") or "")
 
     m = re.match(r"^/api/evidence/(?P<cid>[^/]+)(?P<rest>/.*)?$", path)
     if m:
