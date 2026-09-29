@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 import logging
 import os
+import re
 import sys
 
 # Add Tools directory to path
@@ -87,6 +88,59 @@ _enable_docs = os.environ.get("ENABLE_DOCS", "") == "1"
 from api import auth  # noqa: E402
 
 
+# ---------------------------------------------------------------------------
+# S13: canonical REST resource paths.
+#
+# The public API prefers resource-oriented paths (/api/cases, /api/notables,
+# /api/evidence, /api/analyses); the historical /api/db/* spellings keep
+# working as aliases. Rewriting happens at the ASGI layer so the routers and
+# handlers stay untouched — one mapping table, zero behavioral drift, and
+# auth/CORS middleware see the same method+path shape either way.
+# ---------------------------------------------------------------------------
+def canonical_to_legacy_path(path):
+    """Map a canonical REST path to its legacy /api/db/* route path.
+
+    Returns None when the path is not a canonical spelling (legacy paths,
+    health, static UI all pass through untouched).
+    """
+    if path == "/api/cases":
+        return "/api/db/triage"
+    if path == "/api/analyses":
+        return "/api/db/analyze"
+
+    m = re.match(r"^/api/notables(?:/(?P<rest>.*))?$", path)
+    if m:
+        rest = m.group("rest")
+        return "/api/db/notables" + (("/" + rest) if rest else "")
+
+    m = re.match(
+        r"^/api/cases/(?P<cid>[^/]+)/(?P<rest>notable|investigation-state|closure-readiness|evidence(?:/.*)?)$",
+        path,
+    )
+    if m:
+        return "/api/db/triage/%s/%s" % (m.group("cid"), m.group("rest"))
+
+    m = re.match(r"^/api/evidence/(?P<cid>[^/]+)(?P<rest>/.*)?$", path)
+    if m:
+        return "/api/db/triage/%s/evidence%s" % (m.group("cid"), m.group("rest") or "")
+
+    return None
+
+
+class CanonicalPathRewriter:
+    """ASGI middleware: canonical resource paths -> legacy /api/db/* routes."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            legacy = canonical_to_legacy_path(scope.get("path", ""))
+            if legacy:
+                scope = dict(scope, path=legacy, raw_path=legacy.encode("ascii"))
+        await self.app(scope, receive, send)
+
+
 app = FastAPI(
     title="SOC Platform API",
     lifespan=lifespan,
@@ -130,6 +184,9 @@ if cors_origins:
         allow_methods=["GET", "POST", "PUT", "DELETE"],
         allow_headers=["Content-Type", "Accept", "X-API-Key"],
     )
+
+# Canonical resource paths rewrite to the legacy /api/db/* routes (S13).
+app.add_middleware(CanonicalPathRewriter)
 
 from api.routes.system import router as system_router
 app.include_router(system_router)

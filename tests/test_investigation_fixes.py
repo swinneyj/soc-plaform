@@ -991,5 +991,52 @@ class TestSeedContractConformance:
         self._assert_rows_conformant(factory, seed_mock.TriageResult)
 
 
+class TestCanonicalRestPaths:
+    """S13: canonical REST resource paths (/api/cases|notables|evidence|
+    analyses) are aliases of the historical /api/db/* routes, rewritten at
+    the ASGI layer so handlers stay untouched and behavior is identical."""
+
+    def test_mapping_table_covers_the_resource_families(self):
+        m = api_main.canonical_to_legacy_path
+        assert m("/api/cases") == "/api/db/triage"
+        assert m("/api/analyses") == "/api/db/analyze"
+        assert m("/api/notables") == "/api/db/notables"
+        assert m("/api/notables/historical") == "/api/db/notables/historical"
+        assert m("/api/notables/42/promote") == "/api/db/notables/42/promote"
+        assert m("/api/cases/CASE-1/notable") == "/api/db/triage/CASE-1/notable"
+        assert m("/api/cases/CASE-1/investigation-state") == "/api/db/triage/CASE-1/investigation-state"
+        assert m("/api/cases/CASE-1/closure-readiness") == "/api/db/triage/CASE-1/closure-readiness"
+        assert m("/api/cases/CASE-1/evidence") == "/api/db/triage/CASE-1/evidence"
+        assert m("/api/cases/CASE-1/evidence/batch-delete") == "/api/db/triage/CASE-1/evidence/batch-delete"
+        assert m("/api/evidence/CASE-1") == "/api/db/triage/CASE-1/evidence"
+        assert m("/api/evidence/CASE-1/99") == "/api/db/triage/CASE-1/evidence/99"
+
+    def test_non_canonical_paths_pass_through_untouched(self):
+        m = api_main.canonical_to_legacy_path
+        for path in (
+            "/api/health", "/api/db/triage", "/api/db/notables/historical",
+            "/", "/index.html", "/api/cases/CASE-1/unknown-subresource",
+            "/api/notable", "/api/evidencex", "/api/cases/CASE-1",
+        ):
+            assert m(path) is None, "path must not rewrite: " + path
+
+    def test_canonical_and_legacy_routes_serve_identically(self):
+        from fastapi.testclient import TestClient
+        client = TestClient(api_main.app)
+        # Health (never rewritten) plus alias/legacy pairs must agree. The
+        # DB-backed pairs both hit the same dependency, so parity of status
+        # code is the meaningful assertion in a hermetic CI run.
+        assert client.get("/api/health").status_code == 200
+        for legacy, canonical in (
+            ("/api/db/triage", "/api/cases"),
+            ("/api/db/notables/historical", "/api/notables/historical"),
+            ("/api/db/triage/NO-SUCH-CASE/closure-readiness", "/api/cases/NO-SUCH-CASE/closure-readiness"),
+            ("/api/db/triage/NO-SUCH-CASE/evidence", "/api/evidence/NO-SUCH-CASE"),
+        ):
+            a = client.get(legacy).status_code
+            b = client.get(canonical).status_code
+            assert a == b, f"{legacy}={a} but {canonical}={b}"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
