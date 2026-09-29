@@ -1278,9 +1278,14 @@
         },
 
         async saveSupportiveEvidence(options = {}) {
+            if (this.supportiveSaveBusy) {
+                return;
+            }
             if (!this.analysisCaseId || !this.analysisRule || !this.analysisRule.supportive_queries) {
                 return;
             }
+            this.supportiveSaveBusy = true;
+            try {
 
             const entries = [];
             for (const q of this.analysisRule.supportive_queries) {
@@ -1321,6 +1326,9 @@
             if (!options.silent) {
                 alert('Supportive evidence saved for case ' + this.analysisCaseId);
                 await this.loadInvestigationState(this.analysisCaseId);
+            }
+            } finally {
+                this.supportiveSaveBusy = false;
             }
         },
 
@@ -1651,22 +1659,35 @@
                 });
         },
 
+        _setSplunkRunStatus(statusKey, state, message) {
+            // Inline per-card status instead of blocking alert() dialogs:
+            // modal alerts can wedge embedded webviews and steal focus from
+            // the analyst mid-loop. state: 'running' | 'complete' | 'error'.
+            const short = state === 'running' ? 'Running…' : state === 'error' ? 'Run failed' : 'Saved ✓';
+            this.splunkRunStatus = {
+                ...this.splunkRunStatus,
+                [statusKey]: { state, message, short }
+            };
+        },
+
         async runSplunkSearch({ q, kind }) {
+            const isPhase2 = kind === 'phase2';
+            const key = isPhase2 ? this.getPhase2Key(q) : this.getSupportiveKey(q);
+            const statusKey = (isPhase2 ? 'phase2:' : 'supportive:') + key;
             if (!this.analysisCaseId) {
-                alert('Select a triage case first');
+                this._setSplunkRunStatus(statusKey, 'error', 'Select a triage case first');
                 return;
             }
             const title = ((q && q.title) || '').toString().trim() || 'Unnamed query';
-            const isPhase2 = kind === 'phase2';
-            const key = isPhase2 ? this.getPhase2Key(q) : this.getSupportiveKey(q);
             const template = isPhase2
                 ? ((this.phase2EditedQueries && this.phase2EditedQueries[key]) || (q && q.spl) || '').toString()
                 : ((q && q.spl_query) || '').toString();
             if (!template.trim()) {
-                alert('No SPL query text available to run');
+                this._setSplunkRunStatus(statusKey, 'error', 'No SPL query text available to run');
                 return;
             }
 
+            this._setSplunkRunStatus(statusKey, 'running', 'Running SPL via the configured search backend…');
             try {
                 const res = await axios.post(this.apiUrl + '/splunk/search-one', {
                     case_id: this.analysisCaseId,
@@ -1684,7 +1705,11 @@
                 if (data.investigation_state) {
                     this.investigationState = data.investigation_state;
                 }
-                alert('Run complete (' + (data.result_status || 'success') + ', ' + (data.row_count || 0) + ' rows). Saved to the evidence ledger as splunk_auto evidence.');
+                this._setSplunkRunStatus(
+                    statusKey,
+                    'complete',
+                    'Run complete (' + (data.result_status || 'success') + ', ' + (data.row_count || 0) + ' rows). Saved to the evidence ledger as splunk_auto evidence.'
+                );
             } catch (err) {
                 console.error('Splunk search-one run failed:', err);
                 const detail = err.response && err.response.data ? err.response.data.detail : null;
@@ -1694,8 +1719,52 @@
                 } else if (detail && detail.message) {
                     msg = detail.message + ((detail.unresolved_tokens || []).length ? ' Missing: ' + detail.unresolved_tokens.join(', ') : '');
                 }
-                alert('Run failed: ' + msg);
+                this._setSplunkRunStatus(statusKey, 'error', 'Run failed: ' + msg);
             }
+        },
+
+        async runAllSupportiveSplunk() {
+            // Sequential, not parallel: a real Splunk backend rate-limits and
+            // the per-card status chips stay honest one card at a time. Cards
+            // already in the 'running' state are skipped, not re-run.
+            if (!this.analysisCaseId) {
+                this.runAllSummary = 'Select a triage case before running all queries.';
+                return;
+            }
+            const queries = ((this.analysisRule && this.analysisRule.supportive_queries) || []);
+            if (!queries.length) {
+                this.runAllSummary = 'No supportive queries configured for this rule.';
+                return;
+            }
+            this.runAllBusy = true;
+            this.runAllSummary = '';
+            const summary = { ok: 0, failed: 0, skipped: 0 };
+            try {
+                for (const q of queries) {
+                    const statusKey = 'supportive:' + this.getSupportiveKey(q);
+                    const current = (this.splunkRunStatus || {})[statusKey];
+                    if (current && current.state === 'running') {
+                        summary.skipped += 1;
+                        continue;
+                    }
+                    try {
+                        await this.runSplunkSearch({ q, kind: 'supportive' });
+                        const after = (this.splunkRunStatus || {})[statusKey];
+                        if (after && after.state === 'error') {
+                            summary.failed += 1;
+                        } else {
+                            summary.ok += 1;
+                        }
+                    } catch (err) {
+                        summary.failed += 1;
+                        console.error('Run All: card failed unexpectedly:', err);
+                    }
+                }
+            } finally {
+                this.runAllBusy = false;
+            }
+            this.runAllSummary = 'Run All finished: ' + summary.ok + ' saved, ' + summary.failed + ' failed'
+                + (summary.skipped ? ', ' + summary.skipped + ' skipped (already running)' : '') + '.';
         },
 
         formatSplunkAutoSummary(data) {

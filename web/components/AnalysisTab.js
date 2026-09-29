@@ -26,7 +26,11 @@ window.AnalysisTab = {
         'investigationState',
         'evidenceFindingOptions',
         'supportiveManualResults',
+        'supportiveSaveBusy',
         'supportiveFindingTypes',
+        'splunkRunStatus',
+        'runAllBusy',
+        'runAllSummary',
         'enrichmentManualResults',
         'enrichmentFindingTypes',
         'phase2ManualResults',
@@ -99,6 +103,7 @@ window.AnalysisTab = {
         'copy-enrichment-spl',
         'copy-phase2-spl',
         'run-splunk-search',
+        'run-all-supportive',
         'promote-phase2-query',
         'on-phase2-template-input',
         'update-supportive-manual',
@@ -858,6 +863,15 @@ window.AnalysisTab = {
             <div class="flex items-center gap-2">
                 <button
                     type="button"
+                    class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-bold text-white transition shadow"
+                    :disabled="runAllBusy || supportiveSaveBusy || !analysisRule || !(analysisRule.supportive_queries || []).length"
+                    title="Run every supportive query through the configured search backend, one at a time; busy cards are skipped"
+                    @click="$emit('run-all-supportive')"
+                >
+                    {{ runAllBusy ? 'Running All (' + ((analysisRule.supportive_queries || []).length) + ')…' : 'Run All' }}
+                </button>
+                <button
+                    type="button"
                     class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow"
                     :disabled="supportiveSaveBusy"
                     @click="$emit('save-supportive-evidence-and-continue')"
@@ -882,6 +896,14 @@ window.AnalysisTab = {
             </div>
         </div>
 
+        <p
+            v-if="runAllSummary"
+            class="text-xs px-3 py-2 rounded border"
+            :class="runAllSummary.includes(' failed') && !runAllSummary.includes(' 0 failed')
+                ? 'bg-amber-950/40 border-amber-700/70 text-amber-200'
+                : 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'"
+        >{{ runAllSummary }}</p>
+
         <!-- Supportive Queries Cards -->
         <div v-if="analysisRule && analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-4">
             <div
@@ -894,9 +916,20 @@ window.AnalysisTab = {
                         <p class="text-xs font-bold text-blue-300">{{ q.title }}</p>
                         <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
                     </div>
+                    <span
+                        v-if="splunkRunStatus && splunkRunStatus['supportive:' + getSupportiveKey(q)]"
+                        class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
+                        :class="splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'error'
+                            ? 'bg-red-950 text-red-300 border border-red-700'
+                            : splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'running'
+                                ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
+                        :title="splunkRunStatus['supportive:' + getSupportiveKey(q)].message"
+                    >{{ splunkRunStatus['supportive:' + getSupportiveKey(q)].short }}</span>
                     <button
                         type="button"
                         class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200 flex-shrink-0"
+                        :disabled="splunkRunStatus && splunkRunStatus['supportive:' + getSupportiveKey(q)] && splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'running'"
                         title="Run this query through the configured search backend and save the result as splunk_auto evidence"
                         @click="$emit('run-splunk-search', { q, kind: 'supportive' })"
                     >
@@ -1135,8 +1168,19 @@ window.AnalysisTab = {
                         </div>
                     <div class="flex items-center gap-2">
                         <span v-if="phase2SavedTitles.has((q.title || '').toString().trim().toLowerCase())" class="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 text-[10px] uppercase font-bold text-emerald-300">Already saved</span>
+                        <span
+                            v-if="splunkRunStatus && splunkRunStatus['phase2:' + getPhase2Key(q)]"
+                            class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
+                            :class="splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'error'
+                                ? 'bg-red-950 text-red-300 border border-red-700'
+                                : splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'running'
+                                    ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
+                                    : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
+                            :title="splunkRunStatus['phase2:' + getPhase2Key(q)].message"
+                        >{{ splunkRunStatus['phase2:' + getPhase2Key(q)].short }}</span>
                         <button
                             type="button"
+                            :disabled="splunkRunStatus && splunkRunStatus['phase2:' + getPhase2Key(q)] && splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'running'"
                             class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200"
                             title="Run this query through the configured search backend and save the result as splunk_auto evidence"
                             @click="$emit('run-splunk-search', { q, kind: 'phase2' })"

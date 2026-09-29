@@ -12,6 +12,8 @@ Covers three areas that previously regressed silently:
 All tests are pure unit tests: no database, no HTTP, no Ollama.
 """
 
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -420,6 +422,50 @@ class TestSharedPromptBuilders:
         blocks = format_evidence_ledger_entries(items)
         assert len(blocks) == 1
         assert "legacy string blob" in blocks[0]
+
+
+class TestRunSplunkSearchInlineStatus:
+    """UI regression (live bug 2026-09-29): runSplunkSearch must report status
+    via the per-card inline chip (running -> complete | error) and must never
+    call window.alert — modal alerts wedge embedded webviews mid-loop.
+
+    Each test shells out to a zero-dependency node harness that loads the real
+    web/modules/analysis.js into a vm sandbox with stubbed axios/window and
+    drives the actual production method. Skipped when node is unavailable.
+    """
+
+    HARNESS = PLATFORM_ROOT / "tests" / "ui_regression" / "run_splunk_search_status.mjs"
+
+    def _run_scenario(self, scenario: str) -> None:
+        node = shutil.which("node")
+        assert node, "node is required for the runSplunkSearch UI regression harness"
+        proc = subprocess.run(
+            [node, str(self.HARNESS), scenario],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=PLATFORM_ROOT,
+        )
+        assert proc.returncode == 0, (
+            f"scenario '{scenario}' failed (exit {proc.returncode})\n"
+            f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+        )
+        assert "OK " + scenario in proc.stdout, f"unexpected harness output: {proc.stdout!r}"
+
+    def test_success_chip_transitions_without_alert(self):
+        self._run_scenario("success")
+
+    def test_failure_chip_transitions_without_alert(self):
+        self._run_scenario("failure")
+
+    def test_no_case_selected_error_chip_without_alert(self):
+        self._run_scenario("no_case")
+
+    def test_empty_spl_error_chip_without_alert(self):
+        self._run_scenario("empty_spl")
+
+    def test_midflight_running_chip_observed(self):
+        self._run_scenario("running_to_complete_transitions")
 
 
 if __name__ == "__main__":
