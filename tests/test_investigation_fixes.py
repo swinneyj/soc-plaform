@@ -4,8 +4,10 @@ Covers three areas that previously regressed silently:
 1. Evidence ledger entry validation (api/main.py) — failure-status entries
    with empty result bodies must be saved, not dropped.
 2. AI-derived direction scoring (services/investigation_state.py) — the
-   analyst never sets direction; the model's analysis text decides, and the
-   legacy "benign_result" verdict-status is neutralized.
+   analyst never sets direction; the model's analysis text decides, the
+   legacy "benign_result" verdict-status is neutralized, and analyst
+   labels (finding_type / question_resolution) plus the case row's stored
+   pre-loop verdict are advisory only (Phase 4).
 3. Phase 3+ query generation (api/main.py) — question-driven variant cards
    must appear even when every playbook template has already been run.
 
@@ -53,18 +55,23 @@ class FakeDef:
 
 
 class FakeCase:
-    """Minimal stand-in for a TriageResult row."""
+    """Minimal stand-in for a TriageResult row.
 
-    def __init__(self, verdict=""):
+    ``verdict`` is the pre-loop stored verdict (promote/seed time). Since
+    Phase 4 it is advisory context: the state build never reads it.
+    """
+
+    def __init__(self, verdict="", confidence_score=0.5):
         self.case_id = "TEST-CASE-1"
         self.rule_id = "test_rule"
         self.verdict = verdict
         self.analysis_summary = ""
-        self.confidence_score = 0.5
+        self.confidence_score = confidence_score
 
 
 def evidence_item(title, status="success", result_text="some rows",
-                  finding_type="neutral", target_questions=None):
+                  finding_type="neutral", target_questions=None,
+                  question_resolution="not_resolved"):
     return {
         "id": 1,
         "query_title": title,
@@ -74,7 +81,7 @@ def evidence_item(title, status="success", result_text="some rows",
             "result_text": result_text,
             "analyst_summary": "",
             "finding_type": finding_type,
-            "question_resolution": "not_resolved",
+            "question_resolution": question_resolution,
             "target_questions": target_questions or [],
             "result_status": status,
         },
@@ -134,8 +141,9 @@ class TestEvidenceEntryValidation:
 # 2. AI-derived direction scoring
 # ---------------------------------------------------------------------------
 
-def build_state(analysis_text, items, verdict="", previous_state=None):
-    case = FakeCase(verdict=verdict)
+def build_state(analysis_text, items, verdict="", previous_state=None,
+                case_confidence=0.5):
+    case = FakeCase(verdict=verdict, confidence_score=case_confidence)
     return isvc._build_investigation_state(
         case, analysis_text, [], items, "initial", previous_state or {}
     )
@@ -411,6 +419,88 @@ class TestTargetedEvidenceResolution:
         # ledger must keep the resolution via the durable carry-over.
         second = build_state(self.ANALYSIS, [], previous_state=first)
         assert self.QUESTION not in second["unresolved_questions"]
+
+
+class TestAdvisoryAnalystLabels:
+    """Phase 4 judgment-flow audit: analyst labels never decide outcomes.
+
+    ``finding_type`` and ``question_resolution`` are stored for the audit
+    trail only — direction and inquiry resolution are derived (model
+    verdicts + substantive targeted evidence). The case row's pre-loop
+    stored verdict (promote/seed time) is likewise never a disposition
+    fallback, so a referring analyst's ES disposition cannot leak into the
+    platform's conclusions.
+    """
+
+    def test_analyst_question_resolution_label_cannot_resolve(self):
+        # Pre-Phase-4 regression: a row the analyst marked "resolved" pulled
+        # its target_questions out of the ledger even when the row itself
+        # never produced evidence. The label is now inert.
+        q = "Was unauthorized tool staging observed?"
+        analysis = "### Key Questions\n- " + q + "\n\n### Triage Verdict\nSuspicious.\n"
+        items = [evidence_item(
+            "Pending sweep", status="not_run", result_text="",
+            target_questions=[q], question_resolution="resolved",
+        )]
+        state = build_state(analysis, items)
+        assert q in state["unresolved_questions"]
+        assert q not in state["evidence_summary"]["resolved_questions"]
+
+    def test_legacy_resolved_label_rows_still_round_trip(self):
+        # Pre-Phase-4 rows carry resolution labels; they must keep parsing
+        # and serializing through the timeline without special-casing.
+        items = [evidence_item("Legacy row", question_resolution="partially_resolved")]
+        state = build_state("### Triage Verdict\nSuspicious.\n", items)
+        entry = state["evidence_summary"]["timeline"][0]
+        assert entry["result_status"] == "success"
+
+    def test_stored_verdict_is_not_a_disposition_fallback(self):
+        # An empty model verdict section must fall through to "undetermined",
+        # never inherit the referring analyst's stored conclusion.
+        analysis = "### Initial Thoughts\nSomething benign.\n"
+        state = build_state(analysis, [], verdict="malicious")
+        assert state["provisional_disposition"] == "undetermined"
+
+    def test_supporting_evidence_upgrades_benign_tracked_case(self):
+        # Pre-Phase-4 regression: a case whose stored verdict said "benign"
+        # could never be upgraded to malicious (the benign_tracked guard).
+        # Stored verdicts no longer guard or pin — the ledger decides.
+        analysis = (
+            "### Investigative Analysis\nThe evidence indicates malicious "
+            "activity consistent with compromise.\n\n"
+            "### Triage Verdict\nSuspicious.\n"
+        )
+        items = [
+            evidence_item("Q1", finding_type="neutral"),
+            evidence_item("Q2", finding_type="neutral"),
+        ]
+        state = build_state(analysis, items, verdict="benign")
+        assert state["provisional_disposition"] == "malicious"
+
+    def test_refuting_evidence_yields_false_positive_regardless_of_stored_verdict(self):
+        analysis = (
+            "### Investigative Analysis\nNo evidence of compromise; this is "
+            "authorized administrative activity and a false positive.\n\n"
+            "### Triage Verdict\nBenign.\n"
+        )
+        items = [
+            evidence_item("Q1", finding_type="neutral"),
+            evidence_item("Q2", finding_type="neutral"),
+        ]
+        state = build_state(analysis, items, verdict="malicious")
+        assert state["provisional_disposition"] == "false_positive"
+
+    def test_promote_baseline_is_the_closure_gate_regardless_of_disposition(self):
+        # Phase 4: the pasted ES disposition is no longer scored; every
+        # promoted case starts at the 0.80 closure-gate baseline.
+        assert api_main.derive_triage_confidence("") == 0.8
+        assert api_main.derive_triage_confidence("Benign - true positive") == 0.8
+        assert api_main.derive_triage_confidence("True Positive") == 0.8
+
+    def test_derive_triage_verdict_is_gone(self):
+        """The disposition->verdict mapper was the analyst-judgment leak;
+        promoted verdicts are now fixed to "suspicious"."""
+        assert not hasattr(api_main, "derive_triage_verdict")
 
 
 class TestModelResolution:

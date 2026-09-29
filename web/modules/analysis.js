@@ -22,8 +22,6 @@
             this.phase2EditedQueries = {};
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
-            this.phase2ResolutionTypes = {};
-            this.phase2ResolutionQuestions = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
             this.supportivePlaybookAvailable = null;
@@ -1202,7 +1200,7 @@
                     result_text: resultText,
                     analyst_summary: coverageNote ? 'Coverage: ' + coverageNote : '',
                     finding_type: 'neutral',
-                    question_resolution: 'not_resolved',
+                    question_resolution: 'not_resolved', // advisory label; state engine derives resolution from evidence
                     target_questions: q.target_questions || [],
                     result_status: resultStatus,
                 });
@@ -1452,8 +1450,6 @@
                 phase2EditedQueries: this.phase2EditedQueries,
                 phase2ManualResults: this.phase2ManualResults,
                 phase2FindingTypes: this.phase2FindingTypes,
-                phase2ResolutionTypes: this.phase2ResolutionTypes,
-                phase2ResolutionQuestions: this.phase2ResolutionQuestions,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,
@@ -1521,12 +1517,6 @@
                 }
                 if (snapshot.phase2FindingTypes) {
                     this.phase2FindingTypes = snapshot.phase2FindingTypes;
-                }
-                if (snapshot.phase2ResolutionTypes) {
-                    this.phase2ResolutionTypes = snapshot.phase2ResolutionTypes;
-                }
-                if (snapshot.phase2ResolutionQuestions) {
-                    this.phase2ResolutionQuestions = snapshot.phase2ResolutionQuestions;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;

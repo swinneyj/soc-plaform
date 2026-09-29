@@ -2,6 +2,15 @@
 
 Provides rule-based investigation state tracking, evidence scoring, confidence
 guardrails, closure gating, and model output parsing.
+
+Judgment-flow contract (Phase 4, plan §6): analyst-supplied labels —
+``finding_type`` and ``question_resolution`` on evidence rows — are advisory
+audit-trail values only. Evidence direction comes from the model's per-card
+assessments (with the text heuristic as fallback), inquiry resolution comes
+from substantive evidence executed against targeted inquiries, and the
+disposition is derived from the ledger plus the model's verdict section —
+never from the case row's pre-loop verdict. Analysts and operators enter
+execution facts and observations; every conclusion is derived.
 """
 
 from __future__ import annotations
@@ -486,7 +495,11 @@ def _build_investigation_state(
     explicitly_resolved_questions = set()
 
     current_hypothesis = initial_thoughts or (case.analysis_summary or "").strip()
-    provisional_disposition = _infer_disposition_label(verdict_text, case.verdict)
+    # The model's Triage Verdict section is this iteration's derived
+    # conclusion. The case row's stored verdict (set at promote/seed time
+    # from pre-loop facts) is never a fallback: verdicts are earned from the
+    # evidence ledger, not inherited.
+    provisional_disposition = _infer_disposition_label(verdict_text)
 
     # Per-card AI verdicts: the model judges each numbered evidence entry in
     # its Per-Evidence Assessment section. Lines are mapped to entries by
@@ -606,15 +619,18 @@ def _build_investigation_state(
                 per_card_rationale = ""
                 ai_verdict_source = "analysis_text"
 
+        # ``question_resolution`` is an analyst label, stored and echoed for
+        # the audit trail but never load-bearing: whether an inquiry is
+        # resolved is derived from the evidence itself (a substantive row
+        # executed against specific inquiries resolves them — see the
+        # has_substantive block below), and the model re-raises anything it
+        # still doubts in the next phase's Key Questions (self-correcting
+        # loop). The label is deliberately read here so legacy rows keep
+        # round-tripping through _serialize, but it can no longer resolve
+        # anything on its own.
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:
             question_resolution = "not_resolved"
-        if question_resolution == "resolved":
-            explicitly_resolved_questions.update(
-                str(question).strip()
-                for question in (raw_result.get("target_questions") or [])
-                if str(question).strip()
-            )
 
         source_system = (item.get("source_system") or raw_result.get("source_system") or "splunk").strip() or "splunk"
         title = (item.get("query_title") or raw_result.get("query_title") or "").strip()
@@ -733,19 +749,14 @@ def _build_investigation_state(
         if question.strip().lower() not in resolved_normalized
     ][:6]
 
-    # Strengthen evidence-to-verdict logic.
-    # Only upgrade the disposition when the case is not already tracked as
-    # benign; supporting findings on a benign-tracked case indicate the
-    # analyst flagged corroborating context, not that the case is malicious.
-    benign_tracked = (case.verdict or "").strip().lower() == "benign"
+    # Strengthen evidence-to-verdict logic. The case row's stored verdict is
+    # not consulted here: verdicts are derived conclusions, and pre-loop
+    # values (a referring analyst's ES disposition, a seeded placeholder) are
+    # execution facts at best — never evidence. The ledger decides.
     if support_strength >= 2 and refute_strength == 0:
-        if not benign_tracked:
-            provisional_disposition = "malicious"
+        provisional_disposition = "malicious"
     elif refute_strength >= 2 and support_strength == 0:
-        if case.verdict == "benign":
-            provisional_disposition = "benign"
-        else:
-            provisional_disposition = "false_positive"
+        provisional_disposition = "false_positive"
     elif support_strength > 0 and refute_strength > 0:
         # Conflicting evidence!
         provisional_disposition = "suspicious"

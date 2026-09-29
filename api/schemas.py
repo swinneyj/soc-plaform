@@ -62,11 +62,11 @@ class InvestigationEvidenceEntryPayload(BaseModel):
     result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
     analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
     finding_type: Optional[str] = Field(
-        "neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis"
+        "neutral", description="Advisory analyst label, stored for the audit trail only — the AI's per-card assessment decides the evidence direction"
     )
     question_resolution: Optional[str] = Field(
         "not_resolved",
-        description="Whether this evidence does not resolve, partially resolves, or resolves a targeted inquiry",
+        description="Advisory analyst label, stored for the audit trail only — targeted inquiries resolve when substantive evidence answers them",
     )
     target_questions: List[str] = Field(default_factory=list, description="Open inquiries targeted by this evidence")
     result_status: Optional[str] = Field(

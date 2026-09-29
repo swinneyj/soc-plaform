@@ -128,6 +128,12 @@ def derive_closure_disposition(investigation_state: Optional[Dict[str, Any]]) ->
 
     Returns a key in {true_positive, benign_positive, false_positive,
     undetermined}; any tentative state maps to ``undetermined``.
+
+    Phase 4: with the promote path no longer ingesting the referring
+    analyst's ES disposition (verdict is fixed to "suspicious" and every
+    pre-loop analyst label is advisory), this derivation is the only
+    disposition producer in the platform — there is no analyst-supplied
+    verdict left to leak through.
     """
     mapping = {
         "malicious": "true_positive",
@@ -139,7 +145,13 @@ def derive_closure_disposition(investigation_state: Optional[Dict[str, Any]]) ->
 
 
 def _normalize_disposition_key(value: Optional[str]) -> str:
-    """Normalize a free-form disposition label into the derived key space."""
+    """Normalize a free-form disposition label into the derived key space.
+
+    ``value`` is always an advisory operator label (the UI select is
+    disabled); the derived disposition from ``derive_closure_disposition``
+    is authoritative. This keeps any legacy caller value mapped into the
+    audited key space without letting it reach the conclusion.
+    """
     key = (value or "").strip().lower().replace(" ", "_").replace("-", "_")
     aliases = {
         "true_positive": "true_positive",

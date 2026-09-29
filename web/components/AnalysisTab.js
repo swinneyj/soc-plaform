@@ -35,9 +35,7 @@ window.AnalysisTab = {
         'enrichmentFindingTypes',
         'phase2ManualResults',
         'phase2FindingTypes',
-        'phase2ResolutionTypes',
         'phase2CoverageNotes',
-        'phase2ResolutionQuestions',
         'phase2EditedQueries',
         'supportivePlaybookAvailable',
         'supportiveDraftBusy',
@@ -295,7 +293,6 @@ window.AnalysisTab = {
             this.$emit('update:follow-up-phase', nextPhase);
             this.phase2ManualResults = {};
             this.phase2FindingTypes = {};
-            this.phase2ResolutionTypes = {};
             this.phase2EditedQueries = {};
             this.currentStage = 4;
             this.$emit('run-phase2-analysis');

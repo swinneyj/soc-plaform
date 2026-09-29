@@ -777,8 +777,8 @@ class InvestigationEvidenceEntryPayload(BaseModel):
     query_text: Optional[str] = Field("", description="SPL or other query text used to gather the evidence")
     result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
     analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
-    finding_type: Optional[str] = Field("neutral", description="Whether the evidence supports, refutes, or is neutral to the active hypothesis")
-    question_resolution: Optional[str] = Field("not_resolved", description="Whether this evidence does not resolve, partially resolves, or resolves a targeted inquiry")
+    finding_type: Optional[str] = Field("neutral", description="Advisory analyst label, stored for the audit trail only — the AI's per-card assessment decides the evidence direction")
+    question_resolution: Optional[str] = Field("not_resolved", description="Advisory analyst label, stored for the audit trail only — targeted inquiries resolve when substantive evidence answers them")
     target_questions: List[str] = Field(default_factory=list, description="Open inquiries targeted by this evidence")
     result_status: Optional[str] = Field("success", description="Execution status: success, no_results, data_source_unavailable, query_failed, not_run, benign_result")
     collection_time: Optional[str] = Field(None, description="ISO timestamp when evidence was collected")
@@ -805,8 +805,8 @@ class SplunkSearchOnePayload(BaseModel):
     spl: Optional[str] = Field(None, description="Optional raw SPL template override; falls back to the rule's stored query")
     earliest: str = Field("-7d", description="SPL earliest time bound")
     latest: str = Field("now", description="SPL latest time bound")
-    finding_type: Optional[str] = Field("neutral", description="Assessment direction left to the AI; neutral unless the analyst says otherwise")
-    question_resolution: Optional[str] = Field("not_resolved", description="Resolution label for any targeted inquiry")
+    finding_type: Optional[str] = Field("neutral", description="Advisory analyst label; the AI assessment decides the evidence direction")
+    question_resolution: Optional[str] = Field("not_resolved", description="Advisory analyst label; targeted inquiries resolve from substantive evidence")
     target_questions: List[str] = Field(default_factory=list, description="Open inquiries this run targets")
 
 
@@ -2651,28 +2651,18 @@ def build_triage_analysis_summary(
     return " | ".join(summary_parts)
 
 
-def derive_triage_verdict(disposition: str) -> str:
-    normalized = (disposition or "").strip().lower()
-    if "false positive" in normalized or "benign" in normalized:
-        return "benign"
-    if "true positive" in normalized or "malicious" in normalized:
-        return "malicious"
-    return "suspicious"
-
-
 def derive_triage_confidence(disposition: str) -> float:
-    normalized = (disposition or "").strip().lower()
-    if not normalized:
-        # Pasted notables usually arrive without an ES disposition field. A
-        # neutral 0.5 baseline plus the loop's +0.20 evidence bonus cap can
-        # never reach the 0.80 closure gate, which made organic closure
-        # impossible for promoted pastes. Start undetermined pastes exactly
-        # at the gate so earned evidence closes them naturally, while cases
-        # with refuting or missing evidence stay gated below it.
-        return 0.8
-    if "false positive" in normalized or "true positive" in normalized or "benign" in normalized:
-        return 0.8
-    return 0.6
+    """Closed-loop baseline confidence for a newly promoted case.
+
+    Phase 4 (judgment-flow audit): every promoted notable is an unverified
+    alert. The referring analyst's ES disposition is a pre-loop execution
+    fact — recorded on the notable for context, never scored — so the
+    baseline no longer depends on it. Cases start exactly at the 0.80
+    closure gate: earned evidence closes them naturally, while refuting or
+    missing evidence keeps them gated below it (the confidence engine in
+    services/investigation_state.py can only add ~+0.26 total).
+    """
+    return 0.8
 
 
 def _resolve_correlation_rule(db, correlation_model, anchor_text: str):
@@ -4651,9 +4641,15 @@ def promote_notable_to_triage(event_id: int):
 
         title = fields.get("title") or event.source or f"Pasted notable {event.id}"
         correlation_search = fields.get("correlation_search") or title
-        disposition = fields.get("disposition", "")
-        verdict = derive_triage_verdict(disposition)
-        confidence = derive_triage_confidence(disposition)
+        # Phase 4 (judgment-flow audit): the pasted ES disposition is the
+        # referring analyst's conclusion — kept on the notable record for
+        # context, never promoted into the case. Verdict is fixed at
+        # "suspicious" (an alert is, by definition, unverified) and the
+        # investigation loop derives the real verdict from the evidence
+        # ledger; confidence starts at the closure-gate baseline (see
+        # derive_triage_confidence).
+        verdict = "suspicious"
+        confidence = derive_triage_confidence("")
         notable_time = fields.get("time") or (event.timestamp.isoformat() if event.timestamp else None)
 
         # Try to resolve a stable rule_id from the ES correlation rules

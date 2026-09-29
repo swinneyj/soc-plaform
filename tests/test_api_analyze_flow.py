@@ -969,5 +969,80 @@ class TestPlaybookFamilyGuard:
         ]
 
 
+class TestPromoteJudgmentFlow:
+    """Phase 4 (judgment-flow audit): the pasted ES disposition is the
+    referring analyst's conclusion — recorded on the notable for context,
+    never promoted into the case. Promoted verdicts are fixed to
+    "suspicious" (an alert is unverified) and confidence starts at the
+    closure-gate baseline (0.80), which the evidence ledger alone moves."""
+
+    def _paste_notable(self, client, disposition):
+        fields = {
+            "title": "VPN Geo Velocity Violation",
+            "correlation_search": "geo_velocity_violation",
+            "user": "bjones",
+            "host": "VPN-GW-01",
+            "urgency": "critical",
+        }
+        if disposition is not None:
+            fields["disposition"] = disposition
+        db = client.test_session()
+        event = db_models.SplunkEvent(
+            source="pasted",
+            sourcetype="splunk:notable:pasted",
+            host="VPN-GW-01",
+            raw=json.dumps({"fields": fields}),
+        )
+        db.add(event)
+        db.commit()
+        event_id = event.id
+        db.close()
+        return event_id
+
+    def _promote(self, client, event_id):
+        resp = client.post(f"/api/db/notables/{event_id}/promote")
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def _stored_case(self, client, case_id):
+        db = client.test_session()
+        case = db.query(db_models.TriageResult).filter_by(case_id=case_id).first()
+        db.close()
+        return case
+
+    def test_pasted_true_positive_stays_suspicious(self, api_client):
+        result = self._promote(api_client, self._paste_notable(api_client, "True Positive - Confirmed Compromise"))
+        case = self._stored_case(api_client, result["case_id"])
+        assert result["verdict"] == "suspicious"
+        assert case.verdict == "suspicious"
+
+    def test_pasted_benign_stays_suspicious(self, api_client):
+        result = self._promote(api_client, self._paste_notable(api_client, "Benign Positive - Administrative Activity"))
+        case = self._stored_case(api_client, result["case_id"])
+        assert result["verdict"] == "suspicious"
+        assert case.verdict == "suspicious"
+
+    def test_confidence_baseline_is_the_closure_gate(self, api_client):
+        result = self._promote(api_client, self._paste_notable(api_client, "Benign Positive"))
+        case = self._stored_case(api_client, result["case_id"])
+        assert float(case.confidence_score) == pytest.approx(0.8)
+
+    def test_confidence_baseline_without_a_disposition_field(self, api_client):
+        result = self._promote(api_client, self._paste_notable(api_client, None))
+        case = self._stored_case(api_client, result["case_id"])
+        assert float(case.confidence_score) == pytest.approx(0.8)
+
+    def test_pasted_disposition_is_preserved_on_the_notable(self, api_client):
+        """The referring analyst's label stays as context — advisory, not erased."""
+        event_id = self._paste_notable(api_client, "True Positive")
+        result = self._promote(api_client, event_id)
+        db = api_client.test_session()
+        event = db.get(db_models.SplunkEvent, event_id)
+        stored_fields = json.loads(event.raw)["fields"]
+        db.close()
+        assert stored_fields["disposition"] == "True Positive"
+        assert result["case_id"] == f"NOTABLE-{event_id}"
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
