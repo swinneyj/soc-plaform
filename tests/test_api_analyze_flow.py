@@ -1174,5 +1174,137 @@ class TestApiKeyActivation:
         assert api_client.get("/api/health").status_code == 200
 
 
+def _load_migration_module():
+    """Import scripts/normalize_phase4_judgments.py by path (not a package)."""
+    import importlib.util
+
+    path = PLATFORM_ROOT / "scripts" / "normalize_phase4_judgments.py"
+    spec = importlib.util.spec_from_file_location("normalize_phase4_judgments", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class TestPhase4MigrationSweep:
+    """The judgment-normalization sweep against a real (sqlite) database:
+    dry-run writes nothing, apply normalizes + archives, and the sweep is
+    idempotent."""
+
+    def _seed_contaminated(self, client):
+        db = client.test_session()
+        db.add(db_models.TriageResult(
+            case_id="MIG-1",
+            rule_name="Migrated Rule",
+            rule_id="test_rule",
+            verdict="malicious",
+            confidence_score=0.6,
+            analysis_summary="legacy row",
+        ))
+        db.add(db_models.TriageResult(
+            case_id="MIG-2",
+            rule_name="Conformant Rule",
+            rule_id="test_rule",
+            verdict="suspicious",
+            confidence_score=0.8,
+            analysis_summary="already conformant",
+        ))
+        db.add(db_models.SupportiveQueryResult(
+            case_id="MIG-1", rule_id="test_rule", query_title="Q1",
+            source_system="supportive_manual",
+            raw_result=json.dumps({
+                "result_text": "sshd rows observed on the host",
+                "result_status": "success",
+                "finding_type": "supports",
+                "question_resolution": "resolved",
+                "target_questions": ["Q1?"],
+            }),
+        ))
+        db.add(db_models.SupportiveQueryResult(
+            case_id="MIG-1", rule_id="test_rule", query_title="Q2",
+            source_system="supportive_manual",
+            raw_result=json.dumps({
+                "result_text": "",
+                "result_status": "not_run",
+                "question_resolution": "resolved",
+                "target_questions": ["Q2?"],
+            }),
+        ))
+        db.add(db_models.SupportiveQueryResult(
+            case_id="MIG-1", rule_id="test_rule", query_title="legacy",
+            source_system="other", raw_result="free text legacy blob",
+        ))
+        db.add(db_models.InvestigationState(
+            case_id="MIG-1",
+            rule_id="test_rule",
+            provisional_disposition="malicious",
+            disposition_confidence=0.9,
+            loop_status="ready_for_closure",
+            evidence_summary=json.dumps({
+                "resolved_questions": ["Q1?", "Q2?", "Q3?"],
+                "timeline": [],
+            }),
+        ))
+        db.commit()
+        db.close()
+
+    def test_dry_run_reports_and_changes_nothing(self, api_client):
+        migration = _load_migration_module()
+        self._seed_contaminated(api_client)
+        db = api_client.test_session()
+        plan, counts = migration.build_plan(db)
+        case_before = db.query(db_models.TriageResult).filter_by(case_id="MIG-1").first().verdict
+        db.close()
+
+        assert counts["triage_cases_to_normalize"] == 1  # MIG-2 already conformant
+        assert counts["evidence_labels_to_normalize"] == 2
+        assert counts["states_to_normalize"] == 1
+        assert counts["resolutions_to_reopen"] == 2  # Q2? (not_run) + Q3? (no row)
+        assert counts["evidence_rows_unparsed"] == 1  # the free-text blob
+        assert case_before == "malicious"  # dry run: nothing written
+        assert plan["triage_cases"][0]["old_verdict"] == "malicious"
+
+    def test_apply_normalizes_and_archives_originals(self, api_client):
+        migration = _load_migration_module()
+        self._seed_contaminated(api_client)
+        db = api_client.test_session()
+        plan, _counts = migration.build_plan(db)
+        migration.apply_plan(db, plan)
+
+        case = db.query(db_models.TriageResult).filter_by(case_id="MIG-1").first()
+        assert case.verdict == "suspicious"
+        assert float(case.confidence_score) == pytest.approx(0.8)
+
+        rows = {
+            r.query_title: r
+            for r in db.query(db_models.SupportiveQueryResult).filter_by(case_id="MIG-1")
+        }
+        normalized = json.loads(rows["Q1"].raw_result)
+        assert normalized["question_resolution"] == "not_resolved"
+        assert normalized["result_text"] == "sshd rows observed on the host"  # preserved
+        assert normalized["finding_type"] == "supports"  # advisory label preserved
+        assert rows["legacy"].raw_result == "free text legacy blob"  # untouched
+
+        state = db.query(db_models.InvestigationState).filter_by(case_id="MIG-1").first()
+        summary = json.loads(state.evidence_summary)
+        assert summary["resolved_questions"] == ["Q1?"]  # evidence-backed only
+        db.close()
+
+    def test_sweep_is_idempotent(self, api_client):
+        migration = _load_migration_module()
+        self._seed_contaminated(api_client)
+        db = api_client.test_session()
+        plan, _ = migration.build_plan(db)
+        migration.apply_plan(db, plan)
+        _plan2, counts2 = migration.build_plan(db)
+        db.close()
+        assert counts2 == {
+            "triage_cases_to_normalize": 0,
+            "evidence_labels_to_normalize": 0,
+            "states_to_normalize": 0,
+            "resolutions_to_reopen": 0,
+            "evidence_rows_unparsed": 1,
+        }
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

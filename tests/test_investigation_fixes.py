@@ -27,6 +27,7 @@ sys.path.insert(0, str(PLATFORM_ROOT))
 
 import api.main as api_main  # noqa: E402
 import services.evidence_service as esvc  # noqa: E402
+import services.judgment_normalization as jn  # noqa: E402
 import services.retention_service as rsvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
 
@@ -568,6 +569,75 @@ class TestAnalysisRetentionSelection:
             (2, "B", datetime(2026, 9, 1, 11)),
         ])
         assert rsvc.select_prunable_analysis_ids(rows, keep_last_n=0) == [1, 2]
+
+
+class TestJudgmentNormalization:
+    """Phase 4 data migration (pure): legacy judgment values normalize to
+    what today's write paths produce, and question resolution keeps only
+    evidence-backed entries."""
+
+    def test_label_normalizes_to_not_resolved(self):
+        assert jn.normalize_question_resolution_label("resolved") == "not_resolved"
+        assert jn.normalize_question_resolution_label("partially_resolved") == "not_resolved"
+        assert jn.normalize_question_resolution_label("") == "not_resolved"
+
+    def test_raw_result_preserves_everything_but_the_label(self):
+        raw = {
+            "result_text": "rows here",
+            "finding_type": "supports",
+            "question_resolution": "resolved",
+            "target_questions": ["Q?"],
+        }
+        out = jn.normalize_raw_result(raw)
+        assert out["question_resolution"] == "not_resolved"
+        assert out["result_text"] == "rows here"
+        assert out["finding_type"] == "supports"
+        assert out["target_questions"] == ["Q?"]
+        assert raw["question_resolution"] == "resolved"  # input untouched
+
+    def test_raw_result_without_label_gets_no_new_key(self):
+        out = jn.normalize_raw_result({"result_text": "rows here"})
+        assert "question_resolution" not in out
+
+    def test_substantive_rule_mirrors_the_state_builder(self):
+        assert jn.row_is_substantive({"result_status": "success", "result_text": "sshd rows observed"})
+        assert not jn.row_is_substantive({"result_status": "success", "result_text": "todo"})
+        assert not jn.row_is_substantive({"result_status": "not_run", "result_text": "sshd rows observed"})
+        # The live builder treats every 0-row result as substantive — the
+        # negative baseline "0 events returned" is itself an observation.
+        assert jn.row_is_substantive({"result_status": "no_results"})
+        assert jn.row_is_substantive({"result_status": "no_results", "ai_finding_type": "refutes"})
+
+    def test_only_substantive_targeted_rows_back_questions(self):
+        raws = [
+            {"result_status": "success", "result_text": "sshd rows observed", "target_questions": ["Q1"]},
+            {"result_status": "query_failed", "target_questions": ["Q2"]},
+            {"result_status": "success", "result_text": "sshd rows observed", "target_questions": []},
+        ]
+        assert jn.evidence_backed_questions(raws) == {"Q1"}
+
+    def test_triage_row_plan_only_when_nonconformant(self):
+        class _Case:
+            case_id = "X"
+            verdict = "malicious"
+            confidence_score = 0.6
+
+        change = jn.plan_triage_normalization(_Case())
+        assert change["old_verdict"] == "malicious"
+        assert change["new_verdict"] == "suspicious"
+        assert change["new_confidence"] == 0.8
+        _Case.verdict = "suspicious"
+        _Case.confidence_score = 0.8
+        assert jn.plan_triage_normalization(_Case()) is None
+
+    def test_state_plan_reopens_label_only_resolutions(self):
+        raws = [
+            {"result_status": "success", "result_text": "sshd rows observed", "target_questions": ["Q1"]},
+        ]
+        change = jn.plan_state_normalization(["Q1", "Q2", "Q3"], raws)
+        assert change["kept_resolved"] == ["Q1"]
+        assert change["removed_resolved"] == ["Q2", "Q3"]
+        assert jn.plan_state_normalization(["Q1"], raws) is None
 
 
 class TestModelResolution:
