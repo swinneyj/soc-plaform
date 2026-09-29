@@ -10,6 +10,10 @@ window.DatabaseTab = {
         'notablePasteResult',
         'showOpenNotablesOnly',
         'filteredRecentNotables',
+        'bulkPromoteNotablesRunning',
+        'bulkPromoteProgress',
+        'bulkPromoteOutcome',
+        'bulkPromoteSummary',
         'historicalNotablesVisible',
         'historicalNotables',
         'filteredTriageData',
@@ -319,8 +323,11 @@ window.DatabaseTab = {
                             </button>
                             <button
                                 @click="$emit('promote-all-open-pasted-notables')"
-                                class="px-3 py-2 bg-purple-700 hover:bg-purple-800 rounded text-xs font-semibold transition">
-                                Promote all open to triage
+                                :disabled="bulkPromoteNotablesRunning"
+                                class="px-3 py-2 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed rounded text-xs font-semibold transition">
+                                {{ bulkPromoteNotablesRunning
+                                    ? 'Promoting…'
+                                    : 'Promote all open to triage' }}
                             </button>
                         </div>
                     </div>
@@ -328,6 +335,18 @@ window.DatabaseTab = {
                     <div v-if="!filteredRecentNotables || filteredRecentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
                         No pasted notables saved yet.
                     </div>
+
+                    <p
+                        v-if="bulkPromoteSummary"
+                        class="text-xs rounded px-3 py-2 border"
+                        :class="bulkPromoteSummary.includes(' failed')
+                            ? 'bg-amber-950/40 border-amber-700/70 text-amber-200'
+            : 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'"
+                    >{{ bulkPromoteSummary }}</p>
+                    <p
+                        v-if="bulkPromoteProgress"
+                        class="text-xs text-gray-300"
+                    >Promoting… {{ bulkPromoteProgress.done }} / {{ bulkPromoteProgress.total }}</p>
 
                     <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
                         <div class="flex items-start justify-between gap-4">
@@ -356,6 +375,13 @@ window.DatabaseTab = {
                             </div>
                         </div>
                         <p v-if="notable.promoted_case_id" class="text-xs text-green-400">Promoted to triage as {{ notable.promoted_case_id }}</p>
+                        <p
+                            v-if="bulkPromoteOutcome && bulkPromoteOutcome[notable.id]"
+                            class="text-xs"
+                            :class="bulkPromoteOutcome[notable.id].state === 'failed' ? 'text-red-300' : 'text-emerald-300'"
+                        >{{ bulkPromoteOutcome[notable.id].state === 'failed'
+                            ? ('Promote failed: ' + (bulkPromoteOutcome[notable.id].detail || 'unknown error'))
+                            : 'Promoted ✓' }}</p>
                         <div class="flex flex-wrap gap-2 text-xs text-gray-300">
                             <span v-if="notable.historical" class="bg-gray-800 px-2 py-1 rounded border border-amber-500 text-amber-300">Historical (closed)</span>
                             <span v-if="notable.disposition" class="bg-gray-800 px-2 py-1 rounded">Disposition: {{ notable.disposition }}</span>
@@ -368,7 +394,10 @@ window.DatabaseTab = {
                             <button
                                 v-if="notable.historical"
                                 class="px-3 py-2 bg-gray-700 rounded text-xs font-semibold text-gray-300 cursor-default"
-                                disabled
+                                :disabled="true"
+                                :title="notable.promoted_case_id
+                                    ? 'Already promoted to triage as ' + notable.promoted_case_id
+                                    : 'Historical notables are closed records and cannot be promoted to triage'"
                             >
                                 {{ notable.promoted_case_id ? 'Already in Triage' : 'Saved to Database' }}
                             </button>

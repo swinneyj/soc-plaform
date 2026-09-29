@@ -376,19 +376,43 @@
             }
 
             const candidates = this.filteredRecentNotables.filter(n => !n.historical && !n.promoted_case_id);
+            const skipped = (this.filteredRecentNotables || []).length - candidates.length;
             if (!candidates.length) {
+                // Feedback instead of a silent no-op: the analyst clicked the
+                // button and deserves to know why nothing happened.
+                this.bulkPromoteSummary = 'No open pasted notables to promote.'
+                    + (skipped > 0 ? ' (' + skipped + ' skipped: historical or already promoted)' : '');
                 return;
             }
 
             this.bulkPromoteNotablesRunning = true;
+            this.bulkPromoteSummary = '';
+            this.bulkPromoteOutcome = {};
+            this.bulkPromoteProgress = { done: 0, total: candidates.length };
+            const outcome = {};
             try {
                 for (const notable of candidates) {
                     try {
                         await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                        outcome[notable.id] = { state: 'promoted' };
                     } catch (err) {
-                        console.error('Failed to promote notable', notable.id, ':', err.response?.data?.detail || err.message);
+                        const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'promote failed';
+                        outcome[notable.id] = { state: 'failed', detail };
+                        console.error('Failed to promote notable', notable.id, ':', detail);
                     }
+                    // Publish per-item results as they happen so the rows light
+                    // up one by one instead of all at once at the end.
+                    this.bulkPromoteOutcome = { ...outcome };
+                    this.bulkPromoteProgress = {
+                        done: this.bulkPromoteProgress.done + 1,
+                        total: candidates.length,
+                    };
                 }
+
+                const ok = candidates.filter(n => outcome[n.id] && outcome[n.id].state === 'promoted').length;
+                const failed = candidates.length - ok;
+                this.bulkPromoteSummary = 'Bulk promote finished: ' + ok + ' promoted, ' + failed + ' failed'
+                    + (skipped ? ', ' + skipped + ' skipped (historical or already promoted)' : '') + '.';
 
                 await this.loadRecentNotables();
                 await this.loadTriageData();
@@ -396,6 +420,7 @@
                 await this.loadDbStats();
             } finally {
                 this.bulkPromoteNotablesRunning = false;
+                this.bulkPromoteProgress = null;
             }
         },
 

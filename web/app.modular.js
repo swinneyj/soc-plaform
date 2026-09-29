@@ -63,6 +63,9 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     notablePromotingId: null,
                     selectedNotableIds: [],
                     bulkPromoteNotablesRunning: false,
+                    bulkPromoteProgress: null,
+                    bulkPromoteOutcome: {},
+                    bulkPromoteSummary: '',
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },

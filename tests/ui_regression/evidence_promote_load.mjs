@@ -395,6 +395,25 @@ const scenarios = {
         assert(comp.bulkPromoteNotablesRunning === false, 'bulk flag must reset');
         assert(alertCalls.length === 0, 'bulk promote must not alert: ' + JSON.stringify(alertCalls));
 
+        // S8: per-item outcome, running summary, and progress lifecycle.
+        assert(comp.bulkPromoteOutcome && comp.bulkPromoteOutcome[4] && comp.bulkPromoteOutcome[4].state === 'promoted',
+            'per-item outcome must mark successes: ' + JSON.stringify(comp.bulkPromoteOutcome));
+        assert(comp.bulkPromoteOutcome[1] && comp.bulkPromoteOutcome[1].state === 'failed'
+            && comp.bulkPromoteOutcome[1].detail === 'boom',
+            'per-item outcome must carry the failure detail: ' + JSON.stringify(comp.bulkPromoteOutcome));
+        assert(comp.bulkPromoteSummary === 'Bulk promote finished: 1 promoted, 1 failed, 2 skipped (historical or already promoted).',
+            'summary must count promoted/failed/skipped, got: ' + comp.bulkPromoteSummary);
+        assert(comp.bulkPromoteProgress === null, 'progress must clear when the loop finishes');
+
+        // S8: a click with nothing open explains itself instead of no-op'ing.
+        comp.filteredRecentNotables = [{ id: 9, historical: true }];
+        comp.bulkPromoteSummary = '';
+        await comp.promoteAllOpenPastedNotables();
+        assert(comp.bulkPromoteSummary.includes('No open pasted notables to promote')
+            && comp.bulkPromoteSummary.includes('1 skipped'),
+            'empty-candidate run must explain itself, got: ' + comp.bulkPromoteSummary);
+        assert(attempted.length === 2, 'no-candidate run must not POST');
+
         // Re-entrancy guard: a second call while running must be a no-op.
         comp.bulkPromoteNotablesRunning = true;
         await comp.promoteAllOpenPastedNotables();
