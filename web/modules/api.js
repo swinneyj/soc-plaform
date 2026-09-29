@@ -134,6 +134,15 @@
         jobs() {
             return get('/jobs');
         },
+        deleteJob(jobId) {
+            return del('/jobs/' + encodeURIComponent(jobId));
+        },
+        clearAllJobs() {
+            return del('/jobs');
+        },
+        runToolRegression() {
+            return post('/tools/regression');
+        },
         reports() {
             return get('/reports');
         },
@@ -205,6 +214,12 @@
         // ---- Splunk -------------------------------------------------------------
         splunkSearchOne(payload) {
             return post('/splunk/search-one', payload);
+        },
+        splunkBoundaryStatus() {
+            return get('/splunk-boundary/status');
+        },
+        releaseSplunkBoundaryBatch(batchId) {
+            return del('/splunk-boundary/batches/' + encodeURIComponent(batchId));
         },
 
         // ---- Rules / supportive queries / aliases (legacy spellings: the

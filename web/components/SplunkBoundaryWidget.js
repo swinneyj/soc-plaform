@@ -113,8 +113,7 @@ window.SplunkBoundaryWidget = {
         async load() {
             this.loadError = '';
             try {
-                const res = await axios.get('/api/splunk-boundary/status');
-                this.status = res.data;
+                this.status = await API.splunkBoundaryStatus();
             } catch (err) {
                 this.loadError = 'Boundary status unavailable: ' + (err.response?.status
                     ? 'HTTP ' + err.response.status
@@ -131,8 +130,8 @@ window.SplunkBoundaryWidget = {
         async doPurge(batchId) {
             this.purgingBatchId = batchId;
             try {
-                const res = await axios.delete('/api/splunk-boundary/batches/' + encodeURIComponent(batchId));
-                const deleted = res.data && res.data.events_deleted;
+                const data = await API.releaseSplunkBoundaryBatch(batchId);
+                const deleted = data && data.events_deleted;
                 this.purgeResult = {
                     ok: true,
                     text: 'Purged ' + batchId + (typeof deleted === 'number' ? ' — ' + deleted + ' DB row(s) removed' : '')

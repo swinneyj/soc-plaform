@@ -819,11 +819,11 @@
                 // Optionally enrich / replace with backend if local found nothing or user disabled local
                 if (!this.codeReviewSectionsUseLocal || sections.length === 0) {
                     try {
-                        const res = await axios.post(this.apiUrl + '/code-review/sections', {
+                        const sectionData = await API.codeReviewSections({
                             code_snippet: fullText,
                             language: this.codeReviewForm.language
                         });
-                        const backendSections = (res.data && res.data.sections) || [];
+                        const backendSections = (sectionData && sectionData.sections) || [];
                         if (backendSections.length) {
                             // Normalize backend shape
                             sections = backendSections.map((s, idx) => ({
@@ -996,16 +996,14 @@
                     const formData = new FormData();
                     formData.append('file', file);
                     const url = this.apiUrl + `/code-review/zip?language=${encodeURIComponent(this.codeReviewForm.language)}&model=${encodeURIComponent(this.codeReviewForm.model)}&instructions=${encodeURIComponent(this.codeReviewForm.instructions || '')}`;
-                    res = await axios.post(url, formData, {
-                        headers: { 'Content-Type': 'multipart/form-data' }
-                    });
+                    res = { data: await API.codeReviewUpload(url, formData) };
                 } else {
-                    res = await axios.post(this.apiUrl + '/code-review', {
+                    res = { data: await API.codeReview({
                         code_snippet: this.codeReviewForm.codeSnippet,
                         language: this.codeReviewForm.language,
                         model: this.codeReviewForm.model,
                         instructions: this.codeReviewForm.instructions
-                    });
+                    }) };
                 }
                 this.codeReviewResult = res.data;
                 await this.loadCodeReviews();
@@ -1017,16 +1015,14 @@
         },
         async loadCodeReviews() {
             try {
-                const res = await axios.get(this.apiUrl + '/code-reviews?limit=10');
-                this.codeReviewsList = res.data || [];
+                this.codeReviewsList = (await API.listCodeReviews(10)) || [];
             } catch (err) {
                 console.error('Failed to load code reviews:', err);
             }
         },
         async loadFullCodeReview(reviewId) {
             try {
-                const res = await axios.get(this.apiUrl + '/code-reviews/' + reviewId);
-                this.codeReviewResult = res.data;
+                this.codeReviewResult = await API.getCodeReview(reviewId);
             } catch (err) {
                 alert('Error loading review: ' + (err.response?.data?.detail || err.message));
             }
