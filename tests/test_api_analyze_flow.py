@@ -911,12 +911,12 @@ class TestPlaybookFamilyGuard:
         (tmp_path / "supportive_rules.json").write_text(
             json.dumps({"rules": rules}), encoding="utf-8"
         )
-        # Analyze owns the supportive_rules.json catalog read through its own
-        # get_platform_root binding; patch it so the load sees tmp_path.
-        import api.routes.analyze as analyze_routes
+        # The catalog read goes through the api.deps seam — one patch point
+        # redirects every route's get_platform_root at once.
+        import api.deps as api_deps
 
         fake_root = lambda: str(tmp_path)  # noqa: E731
-        monkeypatch.setattr(analyze_routes, "get_platform_root", fake_root)
+        monkeypatch.setattr(api_deps, "get_platform_root", fake_root)
 
     @staticmethod
     def _hijack_catalog_entry():

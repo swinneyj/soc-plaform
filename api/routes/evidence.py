@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from core_lib.utils import get_platform_root
+from api import deps
 from services.investigation_state import (
     _build_investigation_state,
     _serialize_investigation_state_record,
@@ -142,7 +142,7 @@ def get_investigation_state(case_id: str):
     """Return the latest persisted investigation loop state for a case."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, InvestigationState
 
         db = SessionLocal()
@@ -196,7 +196,7 @@ def list_case_evidence(
     """
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SupportiveQueryResult
 
         db = SessionLocal()
@@ -243,7 +243,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
     """
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import func  # type: ignore
         from db.models import SessionLocal, TriageResult, SupportiveQueryResult, InvestigationState
 
@@ -364,7 +364,7 @@ def delete_case_evidence(case_id: str, evidence_id: int):
     """Delete a single saved investigation evidence item and rebuild loop state."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SupportiveQueryResult
 
         db = SessionLocal()
@@ -423,7 +423,7 @@ def delete_case_evidence_batch(case_id: str, payload: dict):
     """Delete multiple saved investigation evidence items by ID and rebuild loop state."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SupportiveQueryResult
 
         raw_ids = payload.get("ids") or payload.get("evidence_ids") or []
@@ -470,7 +470,7 @@ def delete_all_case_evidence(case_id: str):
     """Delete all saved investigation evidence for a case and reset loop state."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SupportiveQueryResult
 
         db = SessionLocal()

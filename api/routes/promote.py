@@ -11,7 +11,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException
 
-from core_lib.utils import get_platform_root
+from api import deps
 from api.helpers.correlation import _resolve_correlation_rule
 from api.helpers.triage_keys import _field_lookup
 from db.util import utcnow_naive
@@ -85,7 +85,7 @@ def derive_triage_confidence(disposition: str) -> float:
 def promote_notable_to_triage(event_id: int):
     """Promote a pasted notable into the triage_results table."""
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent, TriageResult, ESCorrelationRule
 
         db = SessionLocal()

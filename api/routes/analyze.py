@@ -11,7 +11,7 @@ import sys
 
 from fastapi import APIRouter, HTTPException
 
-from core_lib.utils import get_platform_root
+from api import deps
 from services.analysis_service import (
     build_analysis_prompt_intro,
     extract_phase2_evidence_json as _extract_phase2_evidence_json_impl,
@@ -61,9 +61,8 @@ def analyze_case(request: AnalyzeRequest):
         requested_analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
         requested_phase_number = max(1, int(request.analysis_phase or 1))
 
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQueryResult, ESCorrelationRule, SupportiveQuery, ClosureNote, InvestigationState, AnalysisResult
-        from services.ollama_service import get_ollama_client
 
         db = SessionLocal()
 
@@ -200,7 +199,7 @@ def analyze_case(request: AnalyzeRequest):
         # labels/fields before loading the playbook.
         supportive_query_defs = []
         supportive_rule_id = (detection_rule.rule_id if detection_rule else (case.rule_id or "")).strip()
-        catalog_supportive_path = os.path.join(get_platform_root(), "supportive_rules.json")
+        catalog_supportive_path = os.path.join(deps.get_platform_root(), "supportive_rules.json")
         catalog_rules = []
         if os.path.isfile(catalog_supportive_path):
             try:
@@ -330,7 +329,7 @@ def analyze_case(request: AnalyzeRequest):
         if len(prior_analysis) > 3000:
             prior_analysis = prior_analysis[:3000].strip()
 
-        client = get_ollama_client()
+        client = deps.get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
 

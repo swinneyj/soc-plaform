@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
-from core_lib.utils import get_platform_root, get_reports_dir
+from api import deps
 
 from api.auth import require_api_key
 from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
@@ -40,7 +40,7 @@ def _job_status_value(status: Any) -> str:
 
 def load_registry() -> List[Dict]:
     """Load tool registry from JSON."""
-    registry_path = os.path.join(get_platform_root(), 'Commander_Registry.json')
+    registry_path = os.path.join(deps.get_platform_root(), 'Commander_Registry.json')
     if not os.path.exists(registry_path):
         return []
     with open(registry_path, 'r', encoding='utf-8') as f:
@@ -48,7 +48,7 @@ def load_registry() -> List[Dict]:
 
 def _fix_tool_path(tool_path: str) -> str:
     """Resolve registry paths from either absolute or repo-relative form."""
-    platform_root = get_platform_root()
+    platform_root = deps.get_platform_root()
     if not os.path.isabs(tool_path):
         relative_path = os.path.join(platform_root, tool_path)
         if os.path.exists(relative_path):
@@ -65,7 +65,7 @@ def _fix_tool_path(tool_path: str) -> str:
 
 def _tool_artifact_snapshot() -> set:
     """Return files that tool runs may create, using portable paths."""
-    root = get_platform_root()
+    root = deps.get_platform_root()
     candidates = [
         os.path.join(root, "Reports"),
         os.path.join(root, "Data", "Reports"),
@@ -109,11 +109,11 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             capture_output=True,
             text=True,
             timeout=300,
-            cwd=get_platform_root(),
+            cwd=deps.get_platform_root(),
             env=tool_env,
         )
         after = _tool_artifact_snapshot()
-        artifacts = [os.path.relpath(p, get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
+        artifacts = [os.path.relpath(p, deps.get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
         return {
             "stdout": result.stdout,
             "stderr": result.stderr,
@@ -213,11 +213,11 @@ def get_tool(tool_name: str):
 @router.post("/api/tools/regression", tags=["Tools"], dependencies=[Depends(require_api_key)])
 def run_tool_catalog_regression():
     """Run safe offline regression checks for the registered tool catalog."""
-    runner = os.path.join(get_platform_root(), "scripts", "run_tool_catalog_regression.py")
+    runner = os.path.join(deps.get_platform_root(), "scripts", "run_tool_catalog_regression.py")
     if not os.path.exists(runner):
         raise HTTPException(status_code=404, detail="Catalog regression runner not found")
     result = subprocess.run(
-        [sys.executable, runner, "--json"], cwd=get_platform_root(),
+        [sys.executable, runner, "--json"], cwd=deps.get_platform_root(),
         capture_output=True, text=True, timeout=180,
     )
     try:
@@ -377,7 +377,7 @@ def clear_jobs():
 @router.get("/api/reports", tags=["Data"])
 def list_reports():
     """List all generated reports."""
-    reports_dir = get_reports_dir()
+    reports_dir = deps.get_reports_dir()
     reports = []
     if os.path.exists(reports_dir):
         for fname in os.listdir(reports_dir):
@@ -399,7 +399,7 @@ def download_report(report_name: str):
     before any file is served. Absolute paths, `..` escapes, and
     symlinks pointing outside all resolve to 404.
     """
-    reports_root = Path(get_reports_dir()).resolve()
+    reports_root = Path(deps.get_reports_dir()).resolve()
     candidate = (reports_root / report_name).resolve()
     if candidate != reports_root and reports_root not in candidate.parents:
         raise HTTPException(status_code=404, detail=f"Report '{report_name}' not found")
@@ -414,7 +414,7 @@ def download_report(report_name: str):
 @router.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"])
 def download_tool_artifact(artifact_path: str):
     """Download only files from approved generated-artifact directories."""
-    root = Path(get_platform_root()).resolve()
+    root = Path(deps.get_platform_root()).resolve()
     candidate = (root / artifact_path).resolve()
     allowed_roots = [
         (root / "Reports").resolve(),
@@ -437,7 +437,7 @@ def get_registry():
 @router.post("/api/registry/reload", tags=["System"])
 def reload_registry():
     """Force a registry rebuild (runs tool_indexer)."""
-    indexer_path = os.path.join(get_platform_root(), 'Tools', 'tool_indexer', 'tool_indexer.py')
+    indexer_path = os.path.join(deps.get_platform_root(), 'Tools', 'tool_indexer', 'tool_indexer.py')
     if not os.path.exists(indexer_path):
         raise HTTPException(status_code=400, detail="Tool indexer not found")
     try:
@@ -446,7 +446,7 @@ def reload_registry():
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=get_platform_root()
+            cwd=deps.get_platform_root()
         )
         return {
             "status": "success" if result.returncode == 0 else "failed",

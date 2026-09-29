@@ -8,7 +8,7 @@ import sys
 
 from fastapi import APIRouter, HTTPException
 
-from core_lib.utils import get_platform_root
+from api import deps
 
 router = APIRouter()
 
@@ -17,7 +17,7 @@ router = APIRouter()
 def check_closure_readiness(case_id: str):
     """Evaluate whether a case satisfies all investigation gating rules for closure."""
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, InvestigationState
         from services.investigation_state import _serialize_investigation_state_record
         from services.closure_service import evaluate_closure_readiness
@@ -42,7 +42,7 @@ def generate_closure_note(request: dict):
     disposition_conflict flag) and never overrides the derived conclusion.
     """
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal
         from services.closure_service import generate_structured_closure_note
 

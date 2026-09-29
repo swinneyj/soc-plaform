@@ -18,7 +18,7 @@ from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from core_lib.utils import get_platform_root
+from api import deps
 from services import splunk_boundary
 
 from api.auth import require_api_key
@@ -123,7 +123,7 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
     db = None
     job_id = uuid.uuid4().hex
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import (
             PlaceholderAlias,
             SessionLocal,

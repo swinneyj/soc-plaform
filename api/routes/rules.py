@@ -15,7 +15,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from core_lib.utils import get_platform_root
+from api import deps
 
 from api.schemas import (
     PlaceholderAliasPayload,
@@ -63,7 +63,7 @@ def _rebuild_placeholder_aliases_file() -> None:
                 )
 
             payload = {"aliases": aliases}
-            output_path = os.path.join(get_platform_root(), "placeholder_aliases.json")
+            output_path = os.path.join(deps.get_platform_root(), "placeholder_aliases.json")
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
         finally:
@@ -109,7 +109,7 @@ def _rebuild_supportive_rules_file() -> None:
                 ]
             }
 
-            output_path = os.path.join(get_platform_root(), "supportive_rules.json")
+            output_path = os.path.join(deps.get_platform_root(), "supportive_rules.json")
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(payload, f, indent=2)
         finally:
@@ -125,7 +125,7 @@ def list_placeholder_aliases():
     # Response shape matches what the frontend expects:
     # [{"id", "alias", "fields", "description"}, ...]
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, PlaceholderAlias
 
         db = SessionLocal()
@@ -165,7 +165,7 @@ def suggest_placeholder_alias_fields(
     # Response shape:
     #     {"candidates": [{"field": "host", "count": N}, ...]}
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent
 
         db = SessionLocal()
@@ -214,7 +214,7 @@ def create_placeholder_alias(payload: PlaceholderAliasPayload):
     # Create a new placeholder alias.
     # Alias names are normalized to lowercase and must be unique.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import func  # type: ignore
         from db.models import SessionLocal, PlaceholderAlias
 
@@ -265,7 +265,7 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
     # Update an existing placeholder alias.
     # Supports partial updates for alias, fields, and description.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import func  # type: ignore
         from db.models import SessionLocal, PlaceholderAlias
 
@@ -326,7 +326,7 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
 def delete_placeholder_alias(alias_id: int):
     # Delete a placeholder alias definition.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, PlaceholderAlias
 
         db = SessionLocal()
@@ -359,7 +359,7 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
     # analyst-facing editor so supportive queries can be tuned on the fly
     # without touching JSON seed files.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
 
         db = SessionLocal()
@@ -394,7 +394,7 @@ def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
     """
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQuery
 
         db = SessionLocal()
@@ -472,7 +472,7 @@ def supportive_playbook_status(case_id: str):
     """Report whether a case's rule already has an approved playbook."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent, SupportiveQuery
 
         db = SessionLocal()
@@ -518,7 +518,7 @@ def import_supportive_results(payload: SupportiveResultsImportRequest):
     """Turn analyst-provided Splunk results into reviewable, unsaved SPL drafts."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, SplunkEvent
 
         db = SessionLocal()
@@ -615,7 +615,7 @@ def create_supportive_query(payload: SupportiveQueryPayload):
     # depending on a potentially misaligned Postgres sequence, mirroring
     # the import logic used by the ES rules importer.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import func  # type: ignore
         from db.models import SessionLocal, SupportiveQuery
 
@@ -663,7 +663,7 @@ def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload
     # unchanged. Rule IDs can be adjusted if needed when re-grouping
     # queries under a different logical rule.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
 
         db = SessionLocal()
@@ -710,7 +710,7 @@ def delete_supportive_query(query_id: int):
     # historical evidence even if the underlying query definition is
     # retired.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SupportiveQuery
 
         db = SessionLocal()
@@ -739,7 +739,7 @@ def delete_supportive_query(query_id: int):
 def list_rules():
     # List all available ES correlation rules, including any supportive queries.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, ESCorrelationRule, SupportiveQuery
         db = SessionLocal()
         rules = db.query(ESCorrelationRule).filter(ESCorrelationRule.enabled == 1).all()
@@ -754,7 +754,7 @@ def list_rules():
         # requiring a database migration.
         catalog_by_id: Dict[str, Dict[str, Any]] = {}
         for catalog_path in [
-            Path(get_platform_root()) / "updated_rules.json",
+            Path(deps.get_platform_root()) / "updated_rules.json",
             Path(__file__).resolve().parent.parent / "updated_rules.json",
         ]:
             try:

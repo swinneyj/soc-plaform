@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
-from core_lib.utils import get_platform_root
+from api import deps
 
 router = APIRouter()
 
@@ -219,8 +219,7 @@ def _extract_code_sections(code_snippet: str, language: str) -> List[Dict[str, A
 def fix_code(payload: dict):
     # Generate fixed/improved version of code based on review.
     try:
-        sys.path.insert(0, get_platform_root())
-        from services.ollama_service import get_ollama_client
+        sys.path.insert(0, deps.get_platform_root())
         
         code_snippet = payload.get('code_snippet', '').strip()
         language = payload.get('language', 'python').strip()
@@ -229,7 +228,7 @@ def fix_code(payload: dict):
         if not code_snippet:
             raise HTTPException(status_code=400, detail="code_snippet is required")
         
-        client = get_ollama_client()
+        client = deps.get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
         
@@ -270,9 +269,8 @@ def code_review(payload: dict):
     #     "instructions": "Optional focus or question for the review"
     # }
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, CodeReview
-        from services.ollama_service import get_ollama_client
         
         code_snippet = payload.get('code_snippet', '').strip()
         language = payload.get('language', 'python').strip()
@@ -282,7 +280,7 @@ def code_review(payload: dict):
         if not code_snippet:
             raise HTTPException(status_code=400, detail="code_snippet is required")
         
-        client = get_ollama_client()
+        client = deps.get_ollama_client()
         if not client.available:
             raise HTTPException(status_code=503, detail="Ollama service not available")
         
@@ -484,7 +482,7 @@ async def code_review_zip(
 def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
     # List recent code reviews from database.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, CodeReview
         
         db = SessionLocal()
@@ -512,7 +510,7 @@ def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
 def get_code_review(review_id: int):
     # Get a specific code review by ID.
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, CodeReview
         
         db = SessionLocal()

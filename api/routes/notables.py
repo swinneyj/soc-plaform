@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from core_lib.utils import get_platform_root
+from api import deps
 
 from api.schemas import NotableFetchSplRequest, PastedNotableRequest
 from db.util import utcnow_naive
@@ -1277,7 +1277,7 @@ def paste_notable(request: PastedNotableRequest):
         raise HTTPException(status_code=400, detail="No notable text was provided")
 
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent
         from text_sanitizer_pipeline.text_sanitizer_pipeline import sanitize_logs_with_tokens, sanitize_pii_phi
         segments = split_pasted_notables(raw_text)
@@ -1431,7 +1431,7 @@ def paste_notable(request: PastedNotableRequest):
                 pass  # already handled as skip above
             else:
                 artifact_paths = save_notable_artifacts(
-                    get_platform_root(), sanitized_text, mapping, sanitized_fields
+                    deps.get_platform_root(), sanitized_text, mapping, sanitized_fields
                 )
                 payload = {
                     "record_type": "splunk_notable_paste",
@@ -1564,7 +1564,7 @@ def list_recent_notables(
 ):
     """List recently pasted sanitized Splunk notables (optionally deleting one first)."""
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
@@ -1630,7 +1630,7 @@ def list_historical_notables(
     flooding the main triage grid.
     """
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent
 
         db = SessionLocal()
@@ -1801,7 +1801,7 @@ def delete_pasted_notable(event_id: int):
     but does not delete any triage cases that may have been created from it.
     """
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
@@ -1890,7 +1890,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
         if not isinstance(event_ids, list) or not event_ids:
             raise HTTPException(status_code=400, detail="event_ids list is required")
 
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent, TriageResult
 
         db = SessionLocal()
@@ -1954,7 +1954,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
 def get_triage_source_notable(case_id: str):
     """Return the source pasted notable details for a promoted triage case."""
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal
         from services.evidence_service import resolve_source_notable_for_case
 

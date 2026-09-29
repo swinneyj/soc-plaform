@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
-from core_lib.utils import get_platform_root
+from api import deps
 
 from api.helpers.triage_keys import extract_triage_key_fields
 
@@ -122,7 +122,7 @@ def get_triage(
 ):
     """Get triaged cases from database (optionally deleting one first)."""
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import or_
         from db.models import SessionLocal, TriageResult, AnalysisResult
 
@@ -217,7 +217,7 @@ def get_triage_case(case_id: str):
     """Get a specific triage case by case ID."""
     db = None
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult
 
         db = SessionLocal()
@@ -252,7 +252,7 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
     automatically delete any related analysis results.
     """
     try:
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, AnalysisResult
 
         db = SessionLocal()
@@ -301,7 +301,7 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
         if not isinstance(case_ids, list) or not case_ids:
             raise HTTPException(status_code=400, detail="case_ids list is required")
 
-        sys.path.insert(0, get_platform_root())
+        sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, TriageResult, AnalysisResult
 
         db = SessionLocal()
