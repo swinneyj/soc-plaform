@@ -8,7 +8,7 @@
  *   await API.promoteNotable(id);
  *
  * The live site does NOT load this file yet (Piece 1 is additive only).
- * Later pieces will switch app.js / the thin index to use it.
+ * The modular shell (app.modular.js + domain modules) consumes it.
  */
 (function (global) {
     'use strict';

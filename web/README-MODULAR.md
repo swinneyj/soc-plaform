@@ -22,13 +22,13 @@ This is a standard split and makes troubleshooting clearer:
 
 | File | Purpose |
 |------|---------|
-| `index.html` | **Live site** – now the thin modular shell (was monolith pre-Piece 5). Backup at `Old/index.bak` / `index.html.bak`. |
+| `index.html` | Redirect stub → `index.modular.html` (the live modular shell). Old shells/backups retired to `scripts/attic/web-old/`. |
 | `index.modular.html` | **Reference test shell** – kept for side-by-side comparison / QA |
 | `app.modular.js` | Root Vue app (data, computed, spreads, mounted) |
 | `components/*` | All 8 tab components |
 | `modules/*` | Domain modules (database, analysis, closure, codeReview, tools, api) |
 
-> Stale `web/app.js` (2079-line monolith) has been archived to `Old/app.js-pre-modular-monolith.bak`. Do not reintroduce it — use `app.modular.js`.
+> Stale `web/app.js` (2,119-line orphan monolith, referenced by nothing) is retired to `scripts/attic/app.js` (pre-modular backup: `scripts/attic/web-old/app.js-pre-modular-monolith.bak`). Do not reintroduce it — use `app.modular.js`.
 
 ## How to test / verify
 

@@ -182,7 +182,7 @@ cp web/modules/database.js.bak-before-full web/modules/database.js
 - Move more pure logic from domain modules into `utils/` and unit-test those helpers.
 - Replace global `window.*Methods` with ES modules (`type="module"`) or a small bundler (Vite) when the team wants imports instead of script-tag order.
 - Slim `data()` in `app.modular.js` by grouping related state per domain (still one root instance unless you adopt Pinia/Vuex later).
-- Remove or archive `app.js` / `index.modular.html` / old `.bak` files once the team is confident in the modular live path.
+- ~~Remove or archive `app.js` / `index.modular.html` / old `.bak` files once the team is confident in the modular live path.~~ **Done Sept 29, 2026** — retired to `scripts/attic/app.js` + `scripts/attic/web-old/`.
 
 ---
 

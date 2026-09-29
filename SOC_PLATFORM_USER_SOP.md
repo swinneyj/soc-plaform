@@ -458,7 +458,7 @@ For maintainers, the primary locations are:
 
 | Need | Location |
 |---|---|
-| Browser UI | `web/index.html` and `web/app.js` |
+| Browser UI | `web/index.html` (redirect) → `web/index.modular.html` + `web/app.modular.js` |
 | API routes | `api/main.py` |
 | Database models | `db/models.py` |
 | Ollama integration | `services/ollama_service.py` |

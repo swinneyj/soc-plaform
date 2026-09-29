@@ -99,4 +99,4 @@ Total ~59 route handlers → 7 files, ~300-600 lines each.
 ## Related
 
 - Frontend precedent: `docs/FRONTEND_MODULARIZATION.md`, `web/README-MODULAR.md`, `web/modules/README.md` — copy that doc structure and load-order table.
-- Rollback reference: `web/Old/index.bak` pattern → `api/main.py.bak` already present.
+- Rollback reference: `scripts/attic/web-old/index.bak` pattern → `api/main.py.bak` already present.
