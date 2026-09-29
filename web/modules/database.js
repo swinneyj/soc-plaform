@@ -424,6 +424,50 @@
             }
         },
 
+        // S11: case-level evidence ledger. Read-only panel over the durable
+        // supportive_query_results ledger with per-item delete via the same
+        // batch-delete POST route the Analysis tab uses.
+        async loadCaseEvidenceLedger() {
+            const caseId = (this.evidenceLedgerCaseId || '').trim();
+            if (!caseId) {
+                this.evidenceLedgerError = 'Select a case to view its evidence ledger.';
+                return;
+            }
+            this.evidenceLedgerLoading = true;
+            try {
+                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence');
+                this.evidenceLedgerItems = res.data || [];
+                this.evidenceLedgerError = '';
+            } catch (err) {
+                const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'load failed';
+                this.evidenceLedgerError = 'Failed to load evidence ledger: ' + detail;
+                this.evidenceLedgerItems = [];
+                console.error('Failed to load case evidence ledger:', detail);
+            } finally {
+                this.evidenceLedgerLoading = false;
+            }
+        },
+
+        async deleteEvidenceLedgerItem(item) {
+            const caseId = (this.evidenceLedgerCaseId || '').trim();
+            if (!caseId || !item || item.id == null) {
+                return;
+            }
+            this.evidenceLedgerBusyId = item.id;
+            try {
+                await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence/batch-delete', {
+                    ids: [Number(item.id)],
+                });
+                this.evidenceLedgerItems = (this.evidenceLedgerItems || []).filter((x) => x.id !== item.id);
+            } catch (err) {
+                const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'delete failed';
+                this.evidenceLedgerError = 'Failed to delete evidence item: ' + detail;
+                console.error('Failed to delete evidence ledger item:', detail);
+            } finally {
+                this.evidenceLedgerBusyId = null;
+            }
+        },
+
         async deleteTriageCase(case_) {
             if (!confirm('Delete this triage case from the database?')) {
                 return;

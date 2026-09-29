@@ -66,6 +66,11 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     bulkPromoteProgress: null,
                     bulkPromoteOutcome: {},
                     bulkPromoteSummary: '',
+                    evidenceLedgerCaseId: '',
+                    evidenceLedgerItems: [],
+                    evidenceLedgerLoading: false,
+                    evidenceLedgerError: '',
+                    evidenceLedgerBusyId: null,
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },

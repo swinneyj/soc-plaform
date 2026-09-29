@@ -825,6 +825,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_draft_autosave_debounces_and_cancels_on_case_change(self):
         self._run("draft_autosave_debounce")
 
+    def test_evidence_ledger_view_load_delete_and_failures(self):
+        self._run("evidence_ledger_view")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by

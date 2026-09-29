@@ -23,7 +23,7 @@
  *   promote                  promote_historical_guard
  *   promote_failure          promote_all_open
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
- *   draft_autosave_debounce
+ *   draft_autosave_debounce  evidence_ledger_view
  * Exit code 0 = all assertions held.
  */
 import {
@@ -99,6 +99,17 @@ function spy(fn) {
     };
     wrapped.calls = calls;
     return wrapped;
+}
+
+// Swap the sandbox axios implementation mid-scenario. Modules resolve
+// `axios` from the sandbox globals on every call, so mutating the sandbox
+// object is enough to change what the next request does.
+function sandboxPostSwap(sandbox, impl) {
+    sandbox.axios.post = impl;
+}
+
+function sandboxGetSwap(sandbox, impl) {
+    sandbox.axios.get = impl;
 }
 
 const SUPPORTIVE_QUERIES = [
@@ -610,6 +621,78 @@ const scenarios = {
         comp.updateSupportiveResult('id:1', 'orphan');
         assert(firedTimers.filter((t) => !t.fired).length === 0,
             'no-case edits must not schedule a draft save');
+    },
+
+    // S11: case-level evidence ledger - load, empty state, delete fan-in.
+    async evidence_ledger_view() {
+        const rows = [
+            { id: 11, case_id: 'MOCK-CASE-001', query_title: 'Failed logins', source_system: 'supportive_manual', raw_result: { result_text: '6 failures on VPN-GW-01' }, created_at: '2026-09-29T10:00:00' },
+            { id: 12, case_id: 'MOCK-CASE-001', query_title: 'Legacy blob', source_system: 'phase2_manual', raw_result: 'plain legacy string', created_at: '2026-09-29T11:00:00' },
+        ];
+        const gets = spy(async (url) => {
+            if (url.includes('/evidence')) {
+                return { data: rows };
+            }
+            return { data: {} };
+        });
+        const deleted = [];
+        const posts = spy(async (url, body) => {
+            if (url.includes('/evidence/batch-delete')) {
+                deleted.push(...(body.ids || []));
+                return { data: { deleted: (body.ids || []).length } };
+            }
+            return { data: {} };
+        });
+        const { ctx, sandbox, errorCalls, warnCalls } = makeSandbox({ get: gets, post: posts });
+        const dbMethods = await loadModuleMethods(ctx, 'web/modules/database.js', 'DatabaseMethods');
+        const comp = makeComponent(dbMethods, {
+            base: {
+                apiUrl: '/api',
+                evidenceLedgerCaseId: '',
+                evidenceLedgerItems: [],
+                evidenceLedgerLoading: false,
+                evidenceLedgerError: '',
+                evidenceLedgerBusyId: null,
+            },
+        });
+
+        // No case: guarded with a message, no network.
+        await comp.loadCaseEvidenceLedger();
+        assert(gets.calls.length === 0, 'empty case must not hit the network');
+        assert(comp.evidenceLedgerError.includes('Select a case'),
+            'empty case must explain itself: ' + comp.evidenceLedgerError);
+
+        // Happy path: rows land, loading clears.
+        comp.evidenceLedgerCaseId = 'MOCK-CASE-001';
+        await comp.loadCaseEvidenceLedger();
+        assert(gets.calls.length === 1 && gets.calls[0][0] === '/api/db/triage/MOCK-CASE-001/evidence',
+            'ledger GET url wrong: ' + gets.calls[0][0]);
+        assert(comp.evidenceLedgerItems.length === 2 && comp.evidenceLedgerError === '',
+            'ledger rows not stored: ' + JSON.stringify(comp.evidenceLedgerItems));
+        assert(comp.evidenceLedgerLoading === false, 'loading flag must clear');
+
+        // Delete one row: batch-delete POST with that id, optimistic removal.
+        await comp.deleteEvidenceLedgerItem(comp.evidenceLedgerItems[0]);
+        assert(deleted.join(',') === '11', 'delete must POST the row id via batch-delete, got ' + deleted.join(','));
+        assert(comp.evidenceLedgerItems.length === 1 && comp.evidenceLedgerItems[0].id === 12,
+            'deleted row must leave the local ledger: ' + JSON.stringify(comp.evidenceLedgerItems));
+        assert(comp.evidenceLedgerBusyId === null, 'busy flag must reset');
+
+        // Delete failure: logged, row kept, error surfaced, busy reset.
+        sandboxPostSwap(sandbox, async () => { const e = new Error('503'); e.response = { data: { detail: 'backend down' } }; throw e; });
+        await comp.deleteEvidenceLedgerItem(comp.evidenceLedgerItems[0]);
+        assert(comp.evidenceLedgerError.includes('Failed to delete evidence item'),
+            'delete failure must surface: ' + comp.evidenceLedgerError);
+        assert(comp.evidenceLedgerItems.length === 1, 'failed delete must keep the row');
+        assert(comp.evidenceLedgerBusyId === null, 'busy flag must reset on failure');
+
+        // Load failure: logged, ledger cleared, error shown.
+        sandboxGetSwap(sandbox, async () => { const e = new Error('500'); e.response = { data: { detail: 'db down' } }; throw e; });
+        await comp.loadCaseEvidenceLedger();
+        assert(comp.evidenceLedgerError.includes('Failed to load evidence ledger'),
+            'load failure must surface: ' + comp.evidenceLedgerError);
+        assert(comp.evidenceLedgerItems.length === 0, 'failed load must clear the ledger');
+        assert(comp.evidenceLedgerLoading === false, 'loading flag must clear on failure');
     },
 };
 

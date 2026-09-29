@@ -70,6 +70,11 @@
                 :selected-notable-ids="selectedNotableIds"
                 :selected-triage-case-ids="selectedTriageCaseIds"
                 :triage-notable-details="triageNotableDetails"
+                :evidence-ledger-case-id="evidenceLedgerCaseId"
+                :evidence-ledger-items="evidenceLedgerItems"
+                :evidence-ledger-loading="evidenceLedgerLoading"
+                :evidence-ledger-error="evidenceLedgerError"
+                :evidence-ledger-busy-id="evidenceLedgerBusyId"
                 @change-tab="changeTab"
                 @update:notable-paste-text="notablePasteText = $event"
                 @update:notable-redaction-enabled="notableRedactionEnabled = $event"
@@ -92,6 +97,9 @@
                 @load-triage-data="loadTriageData"
                 @load-db-stats="loadDbStats"
                 @delete-triage-case="deleteTriageCase"
+                @update:evidence-ledger-case-id="evidenceLedgerCaseId = $event"
+                @load-case-evidence-ledger="loadCaseEvidenceLedger"
+                @delete-evidence-ledger-item="deleteEvidenceLedgerItem"
                 @delete-selected-triage-cases="deleteSelectedTriageCases"
                 @load-triage-notable-details="loadTriageNotableDetails"
                 @copy-triage-notable-fields="copyTriageNotableFields"
@@ -328,7 +336,7 @@
 
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=9"></script>
-    <script src="modules/database.js?v=18"></script>
+    <script src="modules/database.js?v=19"></script>
     <script src="modules/analysis.js?v=18"></script>
     <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js?v=10"></script>
@@ -338,7 +346,7 @@
     <script src="components/HeaderNav.js?v=9"></script>
     <script src="components/SplunkBoundaryWidget.js?v=1"></script>
     <script src="components/ToolsTab.js?v=11"></script>
-    <script src="components/DatabaseTab.js?v=27"></script>
+    <script src="components/DatabaseTab.js?v=28"></script>
     <script src="components/AnalysisTab.js?v=16"></script>
     <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=15"></script>

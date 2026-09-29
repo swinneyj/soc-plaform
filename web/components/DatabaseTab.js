@@ -23,7 +23,12 @@ window.DatabaseTab = {
         'deleteAnalysisWithCase',
         'selectedNotableIds',
         'selectedTriageCaseIds',
-        'triageNotableDetails'
+        'triageNotableDetails',
+        'evidenceLedgerCaseId',
+        'evidenceLedgerItems',
+        'evidenceLedgerLoading',
+        'evidenceLedgerError',
+        'evidenceLedgerBusyId'
     ],
     emits: [
         'change-tab',
@@ -49,6 +54,9 @@ window.DatabaseTab = {
         'load-db-stats',
         'delete-triage-case',
         'delete-selected-triage-cases',
+        'update:evidence-ledger-case-id',
+        'load-case-evidence-ledger',
+        'delete-evidence-ledger-item',
         'load-triage-notable-details',
         'copy-triage-notable-fields',
         'analyze-case',
@@ -160,6 +168,20 @@ window.DatabaseTab = {
         },
         toggleAllTriageFromButton() {
             this.toggleSelectAllTriage({ target: { checked: !this.allTriageSelected } });
+        },
+        // Compact result preview for a ledger row: the raw_result's result_text
+        // when present, else a bounded JSON dump.
+        ledgerResultPreview(item) {
+            const raw = (item && item.raw_result) || {};
+            const text = raw.result_text || (typeof raw === 'string' ? raw : '');
+            if (text) {
+                return String(text).slice(0, 400);
+            }
+            const keys = Object.keys(raw);
+            if (!keys.length) {
+                return '(no result text recorded)';
+            }
+            return keys.slice(0, 6).map((k) => k + ': ' + String(raw[k]).slice(0, 80)).join('\n');
         }
     },
     template: `
@@ -329,6 +351,59 @@ window.DatabaseTab = {
                                     ? 'Promoting…'
                                     : 'Promote all open to triage' }}
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- S11: case-level evidence ledger -->
+                    <div class="bg-gray-900 border border-gray-700 rounded p-4 space-y-3">
+                        <div class="flex flex-wrap items-end gap-3">
+                            <div class="flex-1 min-w-[220px]">
+                                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Evidence Ledger for Case</label>
+                                <select
+                                    :value="evidenceLedgerCaseId"
+                                    @change="$emit('update:evidence-ledger-case-id', $event.target.value)"
+                                    class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100"
+                                >
+                                    <option value="">-- Choose a case --</option>
+                                    <option v-for="case_ in filteredTriageData" :key="case_.case_id" :value="case_.case_id">
+                                        {{ case_.case_id }} - {{ case_.rule_name }}
+                                    </option>
+                                </select>
+                            </div>
+                            <button
+                                @click="$emit('load-case-evidence-ledger')"
+                                :disabled="evidenceLedgerLoading || !evidenceLedgerCaseId"
+                                class="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-400 rounded text-xs font-semibold transition"
+                            >{{ evidenceLedgerLoading ? 'Loading…' : 'Load Ledger' }}</button>
+                        </div>
+                        <p v-if="evidenceLedgerError" class="text-xs text-red-300">{{ evidenceLedgerError }}</p>
+                        <p v-if="!evidenceLedgerLoading && evidenceLedgerCaseId && evidenceLedgerItems && !evidenceLedgerItems.length && !evidenceLedgerError" class="text-xs text-gray-500">
+                            No saved evidence for this case yet.
+                        </p>
+                        <div v-if="evidenceLedgerItems && evidenceLedgerItems.length" class="space-y-2 max-h-80 overflow-y-auto">
+                            <div
+                                v-for="item in evidenceLedgerItems"
+                                :key="'ledger-' + item.id"
+                                class="bg-gray-800 border border-gray-700 rounded p-3 text-xs"
+                            >
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <p class="font-semibold text-gray-100">{{ item.query_title || 'Untitled evidence' }}</p>
+                                        <p class="text-gray-500 mt-0.5">
+                                            <span class="font-mono">{{ item.source_system }}</span>
+                                            • id {{ item.id }}
+                                            • {{ item.created_at || 'unknown time' }}
+                                        </p>
+                                    </div>
+                                    <button
+                                        @click="$emit('delete-evidence-ledger-item', item)"
+                                        :disabled="evidenceLedgerBusyId === item.id"
+                                        class="flex-shrink-0 px-2 py-1 bg-red-900 hover:bg-red-800 disabled:bg-gray-700 rounded text-[11px] font-semibold text-red-100"
+                                        title="Delete this evidence item permanently"
+                                    >{{ evidenceLedgerBusyId === item.id ? '…' : 'Delete' }}</button>
+                                </div>
+                                <pre class="mt-2 whitespace-pre-wrap bg-black/40 rounded p-2 max-h-24 overflow-y-auto text-gray-300 font-mono">{{ ledgerResultPreview(item) }}</pre>
+                            </div>
                         </div>
                     </div>
 
