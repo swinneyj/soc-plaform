@@ -25,14 +25,10 @@ window.AnalysisTab = {
         'phase2Result',
         'investigationState',
         'evidenceFindingOptions',
-        'supportiveManualResults',
         'supportiveSaveBusy',
-        'supportiveFindingTypes',
         'phase2CardState',
         'runAllBusy',
         'runAllSummary',
-        'enrichmentManualResults',
-        'enrichmentFindingTypes',
         'phase2EditedQueries',
         'supportivePlaybookAvailable',
         'supportiveDraftBusy',
@@ -969,7 +965,7 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Observation Notes</label>
                     <textarea
-                        :value="supportiveManualResults[getSupportiveKey(q)] || ''"
+                        :value="(phase2CardState[getSupportiveKey(q)] || {}).resultText || ''"
                         @input="emitSupportiveManual(q, $event.target.value)"
                         rows="3"
                         class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"

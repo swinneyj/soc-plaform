@@ -24,7 +24,7 @@
  *   promote_failure          promote_all_open
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  *   draft_autosave_debounce  evidence_ledger_view
- *   loop_timeline_panel
+ *   loop_timeline_panel  snapshot_migration_folds_legacy_maps
  * Exit code 0 = all assertions held.
  */
 import {
@@ -64,7 +64,6 @@ function analysisComp(methods, overrides = {}, spies = {}) {
         analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: [] },
         analysisSourceNotable: null,
         placeholderAliases: {},
-        supportiveManualResults: {},
         supportiveSaveBusy: false,
         phase2CardState: {},
         phase2Result: null,
@@ -130,12 +129,11 @@ const scenarios = {
         const methods = await loadAnalysis(ctx);
         const comp = analysisComp(methods, {
             analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: SUPPORTIVE_QUERIES },
-            supportiveManualResults: {
-                'id:1': '6 failures on VPN-GW-01',
-                'id:2': '',   // blank + status success -> skipped
-                'id:3': '',   // blank + explicit no_results -> real evidence, saved
+            phase2CardState: {
+                'id:1': { resultText: '6 failures on VPN-GW-01' },
+                'id:2': { resultText: '' },   // blank + status success -> skipped
+                'id:3': { resultText: '', status: 'no_results' },  // explicit no_results -> real evidence, saved
             },
-            phase2CardState: { 'id:3': { status: 'no_results' } },
         }, { loadInvestigationState: async () => { stateLoads += 1; } });
 
         await comp.saveSupportiveEvidence({ silent: true });
@@ -223,7 +221,7 @@ const scenarios = {
         const comp = analysisComp(methods, {
             supportiveSaveBusy: true,
             analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: SUPPORTIVE_QUERIES },
-            supportiveManualResults: { 'id:1': 'text that must never post' },
+            phase2CardState: { 'id:1': { resultText: 'text that must never post' } },
         });
 
         await comp.saveSupportiveEvidence();
@@ -583,7 +581,6 @@ const scenarios = {
             base: {
                 apiUrl: '/api',
                 analysisCaseId: 'MOCK-CASE-001',
-                supportiveManualResults: {},
                 phase2CardState: {},
                 _draftSaveTimer: null,
             },
@@ -744,6 +741,63 @@ const scenarios = {
         // Empty/absent state yields an empty panel, never a crash.
         assert(comp.buildLoopTimeline(null).length === 0, 'null state must yield no rows');
         assert(comp.buildLoopTimeline({}).length === 0, 'empty state must yield no rows');
+    },
+
+    // cardState fold: pre-fold localStorage snapshots (four parallel per-kind
+    // maps) migrate into phase2CardState cells on load, and post-S7 snapshots
+    // carrying both shapes merge without losing either.
+    async snapshot_migration_folds_legacy_maps() {
+        const { ctx, sandbox, errorCalls } = makeSandbox({});
+        let stored = null;
+        sandbox.window.localStorage = {
+            setItem(k, v) { stored = v; },
+            getItem() { return stored; },
+        };
+        const methods = await loadAnalysis(ctx);
+        const comp = makeComponent(methods, {
+            base: {
+                apiUrl: '/api',
+                analysisCaseId: 'CASE-OLD',
+                phase2CardState: {},
+                phase2EditedQueries: {},
+            },
+        });
+
+        // Pre-fold snapshot: legacy maps only, no phase2CardState key.
+        stored = JSON.stringify({
+            supportiveManualResults: { 'title:failed_logins': 'saved text' },
+            supportiveFindingTypes: { 'title:failed_logins': 'suspicious' },
+            enrichmentManualResults: { 'enrichment:proc_dump': 'proc data' },
+        });
+        comp.loadAnalysisState('CASE-OLD');
+        let cards = comp.phase2CardState;
+        assert(cards['title:failed_logins'] && cards['title:failed_logins'].resultText === 'saved text'
+            && cards['title:failed_logins'].findingType === 'suspicious',
+            'legacy supportive maps must fold into a card cell: ' + JSON.stringify(cards));
+        assert(cards['enrichment:proc_dump'] && cards['enrichment:proc_dump'].resultText === 'proc data',
+            'legacy enrichment map must fold into a card cell: ' + JSON.stringify(cards));
+        assert(errorCalls.length === 0, 'migration logged errors: ' + JSON.stringify(errorCalls));
+
+        // Post-S7 snapshot: cardState AND legacy maps coexist; both survive.
+        comp.phase2CardState = {};
+        stored = JSON.stringify({
+            phase2CardState: { 'phase2:brute': { resultText: 'phase2 draft' } },
+            supportiveManualResults: { 'id:9': 'supportive draft' },
+        });
+        comp.loadAnalysisState('CASE-OLD');
+        cards = comp.phase2CardState;
+        assert(cards['phase2:brute'] && cards['phase2:brute'].resultText === 'phase2 draft',
+            'cardState key must load directly: ' + JSON.stringify(cards));
+        assert(cards['id:9'] && cards['id:9'].resultText === 'supportive draft',
+            'legacy maps in a mixed snapshot must still fold: ' + JSON.stringify(cards));
+
+        // Round-trip: the migrated state re-stores as cardState only.
+        comp._storeAnalysisStateSnapshot();
+        const round = JSON.parse(stored);
+        assert(round.phase2CardState && round.phase2CardState['id:9'].resultText === 'supportive draft',
+            're-stored snapshot must carry the folded cells');
+        assert(!round.supportiveManualResults && !round.enrichmentManualResults,
+            're-stored snapshot must drop the legacy maps');
     },
 };
 

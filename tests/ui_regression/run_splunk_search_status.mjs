@@ -36,7 +36,6 @@ function makeComponent(methods, overrides = {}) {
         // S7 unified per-card state: run status lives at
         // phase2CardState[key].runStatus; result text at .resultText.
         phase2CardState: {},
-        supportiveManualResults: {},
         investigationState: null,
         formatSplunkAutoSummary(data) {
             return '[auto-run via /api/splunk/search-one — ' + (data.result_status || '') +
@@ -76,7 +75,7 @@ const scenarios = {
         assert(st.state === 'complete', 'expected final state "complete", got ' + st.state);
         assert(st.short === 'Saved ✓', 'expected Saved ✓ chip, got ' + st.short);
         assert(st.message.includes('1 rows') || st.message.includes('1 rows.'), 'message should include row count: ' + st.message);
-        const filled = comp.supportiveManualResults[comp.getSupportiveKey(QUERY)];
+        const filled = (comp.phase2CardState[comp.getSupportiveKey(QUERY)] || {}).resultText;
         assert(filled && filled.includes('splunk_auto'), 'textarea payload not filled with auto-run summary');
         assert(alertCalls.length === 0, 'window.alert was called: ' + JSON.stringify(alertCalls));
     },

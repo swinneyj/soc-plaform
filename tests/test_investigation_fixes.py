@@ -831,6 +831,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_loop_timeline_rows_map_defensively(self):
         self._run("loop_timeline_panel")
 
+    def test_snapshot_migration_folds_legacy_maps(self):
+        self._run("snapshot_migration_folds_legacy_maps")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by

@@ -31,10 +31,9 @@
             }
             this.analysisResult = null;
             this.investigationState = null;
-            this.enrichmentManualResults = {};
-            this.enrichmentFindingTypes = {};
-            this.supportiveManualResults = {};
-            this.supportiveFindingTypes = {};
+            // S7 + cardState fold: every per-card field (supportive,
+            // enrichment, phase2+) lives in phase2CardState under one
+            // keying scheme. The legacy per-kind maps are gone.
             this.phase2EditedQueries = {};
             this.phase2CardState = {};
             this.followUpPhase = 2;
@@ -1273,8 +1272,9 @@
         },
 
         async saveSupportiveEvidenceAndContinue() {
-            const hadEntries = this.supportiveManualResults && Object.keys(this.supportiveManualResults).some(
-                key => (this.supportiveManualResults[key] || '').trim()
+            const cards = this.phase2CardState || {};
+            const hadEntries = Object.keys(cards).some(
+                key => String(cards[key].resultText || '').trim()
             );
             await this.saveSupportiveEvidence({ silent: true });
             // Navigate even when nothing was newly typed — the analyst may
@@ -1305,12 +1305,9 @@
             const entries = [];
             for (const q of this.analysisRule.supportive_queries) {
                 const key = this.getSupportiveKey(q);
-                const resultText = (this.supportiveManualResults[key] || '').trim();
-                // Collection status now lives on the root app state (root-card
-                // state), so the analyst's no_results / data_source_unavailable
-                // pick is actually seen by this save instead of silently
-                // defaulting to 'success'.
-                const resultStatus = (this.phase2CardState && this.phase2CardState[key] && this.phase2CardState[key].status) || 'success';
+                const card = this._phase2Card(key);
+                const resultText = String(card.resultText || '').trim();
+                const resultStatus = card.status || 'success';
                 // Save legitimate zero-result / failure executions even with
                 // an empty result body — a 0-event query is real evidence.
                 // Only a blank, untouched 'success' entry is skipped.
@@ -1359,7 +1356,7 @@
             const entries = [];
             for (const q of this.analysisSourceNotable.parse_assessment.generic_queries) {
                 const key = this.getEnrichmentKey(q);
-                const resultText = (this.enrichmentManualResults[key] || '').trim();
+                const resultText = String(this._phase2Card(key).resultText || '').trim();
                 if (!resultText) {
                     continue;
                 }
@@ -1402,10 +1399,12 @@
                 for (const item of (res.data || [])) {
                     const key = this.getSupportiveKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                 }
-                this.supportiveManualResults = saved;
+                this.phase2CardState = { ...(this.phase2CardState || {}), ...saved };
             } catch (err) {
                 console.error('Failed to load saved supportive evidence:', err);
             }
@@ -1424,10 +1423,12 @@
                 for (const item of (res.data || [])) {
                     const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                 }
-                this.enrichmentManualResults = saved;
+                this.phase2CardState = { ...(this.phase2CardState || {}), ...saved };
             } catch (err) {
                 console.error('Failed to load saved enrichment evidence:', err);
             }
@@ -1453,20 +1454,23 @@
                 });
         },
 
+        // Merge one patch into a card cell (the S7 one-keying scheme).
+        _mergeCard(key, patch) {
+            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), ...patch } };
+        },
+
         // S10 debounced draft auto-save: every analyst keystroke in a card
         // field funnels through _updateCardField, which updates state and
         // schedules a single trailing-edge snapshot write (localStorage) ~1.2s
         // later. A refresh or crash now loses at most the last 1.2s of
         // typing instead of everything since the last explicit save.
         _updateCardField(mapName, key, field, value) {
-            const map = this[mapName] || {};
-            this[mapName] = { ...map, [key]: { ...(map[key] || {}), [field]: value } };
+            this._mergeCard(key, { [field]: value });
             this._scheduleDraftSave();
         },
 
         updateSupportiveResult(key, value) {
-            const map = this.supportiveManualResults || {};
-            this.supportiveManualResults = { ...map, [key]: value };
+            this._mergeCard(key, { resultText: value });
             this._scheduleDraftSave();
         },
 
@@ -1498,10 +1502,7 @@
                 analysisModel: this.analysisModel,
                 phase2Model: this.phase2Model,
                 followUpPhase: this.followUpPhase,
-                supportiveManualResults: this.supportiveManualResults,
-                supportiveFindingTypes: this.supportiveFindingTypes,
-                enrichmentManualResults: this.enrichmentManualResults,
-                enrichmentFindingTypes: this.enrichmentFindingTypes,
+                phase2CardState: this.phase2CardState,
                 phase2EditedQueries: this.phase2EditedQueries,
                 phase2CardState: this.phase2CardState,
                 analysisResult: this.analysisResult,
@@ -1551,23 +1552,33 @@
                 if (snapshot.followUpPhase) {
                     this.followUpPhase = snapshot.followUpPhase;
                 }
-                if (snapshot.supportiveManualResults) {
-                    this.supportiveManualResults = snapshot.supportiveManualResults;
+                if (snapshot.phase2CardState) {
+                    this.phase2CardState = snapshot.phase2CardState;
                 }
-                if (snapshot.supportiveFindingTypes) {
-                    this.supportiveFindingTypes = snapshot.supportiveFindingTypes;
-                }
-                if (snapshot.enrichmentManualResults) {
-                    this.enrichmentManualResults = snapshot.enrichmentManualResults;
-                }
-                if (snapshot.enrichmentFindingTypes) {
-                    this.enrichmentFindingTypes = snapshot.enrichmentFindingTypes;
+                // Pre-fold snapshots stored supportive/enrichment drafts in
+                // four parallel per-kind maps; translate them into cardState
+                // cells so old drafts survive the schema change. (Phase 2
+                // cards were already folded in S7, so both shapes can coexist
+                // in one snapshot.)
+                const folded = {};
+                const foldMap = (map, fieldName) => {
+                    for (const [k, v] of Object.entries(snapshot[map] || {})) {
+                        if (typeof v === 'object' && v !== null) {
+                            folded[k] = { ...(folded[k] || {}), ...v };
+                        } else {
+                            folded[k] = { ...(folded[k] || {}), [fieldName]: v };
+                        }
+                    }
+                };
+                foldMap('supportiveManualResults', 'resultText');
+                foldMap('supportiveFindingTypes', 'findingType');
+                foldMap('enrichmentManualResults', 'resultText');
+                foldMap('enrichmentFindingTypes', 'findingType');
+                if (Object.keys(folded).length) {
+                    this.phase2CardState = { ...(this.phase2CardState || {}), ...folded };
                 }
                 if (snapshot.phase2EditedQueries) {
                     this.phase2EditedQueries = snapshot.phase2EditedQueries;
-                }
-                if (snapshot.phase2CardState) {
-                    this.phase2CardState = snapshot.phase2CardState;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;
@@ -1755,11 +1766,7 @@
                 });
                 const data = res.data || {};
                 const summary = this.formatSplunkAutoSummary(data);
-                if (isPhase2) {
-                    this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), resultText: summary } };
-                } else {
-                    this.supportiveManualResults = { ...this.supportiveManualResults, [key]: summary };
-                }
+                this._mergeCard(key, { resultText: summary });
                 if (data.investigation_state) {
                     this.investigationState = data.investigation_state;
                 }

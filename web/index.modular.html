@@ -132,13 +132,9 @@
                 :phase2-result="phase2Result"
                 :investigation-state="investigationState"
                 :evidence-finding-options="evidenceFindingOptions"
-                :supportive-manual-results="supportiveManualResults"
                 :run-all-busy="runAllBusy"
                 :run-all-summary="runAllSummary"
                 :supportive-save-busy="supportiveSaveBusy"
-                :supportive-finding-types="supportiveFindingTypes"
-                :enrichment-manual-results="enrichmentManualResults"
-                :enrichment-finding-types="enrichmentFindingTypes"
                 :phase2-card-state="phase2CardState"
                 :supportive-playbook-available="supportivePlaybookAvailable"
                 :supportive-draft-busy="supportiveDraftBusy"
@@ -208,9 +204,9 @@
                 @promote-phase2-query="promotePhase2Query"
                 @on-phase2-template-input="onPhase2TemplateInput"
                 @update-supportive-manual="({key, value}) => updateSupportiveResult(key, value)"
-                @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
-                @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
-                @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
+                @update-supportive-finding="({key, value}) => _updateCardField('phase2CardState', key, 'findingType', value)"
+                @update-enrichment-manual="({key, value}) => _updateCardField('phase2CardState', key, 'resultText', value)"
+                @update-enrichment-finding="({key, value}) => _updateCardField('phase2CardState', key, 'findingType', value)"
                 @update-phase2-manual="({key, value}) => _updateCardField('phase2CardState', key, 'resultText', value)"
                 @update-phase2-finding="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), findingType: value } }"
                 @update-phase2-coverage="({key, value}) => _updateCardField('phase2CardState', key, 'coverage', value)"
@@ -338,7 +334,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=9"></script>
     <script src="modules/database.js?v=19"></script>
-    <script src="modules/analysis.js?v=18"></script>
+    <script src="modules/analysis.js?v=19"></script>
     <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js?v=10"></script>
     <script src="modules/codeReview.js?v=9"></script>
@@ -348,13 +344,13 @@
     <script src="components/SplunkBoundaryWidget.js?v=1"></script>
     <script src="components/ToolsTab.js?v=11"></script>
     <script src="components/DatabaseTab.js?v=28"></script>
-    <script src="components/AnalysisTab.js?v=17"></script>
+    <script src="components/AnalysisTab.js?v=18"></script>
     <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=15"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=18"></script>
+    <script src="app.modular.js?v=19"></script>
 </body>
 </html>
