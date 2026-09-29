@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from core_lib.utils import get_platform_root
 
-from api.flow_support import extract_triage_key_fields
+from api.helpers.triage_keys import extract_triage_key_fields
 
 router = APIRouter()
 

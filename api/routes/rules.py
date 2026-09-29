@@ -14,67 +14,21 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
 
 from core_lib.utils import get_platform_root
+
+from api.schemas import (
+    PlaceholderAliasPayload,
+    PlaceholderAliasUpdatePayload,
+    SupportivePlaybookDraftRequest,
+    SupportiveQueryPayload,
+    SupportiveQueryUpdatePayload,
+    SupportiveResultsImportRequest,
+)
 
 logger = logging.getLogger("soc.api")
 
 router = APIRouter()
-
-class SupportiveQueryPayload(BaseModel):
-    """Payload for creating/updating supportive SPL queries.
-
-    This is intentionally minimal so analysts can tune queries on the fly
-    without touching the underlying correlation rule definition.
-    """
-
-    rule_id: str = Field(..., description="Logical correlation rule identifier")
-    title: str = Field(..., description="Short name for this supportive query")
-    description: Optional[str] = Field("", description="What this query is used for")
-    spl_query: str = Field(..., description="SPL to run in Splunk or another system")
-
-
-class SupportivePlaybookDraftRequest(BaseModel):
-    case_id: str = Field(..., description="Case used to ground the draft playbook")
-
-
-class SupportiveResultsImportRequest(BaseModel):
-    case_id: str = Field(..., description="Case used to ground the draft playbook")
-    content: str = Field(..., min_length=1, max_length=2_000_000, description="Pasted or uploaded Splunk results")
-    filename: Optional[str] = Field(None, description="Original filename, if uploaded")
-
-
-class SupportiveQueryUpdatePayload(BaseModel):
-    """Partial update payload for supportive SPL queries."""
-
-    rule_id: Optional[str] = Field(None, description="Logical correlation rule identifier")
-    title: Optional[str] = Field(None, description="Short name for this supportive query")
-    description: Optional[str] = Field(None, description="What this query is used for")
-    spl_query: Optional[str] = Field(None, description="SPL to run in Splunk or another system")
-
-
-class PlaceholderAliasPayload(BaseModel):
-    """Payload for creating/updating placeholder aliases.
-
-    Aliases let analysts define logical names (e.g., "host", "dest",
-    "user") that map to one or more notable fields without touching
-    code. These are consumed by the frontend when rendering supportive
-    queries with $placeholder$ tokens.
-    """
-
-    alias: str = Field(..., description="Logical placeholder name (e.g., host, dest, user)")
-    fields: List[str] = Field(..., description="Candidate field names to resolve values from")
-    description: Optional[str] = Field("", description="Human-readable description of this alias")
-
-
-class PlaceholderAliasUpdatePayload(BaseModel):
-    """Partial update payload for placeholder aliases."""
-
-    alias: Optional[str] = Field(None, description="Logical placeholder name (e.g., host, dest, user)")
-    fields: Optional[List[str]] = Field(None, description="Candidate field names to resolve values from")
-    description: Optional[str] = Field(None, description="Human-readable description of this alias")
-
 
 
 def _rebuild_placeholder_aliases_file() -> None:

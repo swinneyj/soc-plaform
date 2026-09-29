@@ -1,123 +1,16 @@
-"""Shared investigation-flow helpers for the API layer (router split).
+"""Phase-2 / supportive follow-up query building and grounding.
 
-Building blocks used by both api/main.py and the focused routers in
-api/routes/ (analyze / evidence / promote): phase-2 query planning, evidence
-entry validation, triage key-field extraction, the correlation-rule resolver,
-and the evidence payload models. Deliberately free of FastAPI app objects so
-the routers can import it without circular imports.
-"""
-
-import json
-import os
+Thin wrappers over the canonical services.analysis_service implementations
+plus the question-driven follow-up builder that assembles Phase 3+ cards
+from unresolved inquiries."""
 import re
-from datetime import datetime as _dt, timezone as _tz
-from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
-
-from core_lib.utils import get_platform_root
 from services.analysis_service import (
     extract_phase2_queries as _extract_phase2_queries_impl,
     ground_phase2_queries as _ground_phase2_queries_impl,
-    looks_like_spl_query as _looks_like_spl_query_impl,
     normalize_phase2_text as _normalize_phase2_text,
 )
-
-# Same normalization as normalize_phase2_text (lowercase, non-alphanumerics
-# -> spaces); the correlation-rule resolver depends on it.
-_normalize_rule_match_text = _normalize_phase2_text
-
-
-class JobStatus(str, Enum):
-    """Lifecycle of an async tool/job run (shared by tools + search-one)."""
-    PENDING = "pending"
-    RUNNING = "running"
-    COMPLETED = "completed"
-    FAILED = "failed"
-
-
-def _utcnow() -> "_dt":
-    """Naive UTC now — timezone-aware internally, stripped to match the
-    platform's naive-UTC storage convention (and to avoid the deprecated
-    datetime.utcnow())."""
-    return _dt.now(_tz.utc).replace(tzinfo=None)
-
-
-# Priority order for compact key-fields shown on collapsed triage cards.
-# Only fields that are present and non-empty are included.
-TRIAGE_KEY_FIELD_PRIORITY = [
-    ("host", "Host"),
-    ("destination", "Destination"),
-    ("user", "User"),
-    ("username", "User"),
-    ("ssh_file_path", "SSH File Path"),
-    ("file_path", "File Path"),
-    ("file_name", "File Name"),
-    ("process", "Process"),
-    ("parent_process", "Parent Process"),
-    ("urgency", "Urgency"),
-    ("source_ip", "Source IP"),
-    ("destination_ip", "Destination IP"),
-    ("destination_port", "Dest Port"),
-    ("source_port", "Source Port"),
-    ("owner", "Owner"),
-    ("severity", "Severity"),
-    ("risk_score", "Risk Score"),
-]
-
-
-def _field_lookup(fields: Dict[str, Any], *keys: str) -> str:
-    """Return the first non-empty string value for any of the given keys (case-insensitive)."""
-    if not fields:
-        return ""
-    # Direct hits first
-    for key in keys:
-        val = fields.get(key)
-        if val is not None and str(val).strip():
-            return str(val).strip()
-    # Case-insensitive fallback
-    lower_map = {str(k).lower(): v for k, v in fields.items()}
-    for key in keys:
-        val = lower_map.get(key.lower())
-        if val is not None and str(val).strip():
-            return str(val).strip()
-    return ""
-
-
-def extract_triage_key_fields(fields: Dict[str, Any], raw_fields: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
-    """Build a compact ordered dict of high-value fields for triage card previews.
-
-    Pulls from canonical parsed fields first, then raw_fields as a fallback so
-    rule-specific values (SSH File Path, process, etc.) surface even when the
-    original paste used slightly different labels.
-    """
-    merged: Dict[str, Any] = {}
-    if raw_fields and isinstance(raw_fields, dict):
-        merged.update(raw_fields)
-    if fields and isinstance(fields, dict):
-        merged.update(fields)
-
-    result: Dict[str, str] = {}
-    seen_labels: set = set()
-    host_val = _field_lookup(merged, "host", "Host")
-    dest_val = _field_lookup(merged, "destination", "Destination", "dest")
-
-    for key, label in TRIAGE_KEY_FIELD_PRIORITY:
-        if label in seen_labels:
-            continue
-        value = _field_lookup(merged, key)
-        if not value:
-            continue
-        # Skip Destination when it is identical to Host (common on endpoint notables)
-        if label == "Destination" and host_val and value.lower() == host_val.lower():
-            continue
-        # Skip Username duplicate when User already present
-        if label == "User" and "User" in seen_labels:
-            continue
-        result[label] = value
-        seen_labels.add(label)
-    return result
 
 PHASE_SPECIFIC_SUPPORTIVE_QUERIES = {
     "linux_ssh_key_creation": [
@@ -144,9 +37,6 @@ def _extract_phase2_queries(response_text: str) -> List[Dict[str, Any]]:
     return _extract_phase2_queries_impl(response_text)
 
 
-def _looks_like_spl_query(query_text: str) -> bool:
-    return _looks_like_spl_query_impl(query_text)
-
 
 def _already_run_supportive_titles(supportive_results=None) -> set:
     """Titles that already have saved investigation evidence for this case."""
@@ -168,51 +58,6 @@ def _already_run_supportive_titles(supportive_results=None) -> set:
             titles.add(_normalize_phase2_text(title))
     return titles
 
-
-def _load_data_source_catalog() -> Dict[str, Any]:
-    """Load optional data_source_catalog.json from platform root for prompt grounding."""
-    candidates = [
-        os.path.join(get_platform_root(), "data_source_catalog.json"),
-        os.path.join(os.path.dirname(get_platform_root()), "data_source_catalog.json"),
-    ]
-    for path in candidates:
-        try:
-            if os.path.isfile(path):
-                with open(path, "r", encoding="utf-8") as fh:
-                    data = json.load(fh)
-                if isinstance(data, dict):
-                    return data
-        except Exception:
-            continue
-    return {}
-
-
-def _format_catalog_for_prompt(catalog: Dict[str, Any], rule_id: str = "") -> str:
-    """Compact catalog slice for the analysis prompt."""
-    if not catalog:
-        return ""
-    lines = ["=== DATA SOURCE CATALOG (allowed indexes / conventions) ==="]
-    rule_map = catalog.get("rule_index_map") or {}
-    allowed = []
-    if rule_id and isinstance(rule_map, dict):
-        allowed = rule_map.get(rule_id) or rule_map.get((rule_id or "").strip()) or []
-    if allowed:
-        lines.append(f"Preferred indexes for rule '{rule_id}': {', '.join(allowed)}")
-    for src in (catalog.get("sources") or [])[:8]:
-        idx = src.get("index") or ""
-        st = src.get("sourcetypes") or []
-        notes = (src.get("notes") or "")[:200]
-        st_s = ", ".join(st[:4]) if isinstance(st, list) else str(st)
-        lines.append(f"- index={idx} sourcetypes=[{st_s}] {notes}".strip())
-    conventions = catalog.get("placeholder_conventions") or {}
-    if conventions:
-        lines.append("Placeholder conventions:")
-        for k, v in list(conventions.items())[:6]:
-            lines.append(f"  ${k}$: {v}")
-    lines.append(
-        "Do not invent indexes, sourcetypes, or field names outside this catalog and the supportive SPL templates."
-    )
-    return "\n".join(lines)
 
 
 def _ground_phase2_queries(
@@ -245,25 +90,6 @@ def _ground_phase2_queries(
 # Earlier copies here had drifted (wording, bold markers) and are deleted.
 # Do not reintroduce inline copies — import from the service or extend it.
 
-
-def _evidence_entry_is_valid(entry) -> bool:
-    """Decide whether an evidence payload entry is worth persisting.
-
-    Entries with an explicit failure/no-result status are always valid even
-    with an empty result body: a legitimate 0-event query or an unavailable
-    data source is real execution evidence, not a dropped save. Only a blank
-    'success' entry (nothing observed, nothing queried) is skipped.
-    """
-    if not (getattr(entry, "query_title", "") or "").strip():
-        return False
-    if (getattr(entry, "result_text", "") or "").strip():
-        return True
-    if (getattr(entry, "analyst_summary", "") or "").strip():
-        return True
-    if (getattr(entry, "query_text", "") or "").strip():
-        return True
-    status = (getattr(entry, "result_status", None) or "success").strip().lower()
-    return status not in ("", "success")
 
 
 def _rescope_variant_spl(spl: str, phase_number: int) -> str:
@@ -481,71 +307,3 @@ def _annotate_phase2_targets(phase2_queries, investigation_state):
     return phase2_queries
 
 
-class InvestigationEvidenceEntryPayload(BaseModel):
-    query_title: str = Field(..., description="Short title for the investigative query or evidence item")
-    query_text: Optional[str] = Field("", description="SPL or other query text used to gather the evidence")
-    result_text: Optional[str] = Field("", description="Key rows, findings, or summary pasted by the analyst")
-    analyst_summary: Optional[str] = Field("", description="Analyst takeaway or interpretation of the evidence")
-    finding_type: Optional[str] = Field("neutral", description="Advisory analyst label, stored for the audit trail only — the AI's per-card assessment decides the evidence direction")
-    question_resolution: Optional[str] = Field("not_resolved", description="Advisory analyst label, stored for the audit trail only — targeted inquiries resolve when substantive evidence answers them")
-    target_questions: List[str] = Field(default_factory=list, description="Open inquiries targeted by this evidence")
-    result_status: Optional[str] = Field("success", description="Execution status: success, no_results, data_source_unavailable, query_failed, not_run, benign_result")
-    collection_time: Optional[str] = Field(None, description="ISO timestamp when evidence was collected")
-    source_system: Optional[str] = Field("splunk", description="Telemetry source system (splunk, mde, defender, edr, firewall, etc.)")
-
-
-class InvestigationEvidenceBatchPayload(BaseModel):
-    entries: List[InvestigationEvidenceEntryPayload] = Field(default_factory=list)
-    source_system: str = Field("phase2_manual", description="Source or stage label for this evidence batch")
-    replace_existing: bool = Field(True, description="Replace existing evidence for this case and source_system before saving")
-
-
-def _resolve_correlation_rule(db, correlation_model, anchor_text: str):
-    anchor = _normalize_rule_match_text(anchor_text)
-    if not anchor:
-        return None
-
-    rules = db.query(correlation_model).filter(correlation_model.enabled == 1).all()
-
-    for rule in rules:
-        name = _normalize_rule_match_text(rule.rule_name or "")
-        if name and name == anchor:
-            return rule
-
-    for rule in rules:
-        name = _normalize_rule_match_text(rule.rule_name or "")
-        if not name:
-            continue
-        if anchor in name or name in anchor:
-            return rule
-
-    anchor_tokens = {
-        token for token in anchor.split()
-        if token not in {"endpoint", "network", "rule", "alert", "detection"}
-    }
-    if not anchor_tokens:
-        return None
-
-    best_rule = None
-    best_score = 0
-    for rule in rules:
-        name_tokens = {
-            token for token in _normalize_rule_match_text(rule.rule_name or "").split()
-            if token not in {"endpoint", "network", "rule", "alert", "detection"}
-        }
-        if not name_tokens:
-            continue
-
-        overlap = anchor_tokens & name_tokens
-        if not overlap:
-            continue
-
-        score = len(overlap)
-        if anchor_tokens.issubset(name_tokens):
-            score += 10
-
-        if score > best_score:
-            best_rule = rule
-            best_score = score
-
-    return best_rule

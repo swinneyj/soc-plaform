@@ -14,21 +14,21 @@ import sys
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from pydantic import BaseModel, Field
 
 from core_lib.utils import get_platform_root
 from services import splunk_boundary
 
 from api.auth import require_api_key
-from api.flow_support import (
+from api.schemas import (
     InvestigationEvidenceBatchPayload,
     InvestigationEvidenceEntryPayload,
     JobStatus,
-    _utcnow,
+    SplunkSearchOnePayload,
 )
+from db.util import utcnow_naive
 from api.routes.evidence import save_case_evidence
 
 logger = logging.getLogger("soc.api")
@@ -91,25 +91,6 @@ def purge_splunk_batch(batch_id: str):
         return splunk_boundary.purge_batch(batch_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-
-class SplunkSearchOnePayload(BaseModel):
-    """One-click read-only search execution (Phase 3, mock-first).
-
-    Either ``spl`` (a raw template, e.g. an editable Phase 2 card) or a
-    ``query_title`` matching one of the rule's stored supportive queries.
-    Placeholder substitution happens server-side from the case's notable
-    fields so the run is reproducible and auditable.
-    """
-
-    case_id: str = Field(..., description="Triage case whose notable fields ground the query")
-    query_title: str = Field(..., description="Title of the supportive query to run (also the evidence ledger key)")
-    spl: Optional[str] = Field(None, description="Optional raw SPL template override; falls back to the rule's stored query")
-    earliest: str = Field("-7d", description="SPL earliest time bound")
-    latest: str = Field("now", description="SPL latest time bound")
-    finding_type: Optional[str] = Field("neutral", description="Advisory analyst label; the AI assessment decides the evidence direction")
-    question_resolution: Optional[str] = Field("not_resolved", description="Advisory analyst label; targeted inquiries resolve from substantive evidence")
-    target_questions: List[str] = Field(default_factory=list, description="Open inquiries this run targets")
 
 
 
@@ -268,7 +249,7 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
         tool_run.stdout = json.dumps({"result_status": result_status, "row_count": row_count})
         tool_run.stderr = error or ""
         tool_run.exit_code = 0 if error is None else -1
-        tool_run.completed_at = _utcnow()
+        tool_run.completed_at = utcnow_naive()
         # Re-runs replace the prior auto-run row for the same (case, query).
         db.query(SupportiveQueryResult).filter(
             SupportiveQueryResult.case_id == case_id,

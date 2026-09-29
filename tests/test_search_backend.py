@@ -282,7 +282,7 @@ def test_render_query_template_reports_unresolved_tokens():
 
 def test_embedded_earliest_overrides_caller_window(backend):
     # Re-check variants embed a phase-scoped window in the SPL text itself
-    # (api.main._rescope_variant_spl); it must win over the job-level window.
+    # (api.helpers.phase2._rescope_variant_spl); it must win over the job-level window.
     assert len(backend.search("sourcetype=linux_secure user=bjones", earliest="all")) == 3
     rows = backend.search("sourcetype=linux_secure user=bjones earliest=-2d", earliest="all")
     assert len(rows) == 1  # the 3-day-old and 30-day-old events drop out

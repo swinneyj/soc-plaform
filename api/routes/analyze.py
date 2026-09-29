@@ -8,10 +8,8 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException
 
 from core_lib.utils import get_platform_root
 from services.analysis_service import (
@@ -29,7 +27,8 @@ from services.investigation_state import (
     _serialize_investigation_state_record,
     _upsert_investigation_state,
 )
-from api.flow_support import (
+from api.helpers.correlation import _normalize_rule_match_text, _resolve_correlation_rule
+from api.helpers.phase2 import (
     PHASE_SPECIFIC_SUPPORTIVE_QUERIES,
     _already_run_supportive_titles,
     _annotate_phase2_targets,
@@ -37,9 +36,8 @@ from api.flow_support import (
     _build_supportive_phase2_fallback,
     _extract_phase2_queries,
     _ground_phase2_queries,
-    _normalize_rule_match_text,
-    _resolve_correlation_rule,
 )
+from api.schemas import AnalyzeRequest
 
 
 def _utcnow():
@@ -54,13 +52,6 @@ logger = logging.getLogger("soc.api")
 router = APIRouter()
 
 
-class AnalyzeRequest(BaseModel):
-    case_id: str
-    model: str = ""  # empty = auto-resolve an installed model at call time
-    context: str = ""
-    prior_analysis: str = ""
-    analysis_stage: str = "initial"
-    analysis_phase: int = 1
 @router.post("/api/db/analyze", tags=["Database"])
 def analyze_case(request: AnalyzeRequest):
     try:

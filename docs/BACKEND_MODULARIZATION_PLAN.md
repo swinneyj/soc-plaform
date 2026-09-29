@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-11  
 **Status:** Phase 1 landed 2026-09-29 (further phases planned)  
-**Progress (Sept 29):** first extraction done — `api/routes/promote.py`, `analyze.py`, `evidence.py`, `closure.py` plus shared `api/flow_support.py` (helpers + payload models), all registered in `api/main.py` via `include_router` (main.py 6,410 → 4,650 lines). Deviation from the target layout below: shared helpers live in `api/flow_support.py` (not `api/helpers/`), and payload models stayed with their flow instead of `api/schemas.py` (`api/schemas.py` remains a dead zero-reference duplicate). Dead `api/db_routes.py` retired to `scripts/attic/db_routes.py`.  
+**Progress (Sept 29):** split COMPLETE — every endpoint cluster lives in `api/routes/*` (`system`, `promote`, `analyze`, `evidence`, `closure`, `notables`, `triage`, `splunk`, `rules`, `tools`, `code_review`); shared payload models are centralized in `api/schemas.py` (the Piece-A duplicate is now the live single source of truth); pure helpers live in `api/helpers/*` (triage_keys, phase2, evidence, correlation — the `helpers/` split of the transient `api/flow_support.py`); the auth seam is `api/auth.py`; the naive-UTC clock is `db/util.py`. `api/main.py` is a ~155-line app shell (6,410 → 155). Dead `api/db_routes.py` retired to `scripts/attic/db_routes.py`; three dead flow helpers (`_load_data_source_catalog`, `_format_catalog_for_prompt`, the `_looks_like_spl_query` wrapper) deleted.  
 **Goal:** Same treatment as `docs/FRONTEND_MODULARIZATION.md` — take a 5314-line monolith and split it into domain-owned files without downtime. Additive first, then cutover.
 
 ## Current state

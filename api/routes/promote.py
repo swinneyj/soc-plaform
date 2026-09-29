@@ -12,14 +12,9 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 
 from core_lib.utils import get_platform_root
-from api.flow_support import _field_lookup, _resolve_correlation_rule
-
-
-def _utcnow():
-    """Naive UTC now (platform convention)."""
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+from api.helpers.correlation import _resolve_correlation_rule
+from api.helpers.triage_keys import _field_lookup
+from db.util import utcnow_naive
 
 
 router = APIRouter()
@@ -163,12 +158,12 @@ def promote_notable_to_triage(event_id: int):
             confidence_score=confidence,
             analysis_summary=analysis_summary,
             remediation_steps=remediation_steps,
-            triaged_at=event.timestamp or _utcnow(),
+            triaged_at=event.timestamp or utcnow_naive(),
         )
         db.add(triage_case)
 
         payload["promoted_case_id"] = case_id
-        payload["promoted_at"] = _utcnow().isoformat()
+        payload["promoted_at"] = utcnow_naive().isoformat()
         event.raw = json.dumps(payload)
 
         db.commit()

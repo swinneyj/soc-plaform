@@ -33,7 +33,7 @@ If you are new to this repo, read in this order:
 ### Runtime and App Surface
 
 - `api\`
-  FastAPI service layer — `api/main.py` (app, lifespan, API-key middleware, tools/jobs/reports/registry, notables, placeholder-aliases, supportive-queries, rules, search-one, code-review routes) plus focused routers in `api/routes\` (`system`, `promote`, `analyze`, `evidence`, `closure`) and shared helpers + payload models in `api/flow_support.py`
+  FastAPI service layer — `api/main.py` (thin app shell: lifespan, API-key middleware, router registration, static mount) + focused routers in `api/routes\` (`system`, `promote`, `analyze`, `evidence`, `closure`, `notables`, `triage`, `splunk`, `rules`, `tools`, `code_review`), shared payload models in `api/schemas.py`, pure helpers in `api/helpers\`, auth seam in `api/auth.py`
 - `db\`
   SQLAlchemy models and DB wiring
 - `services\`

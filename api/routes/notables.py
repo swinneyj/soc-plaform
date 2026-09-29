@@ -13,57 +13,13 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
 
 from core_lib.utils import get_platform_root
 
-from api.flow_support import _utcnow
+from api.schemas import NotableFetchSplRequest, PastedNotableRequest
+from db.util import utcnow_naive
 
 router = APIRouter()
-
-class PastedNotableRequest(BaseModel):
-    raw_text: str = Field(..., description="Pasted notable text from Splunk Incident Review")
-    redaction_enabled: bool = Field(
-        True,
-        description="Whether to apply tokenizer-style redaction to the pasted notable",
-    )
-    historical: bool = Field(
-        False,
-        description="Whether this pasted notable represents a closed/historical case",
-    )
-
-
-class NotableFetchSplRequest(BaseModel):
-    """Optional filters used to build a clean notable-fetch SPL query.
-
-    Provide whatever you know (rule name / search_name, host/dest, time
-    window). The returned SPL is meant to be run in Splunk, then the
-    Statistics table row(s) copied back into the paste box as Label: value
-    lines — far more reliable than copying the Incident Review detail pane
-    (which glues UI badges into field values).
-
-    Primary path uses the notable index (works when `incident_review` is
-    empty for the analyst role). A secondary incident_review variant is
-    also returned for environments where that macro is available.
-    """
-
-    correlation_search: Optional[str] = Field(
-        None, description="ES correlation search / search_name / rule title"
-    )
-    rule_name: Optional[str] = Field(None, description="Notable rule_name / title")
-    dest: Optional[str] = Field(None, description="Destination / host (supports trailing * wildcard)")
-    host: Optional[str] = Field(None, description="Host field if different from dest")
-    user: Optional[str] = Field(None, description="User / account name")
-    event_id: Optional[str] = Field(None, description="Splunk/ES event_id if known")
-    rule_id: Optional[str] = Field(None, description="ES rule_id (...@@notable@@...) if known")
-    earliest: str = Field("-7d", description="SPL earliest (e.g. -24h, -7d, 09/10/2026:00:00:00)")
-    latest: str = Field("now", description="SPL latest")
-    max_rows: int = Field(20, ge=1, le=200, description="head N rows")
-    notable_index: str = Field(
-        "notable",
-        description="Index that holds notable events (default: notable). Some sites use risk or a custom index.",
-    )
-
 
 def build_notable_fetch_spl(req: "NotableFetchSplRequest") -> Dict[str, Any]:
     """Build production SPL for open notables with a flawless paste_block.
@@ -1115,7 +1071,7 @@ def render_notable_fields(parsed_fields: Dict[str, str]) -> str:
 
 def parse_notable_timestamp(value: str):
     if not value:
-        return _utcnow()
+        return utcnow_naive()
 
     candidate = value.strip()
     try:
@@ -1128,7 +1084,7 @@ def parse_notable_timestamp(value: str):
         except ValueError:
             pass
 
-    return _utcnow()
+    return utcnow_naive()
 
 
 def build_notable_dedup_key(fields: Dict[str, str], sanitized_text: str = "") -> Optional[str]:
@@ -1179,7 +1135,7 @@ def save_notable_artifacts(platform_root: str, sanitized_text: str, mapping: Dic
     active_dir = os.path.join(platform_root, "Data", "Active_Workspace")
     os.makedirs(active_dir, exist_ok=True)
 
-    timestamp = _utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = utcnow_naive().strftime("%Y%m%d_%H%M%S")
     text_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.txt")
     fields_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.fields.json")
     mapping_path = os.path.join(active_dir, f"Pasted_Notable_{timestamp}.map.json")
@@ -1484,7 +1440,7 @@ def paste_notable(request: PastedNotableRequest):
                     "sanitized_text": sanitized_text,
                     "history": sanitized_history,
                     "parse_assessment": parse_assessment,
-                    "saved_at": _utcnow().isoformat(),
+                    "saved_at": utcnow_naive().isoformat(),
                     "artifact_paths": artifact_paths,
                     "historical": request.historical,
                     "segment_index": index,
@@ -1743,7 +1699,7 @@ def backfill_historical_closure_notes():
 
         generated = []
         skipped = []
-        now = _utcnow()
+        now = utcnow_naive()
         for event in rows:
             try:
                 payload = json.loads(event.raw or "{}")

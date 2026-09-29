@@ -18,21 +18,23 @@ tools_dir = os.path.join(os.path.dirname(__file__), '..', 'Tools')
 sys.path.insert(0, tools_dir)
 
 logger = logging.getLogger("soc.api")
-# Router split: shared flow helpers live in api.flow_support and the
-# promote / analyze / evidence / closure endpoints live in api.routes.*.
-# The names re-exported here keep existing callers (including the test
-# suite) working against api.main unchanged.
-from api.flow_support import (  # noqa: F401
-    TRIAGE_KEY_FIELD_PRIORITY,
-    JobStatus,
-    _utcnow,
+# Router split: shared models live in api.schemas, pure helpers in
+# api.helpers.*, and the endpoint clusters in api.routes.*. The names
+# re-exported here keep existing callers (including the test suite) working
+# against api.main unchanged.
+from api.schemas import (  # noqa: F401
     InvestigationEvidenceBatchPayload,
     InvestigationEvidenceEntryPayload,
-    _build_question_driven_followup_queries,
-    _evidence_entry_is_valid,
-    _field_lookup,
-    extract_triage_key_fields,
+    JobStatus,
 )
+from api.helpers.evidence import _evidence_entry_is_valid  # noqa: F401
+from api.helpers.phase2 import _build_question_driven_followup_queries  # noqa: F401
+from api.helpers.triage_keys import (  # noqa: F401
+    TRIAGE_KEY_FIELD_PRIORITY,
+    extract_triage_key_fields,
+    _field_lookup,
+)
+from db.util import utcnow_naive as _utcnow  # noqa: F401
 from api.routes.analyze import router as _analyze_router
 from api.routes.closure import router as _closure_router
 from api.routes.code_review import router as _code_review_router

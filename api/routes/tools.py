@@ -12,12 +12,12 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
 
 from core_lib.utils import get_platform_root, get_reports_dir
 
 from api.auth import require_api_key
-from api.flow_support import JobStatus, _utcnow
+from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
+from db.util import utcnow_naive
 
 logger = logging.getLogger("soc.api")
 
@@ -28,7 +28,6 @@ jobs: Dict[str, Dict[str, Any]] = {}
 deleted_job_ids = set()
 STALE_JOB_SECONDS = 600
 
-# Pydantic Models
 def _job_status_value(status: Any) -> str:
     """Normalize enum instances and legacy persisted enum strings."""
     if isinstance(status, JobStatus):
@@ -37,33 +36,6 @@ def _job_status_value(status: Any) -> str:
     if value.startswith("JobStatus."):
         value = value.split(".", 1)[1].lower()
     return value.lower()
-
-class ToolRequest(BaseModel):
-    tool_name: str = Field(..., description="Name of the tool to execute")
-    arguments: Optional[Dict[str, str]] = Field(default={}, description="Tool CLI arguments")
-    silent: bool = Field(default=False, description="Suppress stdout output")
-
-class JobResponse(BaseModel):
-    job_id: str
-    status: JobStatus
-    tool_name: str
-    created_at: str
-    completed_at: Optional[str] = None
-    stdout: Optional[str] = None
-    stderr: Optional[str] = None
-    exit_code: Optional[int] = None
-    arguments: Optional[Dict[str, Any]] = None
-    artifacts: List[str] = Field(default_factory=list)
-
-class ToolInfo(BaseModel):
-    name: str
-    file_name: str
-    category: str
-    description: str
-    path: str
-    arguments: Optional[List[Dict[str, Any]]] = None
-
-
 
 
 def load_registry() -> List[Dict]:
@@ -177,7 +149,7 @@ def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent
         "stderr": result["stderr"],
         "exit_code": result["exit_code"],
         "artifacts": result.get("artifacts", []),
-        "completed_at": _utcnow().isoformat()
+        "completed_at": utcnow_naive().isoformat()
     })
     _persist_tool_run(jobs[job_id])
 
@@ -271,7 +243,7 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
         "job_id": job_id,
         "status": JobStatus.PENDING.value,
         "tool_name": request.tool_name,
-        "created_at": _utcnow().isoformat(),
+        "created_at": utcnow_naive().isoformat(),
         "completed_at": None,
         "stdout": None,
         "stderr": None,
@@ -336,7 +308,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
             row_status = _job_status_value(row.status)
             row_stderr = row.stderr
             if row_status in {JobStatus.PENDING.value, JobStatus.RUNNING.value} and row.created_at:
-                age_seconds = (_utcnow() - row.created_at).total_seconds()
+                age_seconds = (utcnow_naive() - row.created_at).total_seconds()
                 if age_seconds > STALE_JOB_SECONDS:
                     row_status = JobStatus.FAILED.value
                     row_stderr = (row_stderr or "") + ("\n" if row_stderr else "") + "Job did not report completion and was marked interrupted after 10 minutes."
@@ -345,7 +317,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
                         cleanup_db = _SessionLocal()
                         row.status = row_status
                         row.stderr = row_stderr
-                        row.completed_at = _utcnow()
+                        row.completed_at = utcnow_naive()
                         cleanup_db.merge(row)
                         cleanup_db.commit()
                         cleanup_db.close()

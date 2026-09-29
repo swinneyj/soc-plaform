@@ -911,13 +911,11 @@ class TestPlaybookFamilyGuard:
         (tmp_path / "supportive_rules.json").write_text(
             json.dumps({"rules": rules}), encoding="utf-8"
         )
-        # The router split gave each module its own get_platform_root
-        # binding; patch the two that read the catalog so the load sees tmp_path.
-        import api.flow_support as flow_support
+        # Analyze owns the supportive_rules.json catalog read through its own
+        # get_platform_root binding; patch it so the load sees tmp_path.
         import api.routes.analyze as analyze_routes
 
         fake_root = lambda: str(tmp_path)  # noqa: E731
-        monkeypatch.setattr(flow_support, "get_platform_root", fake_root)
         monkeypatch.setattr(analyze_routes, "get_platform_root", fake_root)
 
     @staticmethod

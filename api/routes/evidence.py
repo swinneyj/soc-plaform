@@ -18,10 +18,8 @@ from services.investigation_state import (
     _serialize_investigation_state_record,
     _upsert_investigation_state,
 )
-from api.flow_support import (
-    InvestigationEvidenceBatchPayload,
-    _evidence_entry_is_valid,
-)
+from api.helpers.evidence import _evidence_entry_is_valid
+from api.schemas import InvestigationEvidenceBatchPayload
 
 
 def _utcnow():
