@@ -34,5 +34,10 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-dev.txt
 
+      - name: Import lint (undefined names)
+        # Fails any F821 before pytest runs — 3.14's lazy annotations mask
+        # missing typing imports locally (see scripts/check_undefined_names.sh).
+        run: bash scripts/check_undefined_names.sh
+
       - name: Run pytest
         run: python -m pytest
