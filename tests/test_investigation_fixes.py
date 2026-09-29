@@ -23,6 +23,7 @@ PLATFORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLATFORM_ROOT))
 
 import api.main as api_main  # noqa: E402
+import services.evidence_service as esvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
 
 
@@ -527,6 +528,102 @@ class TestRunSplunkSearchInlineStatus:
 
     def test_midflight_running_chip_observed(self):
         self._run_scenario("running_to_complete_transitions")
+
+
+class TestNotableParsing:
+    """Direct coverage for services/evidence_service.py (was referenced by
+    zero test files): the paste parsers, field normalization, entity
+    extraction, and the Stage-1 parse assessment scoring."""
+
+    def test_normalize_pasted_text_cleans_line_endings_and_invisibles(self):
+        raw = "\ufeffTitle: X\u200b\r\nUser: bjones\rHost: srv1\r"
+        out = esvc.normalize_pasted_text(raw)
+        assert out == "Title: X\nUser: bjones\nHost: srv1"
+
+    def test_parse_json_notable_stringifies_and_skips_nulls(self):
+        raw = '{"user": "bjones", "count": 3, "none": null}'
+        assert esvc.parse_json_notable(raw) == {"user": "bjones", "count": "3"}
+        assert esvc.parse_json_notable("not json") == {}
+
+    def test_parse_delimited_tsv_row(self):
+        raw = "host\tuser\t_time\nsrv1\tbjones\t2026-09-25"
+        assert esvc.parse_delimited_notable(raw) == {
+            "host": "srv1", "user": "bjones", "_time": "2026-09-25",
+        }
+
+    def test_parse_delimited_rejects_unrecognized_headers(self):
+        assert esvc.parse_delimited_notable("a,b,c\n1,2,3") == {}
+
+    def test_parse_key_value_pairs_quoted_and_unquoted(self):
+        raw = 'src_ip=10.0.0.5 user="bjones jones" app=ssh, action=success'
+        parsed = esvc.parse_key_value_pairs(raw)
+        assert parsed["src_ip"] == "10.0.0.5"
+        assert parsed["user"] == "bjones jones"
+        assert parsed["app"] == "ssh"
+        assert parsed["action"] == "success"
+
+    def test_parse_line_based_notable_skips_comments(self):
+        raw = "User: bjones\n# internal note\nHost: srv1"
+        assert esvc.parse_line_based_notable(raw) == {"User": "bjones", "Host": "srv1"}
+
+    def test_comprehensive_merges_line_and_kv_with_normalization(self):
+        raw = "User: bjones\nsrc_ip=10.0.0.5"
+        fields = esvc.parse_pasted_notable_comprehensive(raw)
+        assert fields["user"] == "bjones"
+        assert fields["src_user"] == "bjones"  # cross-field sync
+        assert fields["src_ip"] == "10.0.0.5"
+
+    def test_normalize_aliases_and_cross_field_sync(self):
+        fields = esvc.normalize_notable_fields({
+            "Rule Name": "Impossible Travel",
+            "host": "srv1",
+            "user": "bjones",
+            "source_ip": "10.0.0.5",
+            "destination_ip": "10.0.0.9",
+        })
+        assert fields["correlation_search"] == "Impossible Travel"
+        assert fields["destination"] == "srv1"
+        assert fields["src_user"] == "bjones"
+        assert fields["src_ip"] == "10.0.0.5"
+        assert fields["dest_ip"] == "10.0.0.9"
+
+    def test_extract_entities_respects_existing_fields(self):
+        raw = "from 10.0.0.5 to 10.0.0.9 on web01.corp.internal"
+        fields = esvc.extract_entities_from_raw(raw, {})
+        assert fields["source_ip"] == "10.0.0.5"
+        assert fields["destination_ip"] == "10.0.0.9"
+        assert fields["host"].startswith("web01")
+        assert fields["destination"] == fields["host"]
+        # Existing values are never overwritten.
+        kept = esvc.extract_entities_from_raw(raw, {"source_ip": "172.16.0.1"})
+        assert kept["source_ip"] == "172.16.0.1"
+
+    def test_parse_assessment_full_anchors_is_normal_mode(self):
+        fields = {
+            "host": "srv1", "user": "bjones", "source_ip": "10.0.0.5",
+            "process": "sshd", "time": "2026-09-25T00:00:00",
+        }
+        assessment = esvc.build_parse_assessment(fields)
+        assert assessment["score"] == 100
+        assert assessment["mode"] == "normal"
+        assert assessment["missing_anchors"] == []
+        assert assessment["generic_queries"] == []
+
+    def test_parse_assessment_empty_fields_is_extraction_mode(self):
+        assessment = esvc.build_parse_assessment({})
+        assert assessment["score"] == 40
+        assert assessment["mode"] == "extraction"
+        assert len(assessment["missing_anchors"]) == 5
+        # Enrichment drafts carry unresolved placeholders for the analyst.
+        assert "$host$" in assessment["generic_queries"][0]["spl"]
+
+    def test_parse_assessment_partial_fields_is_enrichment_band(self):
+        assessment = esvc.build_parse_assessment({"host": "srv1", "user": "bjones"})
+        assert assessment["score"] == 70
+        assert assessment["mode"] == "enrichment"
+        assert assessment["missing_anchors"] == [
+            "network IP", "process/executable", "event timestamp",
+        ]
 
 
 if __name__ == "__main__":
