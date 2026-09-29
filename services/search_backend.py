@@ -9,9 +9,10 @@ normalized rows. Two implementations ship:
   of SPL the platform's supportive queries actually use: base-term and
   key=value search, ``| search k=v``, ``| where k OP v`` comparisons,
   ``| stats count (by field)``, and ``| head N``.
-- RealSplunkBackend: intentionally unimplemented until the Splunk REST
-  integration lands. Selecting it fails loudly instead of silently
-  pretending.
+- RealSplunkBackend: read-only Splunk REST connector. Executes SPL via the
+  synchronous ``/services/search/jobs/export`` endpoint and normalizes rows
+  to the same shape. Requires ``SPLUNK_URL`` + ``SPLUNK_TOKEN`` (bearer);
+  unconfigured construction fails loudly instead of silently pretending.
 
 Choose with the ``SEARCH_BACKEND`` environment variable::
 
@@ -23,10 +24,12 @@ can persist results directly: ``source``, ``sourcetype``, ``host``,
 ``timestamp`` (ISO string), ``raw``.
 """
 
+import csv
+import io
 import json
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -303,17 +306,142 @@ class MockSplunkBackend:
         }
 
 
+class SplunkSearchError(RuntimeError):
+    """Raised when the Splunk REST search is unconfigured or fails."""
+
+
 class RealSplunkBackend:
-    """Placeholder for the Phase 3 Splunk REST integration."""
+    """Read-only Splunk REST connector (Phase 3 real integration).
 
-    def __init__(self, *args: Any, **kwargs: Any):
-        raise NotImplementedError(
-            "RealSplunkBackend is not wired yet. Set SEARCH_BACKEND=mock for "
-            "local development, or implement the Splunk REST connector."
+    Executes SPL through ``POST {SPLUNK_URL}/services/search/jobs/export`` —
+    the synchronous export endpoint runs the search and streams results in a
+    single round-trip (no job-create/poll loop) — and normalizes each result
+    row to the shape the mock returns.
+
+    Configuration (BWS/keychain-injected env, never stored in the DB):
+      ``SPLUNK_URL``    base URL, e.g. ``https://splunk.example.com:8089``
+      ``SPLUNK_TOKEN``  bearer token
+    """
+
+    _NO_PREFIX = ("search ", "savedsearch ", "loadjob ", "rest ", "makeresults ")
+
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        token: Optional[str] = None,
+        timeout: Optional[float] = None,
+        session: Any = None,
+    ):
+        self._base_url = (base_url or os.environ.get("SPLUNK_URL") or "").strip().rstrip("/")
+        self._token = (token or os.environ.get("SPLUNK_TOKEN") or "").strip()
+        self._timeout = float(
+            timeout or os.environ.get("SEARCH_ONE_TIMEOUT_SECONDS", "60")
         )
+        # Test seam: a duck-typed requests.Session. Real runs create one lazily
+        # so the mock path stays dependency-free at import time.
+        self._session = session
+        if not self._base_url or not self._token:
+            raise SplunkSearchError(
+                "RealSplunkBackend is not configured: set SPLUNK_URL and "
+                "SPLUNK_TOKEN (BWS/keychain-injected env), or use "
+                "SEARCH_BACKEND=mock."
+            )
 
-    def search(self, *args: Any, **kwargs: Any) -> List[Dict[str, Any]]:  # pragma: no cover
-        raise NotImplementedError
+    @classmethod
+    def _export_search_expr(cls, spl: str) -> str:
+        """Splunk search strings need a generating command; the platform's
+        templates are bare term searches, so prepend ``search`` unless the
+        SPL already starts with a pipeline or generating command."""
+        stripped = (spl or "").strip()
+        if stripped.startswith("|") or stripped.lower().startswith(cls._NO_PREFIX):
+            return stripped
+        return "search " + stripped
+
+    @staticmethod
+    def _normalize_row(row: Dict[str, Any]) -> Dict[str, str]:
+        fields = {
+            str(k): ("" if v is None else str(v))
+            for k, v in row.items()
+            if k is not None
+        }
+        raw_time = fields.get("_time", "")
+        timestamp = ""
+        if raw_time:
+            try:
+                timestamp = (
+                    datetime.fromtimestamp(float(raw_time), tz=timezone.utc)
+                    .replace(tzinfo=None)
+                    .isoformat()
+                )
+            except (ValueError, OSError, OverflowError):
+                timestamp = ""
+        for key in ("source", "sourcetype", "host", "raw"):
+            fields.setdefault(key, "")
+        fields["timestamp"] = timestamp
+        return fields
+
+    def search(
+        self,
+        spl: str,
+        earliest: str = "-7d",
+        latest: str = "now",
+        limit: int = 500,
+    ) -> List[Dict[str, Any]]:
+        import requests
+
+        payload = {
+            "search": self._export_search_expr(spl),
+            "earliest_time": earliest,
+            "latest_time": latest,
+            "max_count": limit,
+            "output_mode": "csv",
+        }
+        session = self._session or requests.Session()
+        try:
+            response = session.post(
+                f"{self._base_url}/services/search/jobs/export",
+                headers={"Authorization": f"Bearer {self._token}"},
+                data=payload,
+                timeout=self._timeout,
+            )
+        except requests.RequestException as exc:
+            raise SplunkSearchError(f"Splunk request failed: {exc}") from exc
+        if response.status_code != 200:
+            snippet = (response.text or "").strip().replace("\n", " ")[:200]
+            raise SplunkSearchError(
+                f"Splunk export failed with HTTP {response.status_code}: {snippet}"
+            )
+        reader = csv.DictReader(io.StringIO(response.text or ""))
+        rows = [self._normalize_row(row) for row in reader]
+        return rows[:limit]
+
+    def execute_for_case(
+        self,
+        case_id: str,
+        rule_id: str,
+        query_title: str,
+        spl: str,
+        earliest: str = "-7d",
+        latest: str = "now",
+    ) -> Dict[str, Any]:
+        """Run one supportive query and return the persisted-result shape."""
+        rows = self.search(spl, earliest=earliest, latest=latest)
+        return {
+            "case_id": case_id,
+            "rule_id": rule_id,
+            "query_title": query_title,
+            "source_system": "splunk",
+            "raw_result": json.dumps(
+                {
+                    "backend": "splunk",
+                    "spl": spl,
+                    "earliest": earliest,
+                    "latest": latest,
+                    "row_count": len(rows),
+                    "rows": rows,
+                }
+            ),
+        }
 
 
 def get_search_backend(name: Optional[str] = None):

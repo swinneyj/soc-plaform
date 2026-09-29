@@ -12,6 +12,7 @@ import pytest
 from services.search_backend import (
     MockSplunkBackend,
     RealSplunkBackend,
+    SplunkSearchError,
     get_search_backend,
     map_search_outcome,
     summarize_search_rows,
@@ -201,8 +202,10 @@ def test_factory_rejects_unknown_backend():
         get_search_backend("elastic")
 
 
-def test_real_backend_fails_loudly():
-    with pytest.raises(NotImplementedError, match="not wired yet"):
+def test_real_backend_fails_loudly_when_unconfigured(monkeypatch):
+    monkeypatch.delenv("SPLUNK_URL", raising=False)
+    monkeypatch.delenv("SPLUNK_TOKEN", raising=False)
+    with pytest.raises(SplunkSearchError, match="SPLUNK_URL"):
         RealSplunkBackend()
 
 
@@ -305,3 +308,146 @@ def test_embedded_qualifiers_survive_pipe_ops(backend):
     )
     assert len(rows) == 1
     assert rows[0]["count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# RealSplunkBackend: read-only REST connector contract
+# ---------------------------------------------------------------------------
+
+class FakeSplunkResponse:
+    def __init__(self, text="", status_code=200):
+        self.text = text
+        self.status_code = status_code
+
+
+class FakeSplunkSession:
+    """Duck-typed requests.Session: records the request, returns a canned reply."""
+
+    def __init__(self, response=None, error=None):
+        self._response = response
+        self._error = error
+        self.calls = []
+
+    def post(self, url, headers=None, data=None, timeout=None):
+        self.calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+
+def _real_backend(session, **kwargs):
+    kwargs.setdefault("base_url", "https://splunk.example.com:8089")
+    kwargs.setdefault("token", "test-token")
+    kwargs.setdefault("timeout", 42.0)
+    return RealSplunkBackend(session=session, **kwargs)
+
+
+def test_real_backend_export_request_shape():
+    session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
+    backend = _real_backend(session)
+    backend.search("sourcetype=linux_secure user=bjones", earliest="-15m", limit=25)
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["url"] == "https://splunk.example.com:8089/services/search/jobs/export"
+    assert call["headers"] == {"Authorization": "Bearer test-token"}
+    assert call["timeout"] == 42.0
+    assert call["data"] == {
+        "search": "search sourcetype=linux_secure user=bjones",
+        "earliest_time": "-15m",
+        "latest_time": "now",
+        "max_count": 25,
+        "output_mode": "csv",
+    }
+
+
+def test_real_backend_prepends_search_command():
+    assert RealSplunkBackend._export_search_expr("user=bjones") == "search user=bjones"
+
+
+def test_real_backend_generating_commands_get_no_prefix():
+    for spl in (
+        "| stats count by user",
+        "savedsearch my_saved_search",
+        "loadjob savedsearch_id",
+        "rest /services/server/info",
+        "makeresults count=5",
+        "SEARCH user=bjones",  # case-insensitive
+    ):
+        assert RealSplunkBackend._export_search_expr(spl) == spl
+
+
+def test_real_backend_normalizes_csv_rows():
+    csv_text = (
+        "_time,source,sourcetype,host,raw\n"
+        '1758824043,/var/log/secure,linux_secure,VPN-GW-01,"sshd: action=failure user=bjones"\n'
+    )
+    backend = _real_backend(FakeSplunkSession(FakeSplunkResponse(csv_text)))
+    rows = backend.search("sourcetype=linux_secure user=bjones", earliest="-15m")
+
+    assert len(rows) == 1
+    row = rows[0]
+    # epoch 1758824043 -> naive-UTC ISO (platform timestamp convention)
+    assert row["timestamp"].startswith("2025-09-")
+    assert row["source"] == "/var/log/secure"
+    assert row["sourcetype"] == "linux_secure"
+    assert row["host"] == "VPN-GW-01"
+    assert row["raw"] == "sshd: action=failure user=bjones"
+
+
+def test_real_backend_stats_rows_get_shape_defaults():
+    csv_text = "user,count\nbjones,3\nasmith,1\n"
+    backend = _real_backend(FakeSplunkSession(FakeSplunkResponse(csv_text)))
+    rows = backend.search("sourcetype=linux_secure | stats count by user", earliest="all")
+
+    assert rows[0] == {
+        "user": "bjones",
+        "count": "3",
+        "source": "",
+        "sourcetype": "",
+        "host": "",
+        "raw": "",
+        "timestamp": "",
+    }
+
+
+def test_real_backend_http_error_fails_loudly():
+    session = FakeSplunkSession(FakeSplunkResponse("In handler export: forbidden", status_code=403))
+    backend = _real_backend(session)
+    with pytest.raises(SplunkSearchError, match="HTTP 403"):
+        backend.search("sourcetype=linux_secure", earliest="all")
+
+
+def test_real_backend_transport_error_is_wrapped():
+    import requests
+
+    backend = _real_backend(FakeSplunkSession(error=requests.Timeout("too slow")))
+    with pytest.raises(SplunkSearchError, match="Splunk request failed"):
+        backend.search("sourcetype=linux_secure", earliest="all")
+
+
+def test_real_backend_execute_for_case_shape():
+    csv_text = "_time,source,sourcetype,host,raw\n1758824043,s1,st1,h1,ev1\n"
+    backend = _real_backend(FakeSplunkSession(FakeSplunkResponse(csv_text)))
+    result = backend.execute_for_case(
+        case_id="MOCK-CASE-001",
+        rule_id="MOCK-RULE-001",
+        query_title="Failed logins for user",
+        spl="sourcetype=linux_secure action=failure user=bjones",
+        earliest="-7d",
+    )
+    assert result["case_id"] == "MOCK-CASE-001"
+    assert result["source_system"] == "splunk"
+    payload = json.loads(result["raw_result"])
+    assert payload["backend"] == "splunk"
+    assert payload["row_count"] == len(payload["rows"]) == 1
+    assert payload["rows"][0]["raw"] == "ev1"
+
+
+def test_factory_selects_real_backend_when_configured(monkeypatch):
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.setenv("SPLUNK_URL", "https://splunk.example.com:8089")
+    monkeypatch.setenv("SPLUNK_TOKEN", "test-token")
+    backend = get_search_backend()
+    assert isinstance(backend, RealSplunkBackend)
+    assert backend._base_url == "https://splunk.example.com:8089"
