@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
+import logging
 import os
 import shutil
 import sys
@@ -35,6 +36,8 @@ tools_dir = os.path.join(os.path.dirname(__file__), '..', 'Tools')
 sys.path.insert(0, tools_dir)
 
 from core_lib.utils import get_platform_root, get_reports_dir, get_archive_dir, get_logs_dir
+
+logger = logging.getLogger("soc.api")
 from services.investigation_state import (
     _build_investigation_state,
     _extract_analysis_sections,
@@ -1077,7 +1080,7 @@ def _rebuild_placeholder_aliases_file() -> None:
         finally:
             db.close()
     except Exception as e:
-        print(f"[placeholder_aliases.json sync] Failed to rebuild file: {e}", file=sys.stderr)
+        logger.warning("[placeholder_aliases.json sync] Failed to rebuild file: %s", e)
 
 
 def _extract_python_sections(code_snippet: str) -> List[Dict[str, Any]]:
@@ -1322,7 +1325,7 @@ def _rebuild_supportive_rules_file() -> None:
         finally:
             db.close()
     except Exception as e:  # best-effort only; never break API on failure
-        print(f"[supportive_rules.json sync] Failed to rebuild file: {e}", file=sys.stderr)
+        logger.warning("[supportive_rules.json sync] Failed to rebuild file: %s", e)
 
 # Helper Functions
 def load_registry() -> List[Dict]:
@@ -1461,7 +1464,7 @@ def _persist_tool_run(job: Dict[str, Any]) -> None:
         db.commit()
         db.close()
     except Exception as exc:
-        print(f"[tool_runs] Persistence unavailable: {exc}", file=sys.stderr)
+        logger.warning("[tool_runs] Persistence unavailable: %s", exc)
 
 
 NOTABLE_FIELD_ALIASES = [
@@ -2828,7 +2831,7 @@ def get_job_status(job_id: str):
                     artifacts=json.loads(row.artifact_paths or "[]"),
                 )
         except Exception as exc:
-            print(f"[tool_runs] Could not load persisted job: {exc}", file=sys.stderr)
+            logger.warning("[tool_runs] Could not load persisted job: %s", exc)
         raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
     job = jobs[job_id]
     job["status"] = _job_status_value(job.get("status"))
@@ -2866,7 +2869,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
                         cleanup_db.commit()
                         cleanup_db.close()
                     except Exception as exc:
-                        print(f"[tool_runs] Could not mark stale job: {exc}", file=sys.stderr)
+                        logger.warning("[tool_runs] Could not mark stale job: %s", exc)
             job_list.append({
                 "job_id": row.job_id,
                 "status": row_status,
@@ -2880,7 +2883,7 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
                 "artifacts": json.loads(row.artifact_paths or "[]"),
             })
     except Exception as exc:
-        print(f"[tool_runs] Could not load persisted jobs: {exc}", file=sys.stderr)
+        logger.warning("[tool_runs] Could not load persisted jobs: %s", exc)
     if status:
         job_list = [j for j in job_list if j["status"] == status]
     return [JobResponse(**j) for j in job_list]
@@ -2899,7 +2902,7 @@ def delete_job(job_id: str):
             db.commit()
         db.close()
     except Exception as exc:
-        print(f"[tool_runs] Could not delete persisted job: {exc}", file=sys.stderr)
+        logger.warning("[tool_runs] Could not delete persisted job: %s", exc)
     return {"deleted": job_id}
 
 @app.delete("/api/jobs", tags=["Execution"], dependencies=[Depends(require_api_key)])
@@ -2914,7 +2917,7 @@ def clear_jobs():
         db.commit()
         db.close()
     except Exception as exc:
-        print(f"[tool_runs] Could not clear persisted jobs: {exc}", file=sys.stderr)
+        logger.warning("[tool_runs] Could not clear persisted jobs: %s", exc)
         deleted = 0
     return {"deleted": deleted}
 
@@ -4875,7 +4878,7 @@ def analyze_case(request: AnalyzeRequest):
                 with open(catalog_supportive_path, "r", encoding="utf-8") as rf:
                     catalog_rules = json.load(rf).get("rules") or []
             except Exception as ex:
-                print(f"Failed to load supportive rule catalog: {ex}", file=sys.stderr)
+                logger.warning("Failed to load supportive rule catalog: %s", ex)
 
         if catalog_rules:
             notable_fields = (source_notable_payload or {}).get("fields") or {}
@@ -4972,7 +4975,7 @@ def analyze_case(request: AnalyzeRequest):
                                     supportive_query_defs.append(VirtualQuery(t, sq.get("description") or "", sq.get("spl_query") or "", sq.get("id")))
                                     existing_titles.add(_normalize_phase2_text(t))
             except Exception as ex:
-                print(f"Failed to merge supportive rule catalog: {ex}", file=sys.stderr)
+                logger.warning("Failed to merge supportive rule catalog: %s", ex)
 
             if requested_phase_number > 2:
                 existing_titles = {
