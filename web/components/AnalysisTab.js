@@ -60,6 +60,7 @@ window.AnalysisTab = {
         'getEnrichmentKeyFn',
         'getPhase2KeyFn',
         'getPhase2TemplateFn',
+        'buildLoopTimelineFn',
         'formatLoopStatusFn',
         'formatDispositionLabelFn',
         'formatFindingLabelFn'
@@ -425,6 +426,28 @@ window.AnalysisTab = {
         runStatusFor(key) {
             const card = (this.phase2CardState || {})[key];
             return (card && card.runStatus) || null;
+        },
+        // S12: chronological loop timeline rows from the persisted state.
+        loopTimeline() {
+            if (typeof this.buildLoopTimelineFn === 'function') {
+                return this.buildLoopTimelineFn(this.investigationState);
+            }
+            return [];
+        },
+        loopTimelineClass(row) {
+            if (row.findingType === 'supports') return 'border-l-red-500';
+            if (row.findingType === 'refutes') return 'border-l-emerald-500';
+            return 'border-l-gray-600';
+        },
+        loopTimelineDeltaLabel(row) {
+            if (row.deltaHint === 'increase') return '▲ confidence up';
+            if (row.deltaHint === 'decrease') return '▼ confidence down';
+            return '';
+        },
+        loopTimelineDeltaClass(row) {
+            if (row.deltaHint === 'increase') return 'text-emerald-400';
+            if (row.deltaHint === 'decrease') return 'text-amber-400';
+            return 'text-gray-600';
         },
         evidenceItemKey(item) {
             if (!item) return '';
@@ -1393,6 +1416,34 @@ window.AnalysisTab = {
                         <span class="text-gray-200">Unresolved Open Questions: {{ investigationState.unresolved_questions?.length || 0 }}</span>
                     </div>
                 </div>
+            </div>
+
+            <!-- S12: Loop Timeline - chronological evidence rail -->
+            <div v-if="loopTimeline().length" class="p-4 bg-gray-800/80 rounded border border-gray-700 space-y-2">
+                <div class="flex items-center justify-between">
+                    <p class="text-[11px] font-bold uppercase tracking-wider text-gray-400">Loop Timeline ({{ loopTimeline().length }} evidence items, chronological)</p>
+                </div>
+                <div class="space-y-1.5 max-h-72 overflow-y-auto">
+                    <div
+                        v-for="row in loopTimeline()"
+                        :key="row.key"
+                        class="flex items-start gap-2 border-l-2 pl-3 py-1"
+                        :class="loopTimelineClass(row)"
+                    >
+                        <div class="min-w-0 flex-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="text-xs font-semibold text-gray-100">{{ row.title }}</span>
+                                <span class="text-[10px] font-mono text-gray-500">{{ row.sourceSystem }}</span>
+                                <span class="text-[10px] uppercase text-gray-500">{{ row.resultStatus }}</span>
+                                <span class="text-[10px] font-semibold capitalize" :class="row.findingType === 'supports' ? 'text-red-300' : row.findingType === 'refutes' ? 'text-emerald-300' : 'text-gray-400'">{{ row.findingType }}</span>
+                                <span v-if="loopTimelineDeltaLabel(row)" class="text-[10px] font-semibold" :class="loopTimelineDeltaClass(row)">{{ loopTimelineDeltaLabel(row) }}</span>
+                            </div>
+                            <p class="text-[11px] text-gray-400 mt-0.5 whitespace-pre-wrap">{{ row.summary }}</p>
+                            <p v-if="row.rationale" class="text-[11px] text-indigo-300 italic mt-0.5">AI: {{ row.rationale }}</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-[10px] text-gray-500">Red rail = supports hypothesis, green = refutes, gray = neutral. Oldest first — read the investigation top to bottom.</p>
             </div>
 
             <!-- Active Blockers if any -->

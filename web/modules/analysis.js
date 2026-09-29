@@ -1583,6 +1583,25 @@
             }
         },
 
+        // S12: map the persisted evidence timeline into display rows for the
+        // loop timeline panel. Input arrives chronological (ascending
+        // created_at, sorted by the backend); rows carry only what the UI
+        // needs, with defensive fallbacks for legacy rows.
+        buildLoopTimeline(state) {
+            const entries = (state && state.evidence_summary && state.evidence_summary.timeline) || [];
+            return entries.map((entry, i) => ({
+                key: 'tl:' + (entry.id != null ? entry.id : 'r' + i) + ':' + String(entry.title || '').slice(0, 24),
+                title: entry.title || 'Untitled evidence',
+                sourceSystem: entry.source_system || 'unknown',
+                resultStatus: entry.result_status || 'success',
+                findingType: entry.finding_type || 'neutral',
+                deltaHint: entry.confidence_delta_hint || 'none',
+                rationale: entry.ai_verdict_rationale || '',
+                summary: entry.summary || '',
+                createdAt: entry.created_at || '',
+            }));
+        },
+
         formatLoopStatus(value) {
             const raw = (value || '').toString().trim().toLowerCase();
             if (!raw) return 'Unknown';

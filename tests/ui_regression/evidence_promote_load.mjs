@@ -24,6 +24,7 @@
  *   promote_failure          promote_all_open
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  *   draft_autosave_debounce  evidence_ledger_view
+ *   loop_timeline_panel
  * Exit code 0 = all assertions held.
  */
 import {
@@ -693,6 +694,56 @@ const scenarios = {
             'load failure must surface: ' + comp.evidenceLedgerError);
         assert(comp.evidenceLedgerItems.length === 0, 'failed load must clear the ledger');
         assert(comp.evidenceLedgerLoading === false, 'loading flag must clear on failure');
+    },
+
+    // S12: loop timeline rows derive defensively from the persisted state.
+    async loop_timeline_panel() {
+        const { ctx } = makeSandbox({});
+        const methods = await loadAnalysis(ctx);
+        const comp = makeComponent(methods, { base: {} });
+
+        const state = {
+            loop_status: 'needs_more_evidence',
+            evidence_summary: { timeline: [
+                {
+                    id: 3,
+                    title: 'Failed logins',
+                    source_system: 'supportive_manual',
+                    result_status: 'success',
+                    finding_type: 'supports',
+                    confidence_delta_hint: 'increase',
+                    ai_verdict_rationale: 'Six failures on the VPN gateway',
+                    summary: '6 failures on VPN-GW-01',
+                    created_at: '2026-09-29T10:00:00',
+                },
+                {
+                    id: 4,
+                    title: 'Data gap check',
+                    source_system: 'phase2_manual',
+                    result_status: 'data_source_unavailable',
+                    finding_type: 'neutral',
+                    confidence_delta_hint: 'decrease',
+                },
+            ] },
+        };
+        const rows = comp.buildLoopTimeline(state);
+        assert(rows.length === 2, 'timeline rows must map 1:1, got ' + rows.length);
+        assert(rows[0].title === 'Failed logins' && rows[0].findingType === 'supports'
+            && rows[0].deltaHint === 'increase' && rows[0].rationale.includes('VPN gateway'),
+            'row fields not mapped: ' + JSON.stringify(rows[0]));
+        assert(rows[1].resultStatus === 'data_source_unavailable' && rows[1].deltaHint === 'decrease'
+            && rows[1].rationale === '' && rows[1].summary === '',
+            'sparse row must fall back defensively: ' + JSON.stringify(rows[1]));
+        assert(String(rows[0].key).startsWith('tl:3:'), 'row keys must be stable: ' + rows[0].key);
+
+        // Legacy row without an id still gets a unique, stable key.
+        const legacy = comp.buildLoopTimeline({ evidence_summary: { timeline: [{ title: 'old', finding_type: 'refutes' }] } });
+        assert(legacy.length === 1 && legacy[0].findingType === 'refutes' && legacy[0].key.startsWith('tl:r0:'),
+            'legacy id-less rows must key by position: ' + JSON.stringify(legacy));
+
+        // Empty/absent state yields an empty panel, never a crash.
+        assert(comp.buildLoopTimeline(null).length === 0, 'null state must yield no rows');
+        assert(comp.buildLoopTimeline({}).length === 0, 'empty state must yield no rows');
     },
 };
 

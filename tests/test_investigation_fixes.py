@@ -828,6 +828,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_evidence_ledger_view_load_delete_and_failures(self):
         self._run("evidence_ledger_view")
 
+    def test_loop_timeline_rows_map_defensively(self):
+        self._run("loop_timeline_panel")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by
