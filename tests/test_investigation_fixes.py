@@ -834,6 +834,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_snapshot_migration_folds_legacy_maps(self):
         self._run("snapshot_migration_folds_legacy_maps")
 
+    def test_api_layer_prefers_canonical_with_legacy_fallback(self):
+        self._run("api_layer_canonical_fallback")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by

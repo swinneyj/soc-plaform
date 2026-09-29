@@ -37,9 +37,12 @@ middleware were removed. Everything else mutating is
 ## Path conventions
 
 - **Canonical** resource paths (`/api/cases`, `/api/notables`, `/api/evidence`,
-  `/api/analyses`) are preferred for new integrations (S13).
-- **Legacy** `/api/db/*` spellings remain as aliases and are what the current
-  frontend uses; they are not deprecated.
+  `/api/analyses`) are preferred for new integrations (S13). The frontend's
+  service layer ([`web/modules/api.js`](../web/modules/api.js)) already prefers
+  them: it upgrades every aliased route to the canonical spelling and retries
+  the legacy path once when that 404s (older deploys).
+- **Legacy** `/api/db/*` spellings remain as aliases and stay dialed by the
+  frontend's fallback; they are not deprecated.
 - The rewrite is a straight path alias at the ASGI layer — same handler, same
   payload, same status codes. Unknown subresources 404 identically under either
   spelling.

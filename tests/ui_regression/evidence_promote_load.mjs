@@ -25,6 +25,7 @@
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  *   draft_autosave_debounce  evidence_ledger_view
  *   loop_timeline_panel  snapshot_migration_folds_legacy_maps
+ *   api_layer_canonical_fallback
  * Exit code 0 = all assertions held.
  */
 import {
@@ -34,6 +35,13 @@ import {
     loadModuleMethods,
     runScenarios,
 } from './harness_core.mjs';
+
+async function loadApiLayer(ctx) {
+    const api = await loadModuleMethods(ctx, 'web/modules/api.js', 'API');
+    assert(typeof api.canonicalFor === 'function' && typeof api.triage === 'function',
+        'api.js is missing the canonical-path service layer');
+    return api;
+}
 
 async function loadAnalysis(ctx) {
     const methods = await loadModuleMethods(ctx, 'web/modules/analysis.js', 'AnalysisMethods');
@@ -798,6 +806,99 @@ const scenarios = {
             're-stored snapshot must carry the folded cells');
         assert(!round.supportiveManualResults && !round.enrichmentManualResults,
             're-stored snapshot must drop the legacy maps');
+    },
+
+    // S13 client adoption: the api.js service layer speaks canonical paths
+    // first and retries the legacy /api/db/* spelling only on canonical 404
+    // (older deploys); non-404 errors and non-aliased routes never fall back.
+    async api_layer_canonical_fallback() {
+        const requests = [];
+        let failCanonicalWith = null; // null = canonical works (modern deploy)
+        let legacyAllow = () => true;  // legacy routes answer OK
+        const { ctx, sandbox } = makeSandbox({});
+        const record = (verb) => async (u, ...rest) => {
+            requests.push({ verb, url: String(u), body: rest[0] });
+            const canonical = !String(u).includes('/db/');
+            if (canonical && failCanonicalWith !== null) {
+                const err = new Error('Request failed with status code ' + failCanonicalWith);
+                err.response = { status: failCanonicalWith, data: { detail: 'fail' } };
+                throw err;
+            }
+            if (!canonical && !legacyAllow(u)) {
+                const err = new Error('Request failed with status code 404');
+                err.response = { status: 404, data: { detail: 'Not Found' } };
+                throw err;
+            }
+            return { data: { ok: true, url: String(u), body: rest[0] } };
+        };
+        sandbox.axios.get = record('get');
+        sandbox.axios.post = record('post');
+        sandbox.axios.put = record('put');
+        sandbox.axios.delete = record('delete');
+        const api = await loadApiLayer(ctx);
+
+        // Mapping table parity with the server's rewriter (inverted).
+        assert(api.canonicalFor('/db/triage') === '/cases', 'cases list mapping');
+        assert(api.canonicalFor('/db/triage/CASE-1/notable') === '/cases/CASE-1/notable', 'case notable mapping');
+        assert(api.canonicalFor('/db/triage/CASE-1/evidence/batch-delete') === '/evidence/CASE-1/batch-delete',
+            'evidence subroute must win over the generic tails: ' + api.canonicalFor('/db/triage/CASE-1/evidence/batch-delete'));
+        assert(api.canonicalFor('/db/notables/9/promote') === '/notables/9/promote', 'notables tail mapping');
+        assert(api.canonicalFor('/db/analyze') === '/analyses', 'analyze mapping');
+        assert(api.canonicalFor('/db/rules') === null, 'rules have no canonical alias');
+        assert(api.canonicalFor('/db/closure-note') === null, 'closure-note has no canonical alias');
+
+        // Modern deploy: canonical hits exactly once, legacy never dialed.
+        const listed = await api.triage();
+        assert(requests.length === 1 && requests[0].url === '/api/cases',
+            'modern list must hit /api/cases once, got ' + JSON.stringify(requests));
+        assert(listed.ok && listed.url === '/api/cases', 'payload must come from the canonical route');
+
+        await api.saveEvidence('CASE 1', { entries: [1] });
+        assert(requests[1].url === '/api/evidence/CASE%201' && requests[1].body.entries,
+            'evidence save must hit the canonical evidence family with the body intact: ' + requests[1].url);
+
+        // Older deploy (canonical 404s): exactly one legacy retry, then success.
+        requests.length = 0;
+        failCanonicalWith = 404;
+        const promoted = await api.promoteNotable(42);
+        assert(requests.length === 2
+            && requests[0].url === '/api/notables/42/promote'
+            && requests[1].url === '/api/db/notables/42/promote',
+            'canonical 404 must retry the /api/db/* spelling once, got ' + JSON.stringify(requests));
+        assert(promoted.url === '/api/db/notables/42/promote', 'payload must come from the legacy route');
+
+        // Canonical 500 (real server error): no fallback, error propagates.
+        requests.length = 0;
+        failCanonicalWith = 500;
+        let threw = false;
+        try {
+            await api.triageEvidence('CASE-1');
+        } catch (err) {
+            threw = true;
+        }
+        assert(threw, 'a canonical 500 must propagate, not fall back');
+        assert(requests.length === 1, 'a 500 must not trigger a legacy retry, got ' + JSON.stringify(requests));
+
+        // Double-404 (unknown subresource): both spellings 404, error surfaces.
+        requests.length = 0;
+        failCanonicalWith = 404;
+        legacyAllow = () => false;
+        threw = false;
+        try {
+            await api.triageInvestigationState('X/unknown');
+        } catch (err) {
+            threw = true;
+        }
+        assert(threw, 'a double-404 must surface to the caller');
+        assert(requests.length === 2, 'double-404 must have tried both spellings, got ' + JSON.stringify(requests));
+
+        // Non-aliased route: one direct call regardless of deploy vintage.
+        requests.length = 0;
+        failCanonicalWith = null;
+        legacyAllow = () => true;
+        await api.rules();
+        assert(requests.length === 1 && requests[0].url === '/api/db/rules',
+            'non-aliased routes must call their only spelling directly, got ' + JSON.stringify(requests));
     },
 };
 
