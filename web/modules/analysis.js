@@ -1241,10 +1241,6 @@
                     const raw = item.raw_result || {};
                     saved[key] = (raw.result_text || '').toString();
                     this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
-                    this.phase2ResolutionTypes[key] = (raw.question_resolution || 'not_resolved').toString();
-                    if (raw.target_questions && raw.target_questions.length) {
-                        this.phase2ResolutionQuestions[key] = raw.target_questions[0].toString();
-                    }
                     if (raw.query_text) {
                         this.phase2EditedQueries[key] = raw.query_text.toString();
                     }
