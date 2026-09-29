@@ -28,14 +28,11 @@ window.AnalysisTab = {
         'supportiveManualResults',
         'supportiveSaveBusy',
         'supportiveFindingTypes',
-        'splunkRunStatus',
+        'phase2CardState',
         'runAllBusy',
         'runAllSummary',
         'enrichmentManualResults',
         'enrichmentFindingTypes',
-        'phase2ManualResults',
-        'phase2FindingTypes',
-        'phase2CoverageNotes',
         'phase2EditedQueries',
         'supportivePlaybookAvailable',
         'supportiveDraftBusy',
@@ -109,6 +106,7 @@ window.AnalysisTab = {
         'update-enrichment-manual',
         'update-enrichment-finding',
         'update-phase2-manual',
+        'update-card-status',
         'update-phase2-finding',
         'update-phase2-coverage',
         'delete-evidence',
@@ -119,7 +117,6 @@ window.AnalysisTab = {
         return {
             selectedEvidenceKeys: [],
             currentStage: 1,
-            evidenceResultStatuses: {},
             showResolvedFollowUp: false,
             supportiveImportText: '',
             supportiveImportFilename: ''
@@ -291,9 +288,7 @@ window.AnalysisTab = {
         startNextFollowUpPhase() {
             const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
             this.$emit('update:follow-up-phase', nextPhase);
-            this.phase2ManualResults = {};
-            this.phase2FindingTypes = {};
-            this.phase2EditedQueries = {};
+            this.$emit('update-card-state', {});
             this.currentStage = 4;
             this.$emit('run-phase2-analysis');
         },
@@ -424,6 +419,12 @@ window.AnalysisTab = {
         },
         emitPhase2Finding(q, value) {
             this.$emit('update-phase2-finding', { key: this.getPhase2Key(q), value });
+        },
+        // Inline run chip for a card (null when never run). Reads the S7
+        // unified card state; root composes status keys as '<kind>:' + key.
+        runStatusFor(key) {
+            const card = (this.phase2CardState || {})[key];
+            return (card && card.runStatus) || null;
         },
         evidenceItemKey(item) {
             if (!item) return '';
@@ -914,19 +915,19 @@ window.AnalysisTab = {
                         <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
                     </div>
                     <span
-                        v-if="splunkRunStatus && splunkRunStatus['supportive:' + getSupportiveKey(q)]"
+                        v-if="runStatusFor(getSupportiveKey(q))"
                         class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
-                        :class="splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'error'
+                        :class="runStatusFor(getSupportiveKey(q)).state === 'error'
                             ? 'bg-red-950 text-red-300 border border-red-700'
-                            : splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'running'
+                            : runStatusFor(getSupportiveKey(q)).state === 'running'
                                 ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
                                 : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
-                        :title="splunkRunStatus['supportive:' + getSupportiveKey(q)].message"
-                    >{{ splunkRunStatus['supportive:' + getSupportiveKey(q)].short }}</span>
+                        :title="runStatusFor(getSupportiveKey(q)).message"
+                    >{{ runStatusFor(getSupportiveKey(q)).short }}</span>
                     <button
                         type="button"
                         class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200 flex-shrink-0"
-                        :disabled="splunkRunStatus && splunkRunStatus['supportive:' + getSupportiveKey(q)] && splunkRunStatus['supportive:' + getSupportiveKey(q)].state === 'running'"
+                        :disabled="runStatusFor(getSupportiveKey(q)) !== null && runStatusFor(getSupportiveKey(q)).state === 'running'"
                         title="Run this query through the configured search backend and save the result as splunk_auto evidence"
                         @click="$emit('run-splunk-search', { q, kind: 'supportive' })"
                     >
@@ -956,7 +957,8 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
                     <select
-                        v-model="evidenceResultStatuses[getSupportiveKey(q)]"
+                        :value="(phase2CardState[getSupportiveKey(q)] || {}).status || 'success'"
+                        @change="$emit('update-card-status', { key: getSupportiveKey(q), value: $event.target.value })"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                     >
                         <option value="success">Success (Events Found)</option>
@@ -1166,18 +1168,18 @@ window.AnalysisTab = {
                     <div class="flex items-center gap-2">
                         <span v-if="phase2SavedTitles.has((q.title || '').toString().trim().toLowerCase())" class="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 text-[10px] uppercase font-bold text-emerald-300">Already saved</span>
                         <span
-                            v-if="splunkRunStatus && splunkRunStatus['phase2:' + getPhase2Key(q)]"
+                            v-if="runStatusFor(getPhase2Key(q))"
                             class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
-                            :class="splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'error'
+                            :class="runStatusFor(getPhase2Key(q)).state === 'error'
                                 ? 'bg-red-950 text-red-300 border border-red-700'
-                                : splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'running'
+                                : runStatusFor(getPhase2Key(q)).state === 'running'
                                     ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
                                     : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
-                            :title="splunkRunStatus['phase2:' + getPhase2Key(q)].message"
-                        >{{ splunkRunStatus['phase2:' + getPhase2Key(q)].short }}</span>
+                            :title="runStatusFor(getPhase2Key(q)).message"
+                        >{{ runStatusFor(getPhase2Key(q)).short }}</span>
                         <button
                             type="button"
-                            :disabled="splunkRunStatus && splunkRunStatus['phase2:' + getPhase2Key(q)] && splunkRunStatus['phase2:' + getPhase2Key(q)].state === 'running'"
+                            :disabled="runStatusFor(getPhase2Key(q)) !== null && runStatusFor(getPhase2Key(q)).state === 'running'"
                             class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200"
                             title="Run this query through the configured search backend and save the result as splunk_auto evidence"
                             @click="$emit('run-splunk-search', { q, kind: 'phase2' })"
@@ -1209,7 +1211,7 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Notes for this Follow-Up Check</label>
                     <textarea
-                        :value="phase2ManualResults[getPhase2Key(q)] || ''"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).resultText || ''"
                         @input="emitPhase2Manual(q, $event.target.value)"
                         rows="3"
                         class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
@@ -1220,7 +1222,8 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
                     <select
-                        v-model="evidenceResultStatuses[getPhase2Key(q)]"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).status || 'success'"
+                        @change="$emit('update-card-status', { key: getPhase2Key(q), value: $event.target.value })"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                     >
                         <option value="success">Success (Events Found)</option>
@@ -1233,7 +1236,7 @@ window.AnalysisTab = {
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Coverage Note (optional)</label>
                     <input
                         type="text"
-                        :value="phase2CoverageNotes[getPhase2Key(q)] || ''"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).coverage || ''"
                         @input="$emit('update-phase2-coverage', {key: getPhase2Key(q), value: $event.target.value})"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
                         placeholder="What time window / scope did this query cover? (The AI decides whether it resolves the inquiry.)"

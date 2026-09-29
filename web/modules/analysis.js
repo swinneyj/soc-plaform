@@ -11,6 +11,17 @@
 (function (global) {
     'use strict';
 
+    // Lowercase-trim + collapse-whitespace + truncate (64). The one slug rule
+    // behind every query key (supportive / phase2 / enrichment), kept local so
+    // this module has no load-order dependency on utils/keys.js.
+    function _slug64(title) {
+        const n = (title || '').toString().toLowerCase().trim();
+        if (!n) {
+            return null;
+        }
+        return n.replace(/\s+/g, '_').slice(0, 64);
+    }
+
     const AnalysisMethods = {
         onAnalysisCaseChanged() {
             this.analysisResult = null;
@@ -20,8 +31,7 @@
             this.supportiveManualResults = {};
             this.supportiveFindingTypes = {};
             this.phase2EditedQueries = {};
-            this.phase2ManualResults = {};
-            this.phase2FindingTypes = {};
+            this.phase2CardState = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
             this.supportivePlaybookAvailable = null;
@@ -975,24 +985,27 @@
         },
 
         getPhase2Key(q) {
-            const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
-            if (!title) {
-                return 'phase2:title:unknown';
-            }
-            return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(q && q.title);
+            return s ? 'phase2:' + s : 'phase2:title:unknown';
         },
 
         getPhase2KeyFromTitle(title) {
-            const normalized = (title || '').toString().toLowerCase().trim();
-            if (!normalized) {
-                return 'phase2:title:unknown';
-            }
-            return 'phase2:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(title);
+            return s ? 'phase2:' + s : 'phase2:title:unknown';
+        },
+
+        // Single per-card state cell for Phase 2+ follow-up cards. Everything
+        // a card owns (analyst input, edits, run status, collection status)
+        // lives under one derived key so no field can drift to a different
+        // keying scheme than the rest.
+        _phase2Card(key) {
+            const cards = this.phase2CardState || {};
+            return cards[key] || {};
         },
 
         getPhase2Template(q) {
             const key = this.getPhase2Key(q);
-            const existing = this.phase2EditedQueries[key];
+            const existing = this._phase2Card(key).editedSpl;
             if (existing !== undefined && existing !== null && existing !== '') {
                 return existing;
             }
@@ -1001,18 +1014,18 @@
             // value (e.g., src_ip) for this case. Subsequent edits operate on
             // the hard-coded version, matching the initial supportive queries.
             const resolved = this.renderPhase2Query(raw);
-            this.phase2EditedQueries[key] = resolved;
+            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), editedSpl: resolved } };
             return resolved;
         },
 
         onPhase2TemplateInput(q, value) {
             const key = this.getPhase2Key(q);
-            this.phase2EditedQueries[key] = value;
+            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), editedSpl: value } };
         },
 
         copyPhase2SPL(q) {
             const key = this.getPhase2Key(q);
-            const template = (this.phase2EditedQueries[key] || q.spl || '').toString();
+            const template = (this._phase2Card(key).editedSpl || q.spl || '').toString();
             const text = this.renderPhase2Query(template);
             if (!text) {
                 alert('No SPL query text available to copy');
@@ -1182,9 +1195,10 @@
             const entries = [];
             for (const q of phase2Queries) {
                 const key = this.getPhase2Key(q);
-                const resultText = (this.phase2ManualResults[key] || '').trim();
-                const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
-                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                const card = this._phase2Card(key);
+                const resultText = (card.resultText || '').trim();
+                const queryText = (card.editedSpl || q.spl || '').toString().trim();
+                const resultStatus = card.status || 'success';
                 // Do not turn untouched generated cards into durable pending
                 // evidence. They create false closure blockers and are not
                 // useful to later phases. Explicit no-results/failure states
@@ -1193,7 +1207,7 @@
                     continue;
                 }
 
-                const coverageNote = (this.phase2CoverageNotes && this.phase2CoverageNotes[key] || '').trim();
+                const coverageNote = (card.coverage || '').trim();
                 entries.push({
                     query_title: q.title || 'Unnamed phase 2 query',
                     query_text: queryText,
@@ -1239,13 +1253,15 @@
                 for (const item of (res.data || [])) {
                     const key = this.getPhase2KeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                     if (raw.query_text) {
-                        this.phase2EditedQueries[key] = raw.query_text.toString();
+                        saved[key].editedSpl = raw.query_text.toString();
                     }
                 }
-                this.phase2ManualResults = saved;
+                this.phase2CardState = saved;
             } catch (err) {
                 console.error('Failed to load saved phase 2 evidence:', err);
             }
@@ -1285,7 +1301,11 @@
             for (const q of this.analysisRule.supportive_queries) {
                 const key = this.getSupportiveKey(q);
                 const resultText = (this.supportiveManualResults[key] || '').trim();
-                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                // Collection status now lives on the root app state (root-card
+                // state), so the analyst's no_results / data_source_unavailable
+                // pick is actually seen by this save instead of silently
+                // defaulting to 'success'.
+                const resultStatus = (this.phase2CardState && this.phase2CardState[key] && this.phase2CardState[key].status) || 'success';
                 // Save legitimate zero-result / failure executions even with
                 // an empty result body — a 0-event query is real evidence.
                 // Only a blank, untouched 'success' entry is skipped.
@@ -1444,8 +1464,7 @@
                 enrichmentManualResults: this.enrichmentManualResults,
                 enrichmentFindingTypes: this.enrichmentFindingTypes,
                 phase2EditedQueries: this.phase2EditedQueries,
-                phase2ManualResults: this.phase2ManualResults,
-                phase2FindingTypes: this.phase2FindingTypes,
+                phase2CardState: this.phase2CardState,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,
@@ -1508,11 +1527,8 @@
                 if (snapshot.phase2EditedQueries) {
                     this.phase2EditedQueries = snapshot.phase2EditedQueries;
                 }
-                if (snapshot.phase2ManualResults) {
-                    this.phase2ManualResults = snapshot.phase2ManualResults;
-                }
-                if (snapshot.phase2FindingTypes) {
-                    this.phase2FindingTypes = snapshot.phase2FindingTypes;
+                if (snapshot.phase2CardState) {
+                    this.phase2CardState = snapshot.phase2CardState;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;
@@ -1567,11 +1583,8 @@
             if (q && q.id != null) {
                 return `id:${q.id}`;
             }
-            const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
-            if (!title) {
-                return 'title:unknown';
-            }
-            return 'title:' + title.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(q && q.title);
+            return s ? 'title:' + s : 'title:unknown';
         },
 
         getEnrichmentKey(q) {
@@ -1583,11 +1596,8 @@
         },
 
         getSupportiveKeyFromTitle(title) {
-            const normalized = (title || '').toString().toLowerCase().trim();
-            if (!normalized) {
-                return 'title:unknown';
-            }
-            return 'title:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(title);
+            return s ? 'title:' + s : 'title:unknown';
         },
 
         getEnrichmentKeyFromTitle(title) {
@@ -1650,10 +1660,14 @@
             // modal alerts can wedge embedded webviews and steal focus from
             // the analyst mid-loop. state: 'running' | 'complete' | 'error'.
             const short = state === 'running' ? 'Running…' : state === 'error' ? 'Run failed' : 'Saved ✓';
-            this.splunkRunStatus = {
-                ...this.splunkRunStatus,
-                [statusKey]: { state, message, short }
-            };
+            const [kind, ...keyParts] = String(statusKey || '').split(':');
+            const key = keyParts.join(':');
+            if (key) {
+                this.phase2CardState = {
+                    ...(this.phase2CardState || {}),
+                    [key]: { ...this._phase2Card(key), runStatus: { state, message, short } },
+                };
+            }
         },
 
         async runSplunkSearch({ q, kind }) {
@@ -1666,7 +1680,7 @@
             }
             const title = ((q && q.title) || '').toString().trim() || 'Unnamed query';
             const template = isPhase2
-                ? ((this.phase2EditedQueries && this.phase2EditedQueries[key]) || (q && q.spl) || '').toString()
+                ? (this._phase2Card(key).editedSpl || (q && q.spl) || '').toString()
                 : ((q && q.spl_query) || '').toString();
             if (!template.trim()) {
                 this._setSplunkRunStatus(statusKey, 'error', 'No SPL query text available to run');
@@ -1684,7 +1698,7 @@
                 const data = res.data || {};
                 const summary = this.formatSplunkAutoSummary(data);
                 if (isPhase2) {
-                    this.phase2ManualResults = { ...this.phase2ManualResults, [key]: summary };
+                    this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), resultText: summary } };
                 } else {
                     this.supportiveManualResults = { ...this.supportiveManualResults, [key]: summary };
                 }
@@ -1727,15 +1741,14 @@
             const summary = { ok: 0, failed: 0, skipped: 0 };
             try {
                 for (const q of queries) {
-                    const statusKey = 'supportive:' + this.getSupportiveKey(q);
-                    const current = (this.splunkRunStatus || {})[statusKey];
+                    const current = this._phase2Card(this.getSupportiveKey(q)).runStatus;
                     if (current && current.state === 'running') {
                         summary.skipped += 1;
                         continue;
                     }
                     try {
                         await this.runSplunkSearch({ q, kind: 'supportive' });
-                        const after = (this.splunkRunStatus || {})[statusKey];
+                        const after = this._phase2Card(this.getSupportiveKey(q)).runStatus;
                         if (after && after.state === 'error') {
                             summary.failed += 1;
                         } else {
@@ -1781,7 +1794,7 @@
             }
 
             const key = this.getPhase2Key(q);
-            const template = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+            const template = (this._phase2Card(key).editedSpl || q.spl || '').toString().trim();
             if (!template) {
                 alert('Cannot save: SPL query is empty');
                 return;

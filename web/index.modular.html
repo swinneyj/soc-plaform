@@ -121,17 +121,13 @@
                 :investigation-state="investigationState"
                 :evidence-finding-options="evidenceFindingOptions"
                 :supportive-manual-results="supportiveManualResults"
-                :splunk-run-status="splunkRunStatus"
                 :run-all-busy="runAllBusy"
                 :run-all-summary="runAllSummary"
                 :supportive-save-busy="supportiveSaveBusy"
                 :supportive-finding-types="supportiveFindingTypes"
                 :enrichment-manual-results="enrichmentManualResults"
                 :enrichment-finding-types="enrichmentFindingTypes"
-                :phase2-manual-results="phase2ManualResults"
-                :phase2-finding-types="phase2FindingTypes"
-                :phase2-coverage-notes="phase2CoverageNoteInputs"
-                :phase2-edited-queries="phase2EditedQueries"
+                :phase2-card-state="phase2CardState"
                 :supportive-playbook-available="supportivePlaybookAvailable"
                 :supportive-draft-busy="supportiveDraftBusy"
                 :supportive-draft-error="supportiveDraftError"
@@ -202,9 +198,11 @@
                 @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
                 @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
                 @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
-                @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
-                @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
-                @update-phase2-coverage="({key, value}) => { phase2CoverageNoteInputs = { ...phase2CoverageNoteInputs, [key]: value }; phase2CoverageNotes = { ...phase2CoverageNotes, [key]: value }; }"
+                @update-phase2-manual="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), resultText: value } }"
+                @update-phase2-finding="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), findingType: value } }"
+                @update-phase2-coverage="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), coverage: value } }"
+                @update-card-status="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), status: value } }"
+                @update-card-state="(next) => phase2CardState = next || {}"
                 @delete-evidence="deleteEvidence"
                 @delete-evidence-batch="deleteEvidenceBatch"
                 @delete-all-evidence="deleteAllEvidence"
@@ -324,7 +322,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=9"></script>
     <script src="modules/database.js?v=17"></script>
-    <script src="modules/analysis.js?v=16"></script>
+    <script src="modules/analysis.js?v=17"></script>
     <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js?v=9"></script>
     <script src="modules/codeReview.js?v=9"></script>
@@ -334,13 +332,13 @@
     <script src="components/SplunkBoundaryWidget.js?v=1"></script>
     <script src="components/ToolsTab.js?v=11"></script>
     <script src="components/DatabaseTab.js?v=26"></script>
-    <script src="components/AnalysisTab.js?v=15"></script>
+    <script src="components/AnalysisTab.js?v=16"></script>
     <script src="components/ClosureTab.js?v=9"></script>
     <script src="components/JobsTab.js?v=15"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=17"></script>
+    <script src="app.modular.js?v=18"></script>
 </body>
 </html>

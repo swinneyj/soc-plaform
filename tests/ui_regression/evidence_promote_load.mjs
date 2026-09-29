@@ -12,6 +12,10 @@
  * Canaries: window.alert (blocking modals), console.error (swallowed crashes),
  * console.warn (guarded aborts).
  *
+ * S7 note: per-card analysis state is unified under phase2CardState
+ * ({ resultText, findingType, editedSpl, coverage, status, runStatus }); the
+ * fixtures seed that shape directly.
+ *
  * Usage: node tests/ui_regression/evidence_promote_load.mjs <scenario>
  * Scenarios:
  *   save_supportive          save_phase2          save_busy_guard
@@ -47,6 +51,8 @@ async function loadDatabase(ctx) {
 
 // --- analysis-side component: post-Phase-4 state ONLY (no phase2Resolution*
 // keys — that absence is exactly what the load-path crash regression is about).
+// Since S7 all per-card fields live in the unified phase2CardState map:
+//   { resultText, findingType, editedSpl, coverage, status, runStatus }.
 function analysisComp(methods, overrides = {}, spies = {}) {
     const base = {
         apiUrl: '/api',
@@ -56,12 +62,8 @@ function analysisComp(methods, overrides = {}, spies = {}) {
         analysisSourceNotable: null,
         placeholderAliases: {},
         supportiveManualResults: {},
-        evidenceResultStatuses: {},
         supportiveSaveBusy: false,
-        phase2ManualResults: {},
-        phase2FindingTypes: {},
-        phase2EditedQueries: {},
-        phase2CoverageNotes: {},
+        phase2CardState: {},
         phase2Result: null,
         analysisResult: null,
         investigationState: null,
@@ -119,7 +121,7 @@ const scenarios = {
                 'id:2': '',   // blank + status success -> skipped
                 'id:3': '',   // blank + explicit no_results -> real evidence, saved
             },
-            evidenceResultStatuses: { 'id:3': 'no_results' },
+            phase2CardState: { 'id:3': { status: 'no_results' } },
         }, { loadInvestigationState: async () => { stateLoads += 1; } });
 
         await comp.saveSupportiveEvidence({ silent: true });
@@ -165,13 +167,11 @@ const scenarios = {
                 { title: 'Edited card', spl: 'index=orig', target_questions: [] },
                 { title: 'Blank card', spl: 'index=y' },
             ] },
-            phase2ManualResults: {
-                'phase2:brute_followup': '12 failures',
-                'phase2:edited_card': 'found pivot',
+            phase2CardState: {
+                'phase2:brute_followup': { resultText: '12 failures', coverage: 'user scope' },
+                'phase2:edited_card': { resultText: 'found pivot', editedSpl: 'index=analyst_edit' },
+                'phase2:untouched_card': { status: 'no_results' },
             },
-            phase2CoverageNotes: { 'phase2:brute_followup': 'user scope' },
-            phase2EditedQueries: { 'phase2:edited_card': 'index=analyst_edit' },
-            evidenceResultStatuses: { 'phase2:untouched_card': 'no_results' },
         });
 
         await comp.savePhase2Evidence({ silent: true });
@@ -244,20 +244,21 @@ const scenarios = {
         assert(url === '/api/db/triage/MOCK-CASE-001/evidence', 'GET url wrong: ' + url);
         assert(config && config.params && config.params.source_system === 'phase2_manual',
             'GET params wrong: ' + JSON.stringify(config && config.params));
-        assert(comp.phase2ManualResults['phase2:brute_followup'] === '12 failures',
-            'saved result_text not rehydrated: ' + JSON.stringify(comp.phase2ManualResults));
-        assert(comp.phase2FindingTypes['phase2:brute_followup'] === 'suspicious',
-            'finding_type not rehydrated: ' + JSON.stringify(comp.phase2FindingTypes));
-        assert(comp.phase2EditedQueries['phase2:brute_followup'] === 'index=auth edited',
-            'edited query not rehydrated: ' + JSON.stringify(comp.phase2EditedQueries));
-        assert(comp.phase2ManualResults['phase2:legacy_blob'] === '',
-            'legacy raw_result row must hydrate to empty text, got ' + JSON.stringify(comp.phase2ManualResults));
-        assert(comp.phase2FindingTypes['phase2:legacy_blob'] === 'neutral',
-            'legacy raw_result row must default to neutral, got ' + JSON.stringify(comp.phase2FindingTypes));
-        assert(comp.phase2ManualResults['phase2:title:unknown'] === '',
-            'title-less row must hydrate under the unknown key: ' + JSON.stringify(comp.phase2ManualResults));
+        const cards = comp.phase2CardState;
+        assert(cards['phase2:brute_followup'] && cards['phase2:brute_followup'].resultText === '12 failures',
+            'saved result_text not rehydrated: ' + JSON.stringify(cards));
+        assert(cards['phase2:brute_followup'].findingType === 'suspicious',
+            'finding_type not rehydrated: ' + JSON.stringify(cards));
+        assert(cards['phase2:brute_followup'].editedSpl === 'index=auth edited',
+            'edited query not rehydrated: ' + JSON.stringify(cards));
+        assert(cards['phase2:legacy_blob'] && cards['phase2:legacy_blob'].resultText === '',
+            'legacy raw_result row must hydrate to empty text, got ' + JSON.stringify(cards));
+        assert(cards['phase2:legacy_blob'].findingType === 'neutral',
+            'legacy raw_result row must default to neutral, got ' + JSON.stringify(cards));
+        assert(cards['phase2:title:unknown'] && cards['phase2:title:unknown'].resultText === '',
+            'title-less row must hydrate under the unknown key: ' + JSON.stringify(cards));
         // The crash regression canary: the try/catch swallows any rehydration
-        // crash into console.error and leaves phase2ManualResults empty, so a
+        // crash into console.error and leaves the card state empty, so a
         // healthy load must log nothing AND hydrate (asserted above).
         assert(errorCalls.length === 0,
             'load fell into the swallowing catch block (crash regression): ' + JSON.stringify(errorCalls));
@@ -278,8 +279,8 @@ const scenarios = {
 
         assert(errorCalls.length === 1 && errorCalls[0].includes('Failed to load saved phase 2 evidence'),
             'load failure must be logged once, got: ' + JSON.stringify(errorCalls));
-        assert(Object.keys(comp.phase2ManualResults).length === 0,
-            'failed load must not half-hydrate state: ' + JSON.stringify(comp.phase2ManualResults));
+        assert(Object.keys(comp.phase2CardState).length === 0,
+            'failed load must not half-hydrate state: ' + JSON.stringify(comp.phase2CardState));
     },
 
     // No case selected: the load must not touch the network at all.

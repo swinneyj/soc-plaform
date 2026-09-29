@@ -103,16 +103,18 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     enrichmentFindingTypes: {},
                     placeholderAliases: {},
                     supportiveManualResults: {},
-                    splunkRunStatus: {},
                     runAllBusy: false,
                     runAllSummary: '',
                     supportiveSaveBusy: false,
                     supportiveFindingTypes: {},
                     phase2EditedQueries: {},
-                    phase2ManualResults: {},
-                    phase2FindingTypes: {},
-                    phase2CoverageNotes: {},
-                    phase2CoverageNoteInputs: {},
+                    // Unified per-card state (S7): one keyed cell per analysis
+                    // card — resultText, findingType, editedSpl, coverage,
+                    // status, runStatus — so no field can drift keyings.
+                    // Keys are the existing query keys ('id:7', 'phase2:foo');
+                    // run-status chips read '<kind>:' + key style composition
+                    // via AnalysisTab's runStatusFor helper.
+                    phase2CardState: {},
                     supportivePlaybookAvailable: null,
                     supportiveDraftBusy: false,
                     supportiveDraftError: '',

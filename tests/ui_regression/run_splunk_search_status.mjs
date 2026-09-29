@@ -33,10 +33,10 @@ function makeComponent(methods, overrides = {}) {
         apiUrl: '/api',
         analysisCaseId: 'MOCK-CASE-001',
         analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: [] },
-        splunkRunStatus: {},
+        // S7 unified per-card state: run status lives at
+        // phase2CardState[key].runStatus; result text at .resultText.
+        phase2CardState: {},
         supportiveManualResults: {},
-        phase2ManualResults: {},
-        phase2EditedQueries: {},
         investigationState: null,
         formatSplunkAutoSummary(data) {
             return '[auto-run via /api/splunk/search-one — ' + (data.result_status || '') +
@@ -44,10 +44,11 @@ function makeComponent(methods, overrides = {}) {
         },
         getSupportiveKey: methods.getSupportiveKey
             ? methods.getSupportiveKey.bind(null)
-            : (q) => String((q && (q.id || q.title || q.spl_query)) || ''),
+            : (q) => (q && q.id != null) ? 'id:' + q.id
+                : 'title:' + String((q && q.title) || '').toLowerCase().replace(/\s+/g, '_').slice(0, 64),
         getPhase2Key: methods.getPhase2Key
             ? methods.getPhase2Key.bind(null)
-            : (q) => 'phase2:' + String((q && q.title) || '').toLowerCase().replace(/\s+/g, '_'),
+            : (q) => 'phase2:' + String((q && q.title) || '').toLowerCase().replace(/\s+/g, '_').slice(0, 64),
     };
     return makeComponentBase(methods, {
         base: { ...base, ...overrides },
@@ -70,7 +71,7 @@ const scenarios = {
 
         assert(calls.length === 1, 'expected exactly one search-one POST, got ' + calls.length);
         assert(calls[0].url.includes('/splunk/search-one'), 'POST url wrong: ' + calls[0].url);
-        const st = comp.splunkRunStatus['supportive:' + comp.getSupportiveKey(QUERY)];
+        const st = comp.phase2CardState[comp.getSupportiveKey(QUERY)].runStatus;
         assert(st, 'no chip state written');
         assert(st.state === 'complete', 'expected final state "complete", got ' + st.state);
         assert(st.short === 'Saved ✓', 'expected Saved ✓ chip, got ' + st.short);
@@ -90,7 +91,7 @@ const scenarios = {
         const comp = makeComponent(methods);
         await comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
 
-        const st = comp.splunkRunStatus['supportive:' + comp.getSupportiveKey(QUERY)];
+        const st = (comp.phase2CardState[comp.getSupportiveKey(QUERY)] || {}).runStatus;
         assert(st, 'no chip state written on failure path');
         assert(st.state === 'error', 'expected final state "error", got ' + st.state);
         assert(st.short === 'Run failed', 'expected Run failed chip, got ' + st.short);
@@ -106,7 +107,7 @@ const scenarios = {
         const comp = makeComponent(methods, { analysisCaseId: '' });
         await comp.runSplunkSearch({ q: QUERY, kind: 'supportive' });
 
-        const st = comp.splunkRunStatus['supportive:' + comp.getSupportiveKey(QUERY)];
+        const st = (comp.phase2CardState[comp.getSupportiveKey(QUERY)] || {}).runStatus;
         assert(st && st.state === 'error', 'no-case path should set an inline error chip');
         assert(alertCalls.length === 0, 'window.alert was called on no-case path: ' + JSON.stringify(alertCalls));
     },
@@ -119,7 +120,7 @@ const scenarios = {
         const comp = makeComponent(methods);
         await comp.runSplunkSearch({ q: { id: 8, title: 'Empty SPL card', spl_query: '   ' }, kind: 'supportive' });
 
-        const st = comp.splunkRunStatus['supportive:' + comp.getSupportiveKey({ id: 8, title: 'Empty SPL card', spl_query: '   ' })];
+        const st = (comp.phase2CardState[comp.getSupportiveKey({ id: 8, title: 'Empty SPL card', spl_query: '   ' })] || {}).runStatus;
         assert(st && st.state === 'error', 'empty-SPL path should set an inline error chip');
         assert(alertCalls.length === 0, 'window.alert was called on empty-SPL path: ' + JSON.stringify(alertCalls));
     },
@@ -133,7 +134,7 @@ const scenarios = {
         let comp;
         const during = [];
         const { ctx, alertCalls } = makeSandbox({ post: async () => {
-            const current = Object.values(comp.splunkRunStatus || {})[0] || null;
+            const current = (comp.phase2CardState[comp.getSupportiveKey(QUERY)] || {}).runStatus || null;
             during.push(current);
             await gate;
             return { data: { success: true, result_status: 'success', row_count: 0, rows: [] } };
@@ -146,7 +147,7 @@ const scenarios = {
             'mid-flight chip should be Running…, got ' + JSON.stringify(during[0]));
         release();
         await pending;
-        const after = comp.splunkRunStatus['supportive:' + comp.getSupportiveKey(QUERY)];
+        const after = comp.phase2CardState[comp.getSupportiveKey(QUERY)].runStatus;
         assert(after.state === 'complete' && after.short === 'Saved ✓',
             'final chip should be Saved ✓, got ' + JSON.stringify(after));
         assert(alertCalls.length === 0, 'window.alert was called during transitions: ' + JSON.stringify(alertCalls));
