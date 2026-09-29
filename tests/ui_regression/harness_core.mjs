@@ -70,7 +70,7 @@ export function makeSandbox(axiosImpls = {}) {
         URL, URLSearchParams,
     };
     sandbox.globalThis = sandbox;
-    return { ctx: vm.createContext(sandbox), alertCalls, errorCalls, warnCalls, confirmCalls, setConfirmReturn(v) { confirmReturn = v; } };
+    return { ctx: vm.createContext(sandbox), sandbox, alertCalls, errorCalls, warnCalls, confirmCalls, setConfirmReturn(v) { confirmReturn = v; } };
 }
 
 /**

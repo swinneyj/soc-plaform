@@ -822,6 +822,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_blocked_generate_surfaces_punchlist_and_force_path(self):
         self._run("closure_blocked_generate_punchlist")
 
+    def test_draft_autosave_debounces_and_cancels_on_case_change(self):
+        self._run("draft_autosave_debounce")
+
 
 class TestNotableParsing:
     """Direct coverage for services/evidence_service.py (was referenced by

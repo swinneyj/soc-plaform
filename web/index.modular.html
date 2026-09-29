@@ -198,13 +198,13 @@
                 @run-all-supportive="runAllSupportiveSplunk"
                 @promote-phase2-query="promotePhase2Query"
                 @on-phase2-template-input="onPhase2TemplateInput"
-                @update-supportive-manual="({key, value}) => supportiveManualResults = { ...supportiveManualResults, [key]: value }"
+                @update-supportive-manual="({key, value}) => updateSupportiveResult(key, value)"
                 @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
                 @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
                 @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
-                @update-phase2-manual="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), resultText: value } }"
+                @update-phase2-manual="({key, value}) => _updateCardField('phase2CardState', key, 'resultText', value)"
                 @update-phase2-finding="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), findingType: value } }"
-                @update-phase2-coverage="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), coverage: value } }"
+                @update-phase2-coverage="({key, value}) => _updateCardField('phase2CardState', key, 'coverage', value)"
                 @update-card-status="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), status: value } }"
                 @update-card-state="(next) => phase2CardState = next || {}"
                 @delete-evidence="deleteEvidence"
@@ -329,7 +329,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=9"></script>
     <script src="modules/database.js?v=18"></script>
-    <script src="modules/analysis.js?v=17"></script>
+    <script src="modules/analysis.js?v=18"></script>
     <script src="modules/tools.js?v=11"></script>
     <script src="modules/closure.js?v=10"></script>
     <script src="modules/codeReview.js?v=9"></script>

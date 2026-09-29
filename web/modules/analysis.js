@@ -24,6 +24,11 @@
 
     const AnalysisMethods = {
         onAnalysisCaseChanged() {
+            // A pending draft save must never land under the new case's key.
+            if (this._draftSaveTimer) {
+                clearTimeout(this._draftSaveTimer);
+                this._draftSaveTimer = null;
+            }
             this.analysisResult = null;
             this.investigationState = null;
             this.enrichmentManualResults = {};
@@ -1020,7 +1025,7 @@
 
         onPhase2TemplateInput(q, value) {
             const key = this.getPhase2Key(q);
-            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), editedSpl: value } };
+            this._updateCardField('phase2CardState', key, 'editedSpl', value);
         },
 
         copyPhase2SPL(q) {
@@ -1446,6 +1451,40 @@
                     console.error('Failed to copy analysis:', err);
                     alert('Failed to copy analysis to clipboard');
                 });
+        },
+
+        // S10 debounced draft auto-save: every analyst keystroke in a card
+        // field funnels through _updateCardField, which updates state and
+        // schedules a single trailing-edge snapshot write (localStorage) ~1.2s
+        // later. A refresh or crash now loses at most the last 1.2s of
+        // typing instead of everything since the last explicit save.
+        _updateCardField(mapName, key, field, value) {
+            const map = this[mapName] || {};
+            this[mapName] = { ...map, [key]: { ...(map[key] || {}), [field]: value } };
+            this._scheduleDraftSave();
+        },
+
+        updateSupportiveResult(key, value) {
+            const map = this.supportiveManualResults || {};
+            this.supportiveManualResults = { ...map, [key]: value };
+            this._scheduleDraftSave();
+        },
+
+        _scheduleDraftSave() {
+            if (!this.analysisCaseId) {
+                return;
+            }
+            if (this._draftSaveTimer) {
+                clearTimeout(this._draftSaveTimer);
+            }
+            this._draftSaveTimer = setTimeout(() => {
+                this._draftSaveTimer = null;
+                try {
+                    this._storeAnalysisStateSnapshot();
+                } catch (err) {
+                    console.warn('Draft auto-save failed:', err);
+                }
+            }, 1200);
         },
 
         _storeAnalysisStateSnapshot() {

@@ -23,6 +23,7 @@
  *   promote                  promote_historical_guard
  *   promote_failure          promote_all_open
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
+ *   draft_autosave_debounce
  * Exit code 0 = all assertions held.
  */
 import {
@@ -542,6 +543,73 @@ const scenarios = {
         assert(comp.closureResult && comp.closureResult.generated_note === 'NOTE',
             'forced generate must adopt the closure result: ' + JSON.stringify(comp.closureResult));
         assert(alertCalls.length === 0, 'forced generate must not alert: ' + JSON.stringify(alertCalls));
+    },
+
+    // S10: card edits debounce into a localStorage draft snapshot ~1.2s after
+    // the last keystroke; switching cases cancels the pending write.
+    async draft_autosave_debounce() {
+        const writes = [];
+        const firedTimers = [];
+        const { ctx, sandbox, warnCalls } = makeSandbox({ get: async () => ({ data: [] }) });
+        // Capture timers instead of really waiting, and capture localStorage
+        // writes, inside the sandbox globals.
+        sandbox.setTimeout = (fn, ms) => {
+            const id = firedTimers.length + 1000;
+            firedTimers.push({ id, fn, ms, fired: false });
+            return id;
+        };
+        sandbox.clearTimeout = (id) => {
+            const t = firedTimers.find((t) => t.id === id);
+            if (t) { t.fired = true; }
+        };
+        sandbox.window.localStorage = {
+            setItem(k, v) { writes.push([k, String(v).length]); },
+            getItem() { return null; },
+        };
+        const methods = await loadAnalysis(ctx);
+        const comp = makeComponent(methods, {
+            base: {
+                apiUrl: '/api',
+                analysisCaseId: 'MOCK-CASE-001',
+                supportiveManualResults: {},
+                phase2CardState: {},
+                _draftSaveTimer: null,
+            },
+        });
+
+        // Three rapid keystrokes: exactly one trailing timer at ~1.2s.
+        comp.updateSupportiveResult('id:1', 'partial paste');
+        comp._updateCardField('phase2CardState', 'phase2:foo', 'resultText', 'more');
+        comp.onPhase2TemplateInput({ title: 'foo', spl: 'index=x' }, 'index=edited');
+
+        const pending = firedTimers.filter((t) => !t.fired);
+        assert(pending.length === 1, 'rapid edits must schedule exactly one trailing timer, got ' + pending.length);
+        assert(pending[0].ms === 1200, 'debounce must be trailing ~1.2s, got ' + pending[0].ms);
+        assert(writes.length === 0, 'no snapshot write before the debounce elapses');
+
+        // Elapse the timer: exactly one draft write containing both maps.
+        pending[0].fired = true;
+        pending[0].fn();
+        assert(writes.length === 1, 'debounce must produce exactly one snapshot write, got ' + writes.length);
+        assert(writes[0][0] === 'analysis_state:MOCK-CASE-001',
+            'draft must be keyed by case, got ' + writes[0][0]);
+        assert(comp._draftSaveTimer === null, 'timer handle must clear after firing');
+        assert(warnCalls.length === 0, 'draft save logged warnings: ' + JSON.stringify(warnCalls));
+
+        // Switching cases cancels a pending draft write (never cross-key).
+        comp.updateSupportiveResult('id:1', 'again');
+        const before = firedTimers.filter((t) => !t.fired).length;
+        assert(before === 1, 'a new edit must schedule a new timer');
+        comp.onAnalysisCaseChanged();
+        assert(firedTimers.filter((t) => !t.fired).length === 0,
+            'case change must cancel the pending draft timer');
+        assert(writes.length === 1, 'cancelled draft must never write');
+
+        // No case selected: edits schedule nothing at all.
+        comp.analysisCaseId = '';
+        comp.updateSupportiveResult('id:1', 'orphan');
+        assert(firedTimers.filter((t) => !t.fired).length === 0,
+            'no-case edits must not schedule a draft save');
     },
 };
 
