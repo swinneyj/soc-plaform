@@ -1,16 +1,16 @@
 # SOC Platform — Development Plan
 
-*Last updated: 2026-09-28. Owner: Dalton Lewis · Repo: `swinneyj/soc-plaform`*
+*Last updated: 2026-09-29. Owner: Dalton Lewis · Repo: `swinneyj/soc-plaform`*
 
 ---
 
 ## 1. Where we are (snapshot)
 
-- **Code state:** `dev-dalton` at `442319d` — Phase 1 hardening ✅ and Phase 2 per-card AI evidence verdicts ✅ (incl. confidence-hint polish) pushed; CI green on Python 3.14 + 3.9.
+- **Code state:** `dev-dalton` at `94ab431` — Phase 1 hardening ✅, Phase 2 per-card AI evidence verdicts ✅ (incl. confidence-hint polish), and Phase 3 mock-first loop ✅ pushed (incl. the mid-loop search-one harness, Run All + inline run status, and the Sept 29 live-smoke fixes in §8); CI green on Python 3.14 + 3.9.
 - **Data state:** one shared **Neon** dataset — local API, Vercel prod, and Justin's instance all read/write the same database. Test rows must be clearly marked and deleted the same session; nothing destructive without explicit confirmation.
 - **Runtime:** one-command startup via `scripts/start` (Ollama + BWS preflight + daemonized API on `127.0.0.1:8000`), Ollama `llama3.1:latest`, Neon Postgres (cloud) — app ports loopback-only. Secrets: BWS vault is source of truth (`scripts/pull-secrets` regenerates `.env`); credential-bearing keys live in the **macOS Keychain** (`scripts/secrets-keychain`), not in plaintext `.env`.
-- **Test suite:** 141 pure-unit tests, <1 s runtime, dual-runtime (3.14 + 3.9) matrix in CI, covering evidence ledger validation, AI-derived direction scoring, per-card verdict parsing/precedence, question-driven follow-ups, model-tag resolution, closure gating, confidence caps/hints, loop-status transitions, boundary/latch, and report paths.
-- **Known debt:** analyst-facing judgment remnants (Phase 4), ops backlog (Phase 5: backups, retention, auth activation), `web/Old` deletion + Vercel env-var handoff pending Justin.
+- **Test suite:** 186 tests (pure-unit + TestClient), <2 s runtime, dual-runtime (3.14 + 3.9) matrix in CI, covering evidence ledger validation, AI-derived direction scoring, per-card verdict parsing/precedence, question-driven follow-ups, model-tag resolution, closure gating, confidence caps/hints, loop-status transitions, boundary/latch, report paths, the mid-loop search-one loop harness (phases 2–5 with real executions), the playbook family guard, and UI regressions via a zero-dependency node vm harness (`tests/ui_regression/`) driving the real `runSplunkSearch`.
+- **Known debt:** analyst-facing judgment remnants (Phase 4: promote-time triage verdicts + `question_resolution`), ops backlog (Phase 5: backups, retention, auth activation), `web/Old` deletion + Vercel env-var handoff pending Justin, and the live `index.html`/`app.js` monolith running behind the modular stack (cutover planned).
 
 ### Collaboration hazard (read this first)
 Justin has twice replaced repo history with fresh single-commit snapshots ("updated project files from WIndows"). Any local line not pushed is at risk of being orphaned. **Rule: push early, push often; re-verify his snapshots against the test suite before adopting them** (`pytest` catches regressions in <1 s).
@@ -65,10 +65,10 @@ Turn the paste-driven loop into a one-click loop. **Read-only first** (search + 
 
 - **Flow (shipped):** `POST /api/splunk/search-one {case_id, query_title, spl?, earliest?, latest?, target_questions?}` → substitute placeholders (`$host$`, `$user$`…) from the case's notable fields via `rule_context_service.render_query_template` (DB-backed `PlaceholderAlias` overrides + built-in defaults; unresolved tokens ⇒ 422, never a silently broken query) → run through `get_search_backend()` → map job outcome to `result_status` (`map_search_outcome`: 0 rows ⇒ `no_results`; error/timeout ⇒ `query_failed`; else `success`) → save through the standard evidence-save path with the explicit `splunk_auto` label (re-runs replace the prior auto row per query title) → return bounded raw rows for analyst review.
 - **Guardrails (shipped):** per-case concurrency cap (1 running job; second run ⇒ 409), 60 s timeout (`SEARCH_ONE_TIMEOUT_SECONDS`), every executed query text logged to the `tool_runs` audit trail (`tool_name=splunk_search_one`).
-- **UI (shipped):** "Run in Splunk" button on Stage-2 supportive query cards and Phase 2 follow-up cards; results land in the card notes and the Evidence Timeline ledger immediately (investigation state rebuilt on save).
+- **UI (shipped):** "Run in Splunk" button on Stage-2 supportive query cards and Phase 2 follow-up cards; results land in the card notes and the Evidence Timeline ledger immediately (investigation state rebuilt on save). Sept 29: **Run All** on Stage 2 (sequential, skips busy cards, summary banner) and non-blocking inline per-card run status (`running → Saved ✓ / Run failed`) replacing modal alerts on every run path.
 - **Auth/config (deferred to the real connector):** `SPLUNK_URL`, `SPLUNK_TOKEN` (bearer) in keychain/env, never in DB; session-key flow only as fallback.
 - **Non-goals (v1):** saved-search management, index writes, ES notable updates, multi-cluster.
-- **Tests:** placeholder substitution, outcome mapping, and row summarization (pure, `tests/test_search_backend.py`); endpoint via TestClient — substitution, `no_results`/`query_failed` mapping, per-title replace, 404/422 guards, concurrency 409, timeout (`tests/test_api_analyze_flow.py`).
+- **Tests:** placeholder substitution, outcome mapping, and row summarization (pure, `tests/test_search_backend.py`); endpoint via TestClient — substitution, `no_results`/`query_failed` mapping, per-title replace, 404/422 guards, concurrency 409, timeout (`tests/test_api_analyze_flow.py`); mid-loop harness `TestSearchOneMidLoop` (phases 2–5 interleaved with real search-one executions — exactly one `splunk_auto` row per (case, query), auto-evidence consumed by the next phase's prompt) and embedded `earliest=`/`latest=` window parsing (5-tuple `_parse_spl`; embedded windows override the caller's).
 
 **Size:** L. **Depends on:** Phase 1 API tests (so the ledger path is pinned before automating it). **Remaining:** `RealSplunkBackend` REST wiring when the API key arrives.
 
@@ -100,9 +100,13 @@ Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 
 - **SPL follow-up phase degradation (reported Sept 28, 2026 — RESOLVED Sept 28):** after Phase 3 the iterative investigation stopped surfacing new queries and the loop view degraded ("basically stopped working overall"). Diagnosed with the loop-stress harness (`tests/test_api_analyze_flow.py::TestFollowUpLoopStress`, which auto-drives 7 follow-up iterations against a 2-template playbook and asserts every phase returns cards carrying a *fresh* SPL; extended Sept 28 with `TestSearchOneMidLoop`, which interleaves real `POST /api/splunk/search-one` executions between phases and asserts the auto-collected `splunk_auto` evidence executes successfully against the mock backend, ledgers exactly once per (case, query), and is consumed by the next phase's prompt — covering the full analyst loop: propose → execute → consume). Root causes and fixes: (1) re-check variants cloned the template SPL verbatim — same query under new phase-stamped titles = "no new queries" → variants now re-scope the time window (`earliest=-<phase>h`, `_rescope_variant_spl`); (2) the Phase 3+ builder dead-ended once targets emptied while the loop still needed work → it now falls back to hypothesis-verification re-checks whenever `loop_status != ready_for_closure` (empty cards only when the loop has converged); (3) questions raised by the current analysis were not targets until the next iteration → `current_questions` merge; (4) `ai_finding_type` per-card verdicts persisted by `/db/analyze` were written but never read back, so post-save state rebuilds degraded every entry to neutral ("evidence marked neutral only") → rebuilds now honor persisted per-card verdicts. Known nuance: re-saving evidence replaces rows and clears stored verdicts until the next analysis re-assesses the new results (by design).
 
+- **Modular analysis-tab crash + blocking run alerts (reported Sept 29 from the live UI smoke — RESOLVED Sept 29):** the modular tab died blank when phase-2 cards rendered (`AnalysisTab` read `phase2CoverageNotes` from a prop `index.modular.html` never passed, plus an undeclared `supportiveSaveBusy`), and `runSplunkSearch`'s success `alert()` can wedge embedded webviews mid-loop. Fixed: root state + bindings + `?v=` cache-buster bumps; inline per-card run status (`running → Saved ✓ / Run failed`) replaces the modal on every path with Run disabled while running; locked by a zero-dependency node vm harness (`tests/ui_regression/run_splunk_search_status.mjs`) that drives the real `runSplunkSearch` and asserts chip transitions and zero `alert()` calls across 5 scenarios.
+
+- **Playbook family hijack (reported Sept 29 from the live UI smoke — RESOLVED Sept 29):** `/api/db/analyze`'s fuzzy `supportive_rules.json` matcher adopted an unrelated catalog entry (MOCK-RULE-001 matched `sso_brute_force_pingfederate` on shared anchor tokens) even for rules that own DB-backed `SupportiveQuery` rows, zeroing `supportive_playbook_available` and hiding the Stage 4 follow-up generator mid-investigation. Fixed: fuzzy catalog adoption now only fires when the case's rule has no DB-backed queries (`api/main.py`); regression tests `TestPlaybookFamilyGuard` include a counter-test that playbook-less imported notables still adopt catalog families.
+
 ---
 
-## 8. Verification strategy (applies to all phases)
+## 9. Verification strategy (applies to all phases)
 
 1. Pure-unit tests for any new logic (no DB/Ollama) — keep the suite under ~1 s.
 2. Contract tests for prompts and external payload shapes.
@@ -111,7 +115,7 @@ Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 
 ---
 
-## 9. Suggested sequence
+## 10. Suggested sequence
 
 ```
 Push queued commits → Phase 1 (CI + API tests + docs) → Phase 2 (per-card verdicts)
