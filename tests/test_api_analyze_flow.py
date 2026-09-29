@@ -909,7 +909,15 @@ class TestPlaybookFamilyGuard:
         (tmp_path / "supportive_rules.json").write_text(
             json.dumps({"rules": rules}), encoding="utf-8"
         )
-        monkeypatch.setattr(api_main, "get_platform_root", lambda: str(tmp_path))
+        # The router split gave each module its own get_platform_root
+        # binding; patch every one so the catalog load sees tmp_path.
+        import api.flow_support as flow_support
+        import api.routes.analyze as analyze_routes
+
+        fake_root = lambda: str(tmp_path)  # noqa: E731
+        monkeypatch.setattr(api_main, "get_platform_root", fake_root)
+        monkeypatch.setattr(flow_support, "get_platform_root", fake_root)
+        monkeypatch.setattr(analyze_routes, "get_platform_root", fake_root)
 
     @staticmethod
     def _hijack_catalog_entry():

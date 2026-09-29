@@ -33,7 +33,7 @@ If you are new to this repo, read in this order:
 ### Runtime and App Surface
 
 - `api\`
-  FastAPI service layer
+  FastAPI service layer — `api/main.py` (app, lifespan, API-key middleware, tools/jobs/reports/registry, notables, placeholder-aliases, supportive-queries, rules, search-one, code-review routes) plus focused routers in `api/routes\` (`system`, `promote`, `analyze`, `evidence`, `closure`) and shared helpers + payload models in `api/flow_support.py`
 - `db\`
   SQLAlchemy models and DB wiring
 - `services\`
@@ -71,7 +71,7 @@ If you are new to this repo, read in this order:
 - `Tools\`
   Individual SOC tools, grouped by function
 - `scripts\attic\`
-  Retired one-shot migration/patch scripts moved out of the repo root (kept for history; part of no workflow)
+  Retired one-shot migration/patch scripts moved out of the repo root, plus dead retired modules (e.g. `db_routes.py`, unused since the Docker era) (kept for history; part of no workflow)
 
 ### Data and Local State
 
@@ -103,20 +103,20 @@ Live entry is now a thin shell: `web/index.html` (≈30 KB) → `web/app.modular
 - **Database Tab (Triage / Notables / Stats)**
   - UI: `web/components/DatabaseTab.js`
   - Logic: `web/modules/database.js` (+ `web/utils/pocSummary.js`, `selection.js`)
-  - API: `/api/db/triage`, `/api/db/notables`, `/api/db/stats` in `api/main.py`
+  - API: `/api/db/triage`, `/api/db/notables` in `api/main.py`; `/api/db/notables/{event_id}/promote` in `api/routes/promote.py`; `/api/db/stats` in `api/routes/system.py`
   - Models: `TriageResult`, `SplunkEvent` in `db/models.py`
 
 - **AI Analysis Tab**
   - UI: `web/components/AnalysisTab.js`
   - Logic: `web/modules/analysis.js` (phase1/phase2/supportive/aliases/evidence) + `web/utils/queryRender.js`, `keys.js`
-  - API: `/api/db/analyze`, `/api/db/triage/{id}/evidence`, `/api/db/placeholder-aliases`, `/api/db/supportive-queries` in `api/main.py`
+  - API: `/api/db/analyze` in `api/routes/analyze.py`; `/api/db/triage/{id}/evidence` + `/api/db/triage/{id}/investigation-state` in `api/routes/evidence.py`; `/api/db/placeholder-aliases`, `/api/db/supportive-queries` in `api/main.py`
   - Models: `AnalysisResult`, `SupportiveQuery`, `SupportiveQueryResult`, `InvestigationState` in `db/models.py`
   - Ollama: `services/ollama_service.py` + `services/investigation_state.py` / `evidence_service.py`
 
 - **Closure Notes Tab**
   - UI: `web/components/ClosureTab.js`
   - Logic: `web/modules/closure.js`
-  - API: `/api/db/closure-note`, `/api/db/rules` in `api/main.py`
+  - API: `/api/db/closure-note` + `/api/db/triage/{id}/closure-readiness` in `api/routes/closure.py`; `/api/db/rules` in `api/main.py`
   - Models: `ClosureNote`, `ESCorrelationRule` in `db/models.py`; `services/closure_service.py`
 
 - **Jobs Tab**

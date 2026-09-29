@@ -1,7 +1,8 @@
 # Backend Modularization Plan — api/main.py
 
 **Date:** 2026-09-11  
-**Status:** Planned (frontend modularization complete, this is the backend counterpart)  
+**Status:** Phase 1 landed 2026-09-29 (further phases planned)  
+**Progress (Sept 29):** first extraction done — `api/routes/promote.py`, `analyze.py`, `evidence.py`, `closure.py` plus shared `api/flow_support.py` (helpers + payload models), all registered in `api/main.py` via `include_router` (main.py 6,410 → 4,650 lines). Deviation from the target layout below: shared helpers live in `api/flow_support.py` (not `api/helpers/`), and payload models stayed with their flow instead of `api/schemas.py` (`api/schemas.py` remains a dead zero-reference duplicate). Dead `api/db_routes.py` retired to `scripts/attic/db_routes.py`.  
 **Goal:** Same treatment as `docs/FRONTEND_MODULARIZATION.md` — take a 5314-line monolith and split it into domain-owned files without downtime. Additive first, then cutover.
 
 ## Current state
