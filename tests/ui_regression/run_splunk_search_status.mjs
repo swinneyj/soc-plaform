@@ -21,6 +21,11 @@ import {
 } from './harness_core.mjs';
 
 async function loadAnalysisMethods(ctx) {
+    // M1: analysis.js resolves the API global (modules/api.js) for HTTP.
+    // The real api.js transport stays live; scenario axios stubs see the
+    // exact URLs production dials (search-one has no canonical alias).
+    const api = await loadModuleMethods(ctx, 'web/modules/api.js', 'API');
+    ctx.API = api;
     const methods = await loadModuleMethods(ctx, 'web/modules/analysis.js', 'AnalysisMethods');
     if (typeof methods.runSplunkSearch !== 'function') {
         assert(false, 'analysis.js did not expose AnalysisMethods.runSplunkSearch');

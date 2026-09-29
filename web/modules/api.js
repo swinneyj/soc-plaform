@@ -193,6 +193,11 @@
             return post('/db/notables/batch-delete', payload);
         },
 
+        // ---- Splunk -------------------------------------------------------------
+        splunkSearchOne(payload) {
+            return post('/splunk/search-one', payload);
+        },
+
         // ---- Rules / supportive queries / aliases (legacy spellings: the
         // server defines no canonical aliases for this family) -----------------
         rules() {
@@ -200,6 +205,9 @@
         },
         supportiveQueries(params) {
             return get('/db/supportive-queries', { params });
+        },
+        supportiveQueriesStatus(caseId) {
+            return get('/db/supportive-queries/status/' + encodeURIComponent(caseId));
         },
         createSupportiveQuery(payload) {
             return post('/db/supportive-queries', payload);
@@ -227,8 +235,17 @@
         },
 
         // ---- Analysis -----------------------------------------------------------
-        analyze(payload) {
-            return post('/db/analyze', payload);
+        analyze(payload, config) {
+            // config carries { signal } for in-flight cancellation.
+            return post('/db/analyze', payload, config);
+        },
+
+        draftSupportiveQueries(payload) {
+            return post('/db/supportive-queries/draft', payload);
+        },
+
+        importSupportiveResults(payload) {
+            return post('/db/supportive-queries/import-results', payload);
         },
 
         // ---- Closure (legacy spelling: no canonical alias server-side) ----------

@@ -43,7 +43,19 @@ async function loadApiLayer(ctx) {
     return api;
 }
 
+/**
+ * Load api.js into the sandbox and expose it as the `API` global for modules
+ * that consume the service layer (M1+). The real api.js transport stays live:
+ * scenario axios stubs see canonical-first URLs exactly as production dials.
+ */
+async function installApiGlobal(ctx) {
+    const api = await loadApiLayer(ctx);
+    ctx.API = api; // bare `API` lookups resolve against the vm context
+    return api;
+}
+
 async function loadAnalysis(ctx) {
+    await installApiGlobal(ctx); // M1: analysis.js resolves the API global
     const methods = await loadModuleMethods(ctx, 'web/modules/analysis.js', 'AnalysisMethods');
     assert(typeof methods.saveSupportiveEvidence === 'function'
         && typeof methods.savePhase2Evidence === 'function'
@@ -148,7 +160,7 @@ const scenarios = {
 
         assert(posts.calls.length === 1, 'expected one evidence POST, got ' + posts.calls.length);
         const [url, body] = posts.calls[0];
-        assert(url === '/api/db/triage/MOCK-CASE-001/evidence', 'POST url wrong: ' + url);
+        assert(url === '/api/evidence/MOCK-CASE-001', 'POST url wrong (canonical evidence family expected): ' + url);
         assert(body.source_system === 'supportive_manual', 'source_system wrong: ' + body.source_system);
         assert(body.replace_existing === true, 'replace_existing must be true');
         assert(body.entries.length === 2, 'expected 2 entries (blank success skipped), got ' + body.entries.length);
@@ -198,7 +210,7 @@ const scenarios = {
 
         assert(posts.calls.length === 1, 'expected one evidence POST, got ' + posts.calls.length);
         const [url, body] = posts.calls[0];
-        assert(url === '/api/db/triage/MOCK-CASE-001/evidence', 'POST url wrong: ' + url);
+        assert(url === '/api/evidence/MOCK-CASE-001', 'POST url wrong (canonical evidence family expected): ' + url);
         assert(body.source_system === 'phase2_manual', 'source_system wrong: ' + body.source_system);
         assert(body.replace_existing === true, 'replace_existing must be true');
         assert(body.entries.length === 3, 'expected 3 entries (untouched success skipped), got ' + body.entries.length);
@@ -261,7 +273,7 @@ const scenarios = {
 
         assert(gets.calls.length === 1, 'expected one evidence GET, got ' + gets.calls.length);
         const [url, config] = gets.calls[0];
-        assert(url === '/api/db/triage/MOCK-CASE-001/evidence', 'GET url wrong: ' + url);
+        assert(url === '/api/evidence/MOCK-CASE-001', 'GET url wrong (canonical evidence family expected): ' + url);
         assert(config && config.params && config.params.source_system === 'phase2_manual',
             'GET params wrong: ' + JSON.stringify(config && config.params));
         const cards = comp.phase2CardState;

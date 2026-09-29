@@ -5,7 +5,7 @@
  * run analysis / phase2, evidence save/load, keys, renderers, copies.
  *
  * Spread into Vue: ...(window.AnalysisMethods || {})
- * Depends on: this.apiUrl, axios, Analysis data properties.
+ * Depends on: API (modules/api.js) for all HTTP, Analysis data properties.
  * Pure key/render helpers also available via utils/keys.js and utils/queryRender.js.
  */
 (function (global) {
@@ -56,20 +56,18 @@
             // durable evidence/state from the API.
             this.loadAnalysisState(caseId);
 
-            axios
-                .get(this.apiUrl + '/db/supportive-queries/status/' + encodeURIComponent(caseId))
-                .then(res => {
-                    this.supportivePlaybookAvailable = res.data && res.data.playbook_available === true;
+            API.supportiveQueriesStatus(caseId)
+                .then(data => {
+                    this.supportivePlaybookAvailable = data && data.playbook_available === true;
                 })
                 .catch(err => {
                     console.warn('Failed to load supportive playbook status:', err);
                     this.supportivePlaybookAvailable = null;
                 });
 
-            axios
-                .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
-                .then(res => {
-                    this.analysisSourceNotable = res.data;
+            API.triageNotable(caseId)
+                .then(data => {
+                    this.analysisSourceNotable = data;
                 })
                 .catch(err => {
                     console.error('Failed to load source notable for analysis case:', err);
@@ -84,8 +82,7 @@
 
         async loadRules() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/rules');
-                this.availableRules = res.data;
+                this.availableRules = await API.rules();
             } catch (err) {
                 console.error('Failed to load rules:', err);
                 this.availableRules = [];
@@ -103,11 +100,10 @@
             this.supportiveEditorQueries = [];
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/supportive-queries', {
-                    params: { rule_id: this.supportiveEditorRuleId }
-                });
                 // Clone the array so edits don't mutate the live rule copy
-                this.supportiveEditorQueries = (res.data || []).map(q => ({
+                this.supportiveEditorQueries = ((await API.supportiveQueries({
+                    rule_id: this.supportiveEditorRuleId
+                })) || []).map(q => ({
                     id: q.id,
                     rule_id: q.rule_id,
                     title: q.title,
@@ -172,8 +168,7 @@
         async loadPlaceholderAliasList() {
             this.placeholderAliasEditorBusy = true;
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
-                this.placeholderAliasList = res.data || [];
+                this.placeholderAliasList = (await API.placeholderAliases()) || [];
             } catch (err) {
                 console.error('Failed to load placeholder aliases:', err);
                 this.placeholderAliasEditorError = 'Failed to load aliases from server.';
@@ -198,9 +193,9 @@
 
             try {
                 if (this.editingAliasId) {
-                    await axios.put(`${this.apiUrl}/db/placeholder-aliases/${this.editingAliasId}`, payload);
+                    await API.updatePlaceholderAlias(this.editingAliasId, payload);
                 } else {
-                    await axios.post(this.apiUrl + '/db/placeholder-aliases', payload);
+                    await API.createPlaceholderAlias(payload);
                 }
                 await this.loadPlaceholderAliasList();
                 // Reset form
@@ -231,10 +226,8 @@
             this.placeholderAliasSuggestionsBusy = true;
             this.placeholderAliasEditorError = '';
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases/suggestions', {
-                    params: { limit_events: 50 }
-                });
-                this.placeholderAliasSuggestions = (res.data && res.data.candidates) || [];
+                const data = await API.placeholderAliasSuggestions({ limit_events: 50 });
+                this.placeholderAliasSuggestions = (data && data.candidates) || [];
             } catch (err) {
                 console.error('Failed to load alias field suggestions:', err);
                 this.placeholderAliasEditorError = 'Failed to load field suggestions from recent notables.';
@@ -269,7 +262,7 @@
             }
             this.placeholderAliasEditorBusy = true;
             try {
-                await axios.delete(`${this.apiUrl}/db/placeholder-aliases/${id}`);
+                await API.deletePlaceholderAlias(id);
                 await this.loadPlaceholderAliasList();
                 if (this.editingAliasId === id) {
                     this.editingAliasId = null;
@@ -319,7 +312,7 @@
             this.supportiveEditorBusy = true;
             this.supportiveEditorError = '';
             try {
-                await axios.delete(this.apiUrl + '/db/supportive-queries/' + row.id);
+                await API.deleteSupportiveQuery(row.id);
                 this.supportiveEditorQueries.splice(index, 1);
                 // Refresh rules so Analysis/Closure tabs reflect the change
                 await this.loadRules();
@@ -363,10 +356,10 @@
                     };
 
                     if (q.id) {
-                        await axios.put(this.apiUrl + '/db/supportive-queries/' + q.id, payload);
+                        await API.updateSupportiveQuery(q.id, payload);
                     } else {
-                        const res = await axios.post(this.apiUrl + '/db/supportive-queries', payload);
-                        q.id = res.data.id;
+                        const data = await API.createSupportiveQuery(payload);
+                        q.id = data.id;
                     }
                 }
 
@@ -391,8 +384,7 @@
 
         async checkOllama() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/ollama/health');
-                this.ollamaHealth = res.data;
+                this.ollamaHealth = await API.ollamaHealth();
                 if (this.ollamaHealth.models.length > 0) {
                     const preferred = 'llama3.1:latest';
                     const fallbacks = ['llama3.1:latest', 'llama3.1:8b', 'llama3.1'];
@@ -421,9 +413,9 @@
 
         async loadPlaceholderAliases() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
+                const items = await API.placeholderAliases();
                 const map = {};
-                for (const item of res.data || []) {
+                for (const item of items || []) {
                     map[item.alias.toLowerCase()] = item.fields || [];
                 }
                 this.placeholderAliases = map;
@@ -474,8 +466,8 @@
             // If the API is down or returns nothing useful, fall back to an empty
             // shell and hydrate the timeline from GET /evidence.
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
-                this.investigationState = res.data || this._emptyInvestigationState(caseId);
+                const data = await API.triageInvestigationState(caseId);
+                this.investigationState = data || this._emptyInvestigationState(caseId);
             } catch (err) {
                 console.error('Failed to load investigation state:', err);
                 this.investigationState = this._emptyInvestigationState(caseId);
@@ -497,10 +489,8 @@
 
             let rows = [];
             try {
-                const res = await axios.get(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
-                );
-                rows = Array.isArray(res.data) ? res.data : [];
+                const data = await API.triageEvidence(caseId);
+                rows = Array.isArray(data) ? data : [];
             } catch (err) {
                 console.warn('Could not load evidence ledger for timeline:', err);
                 return;
@@ -602,10 +592,8 @@
             }
             // Final attempt: match live evidence list by title
             try {
-                const res = await axios.get(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence'
-                );
-                const rows = Array.isArray(res.data) ? res.data : [];
+                const data = await API.triageEvidence(this.analysisCaseId);
+                const rows = Array.isArray(data) ? data : [];
                 const title = String(item.title || '').trim().toLowerCase();
                 const source = String(item.source_system || '').trim().toLowerCase();
                 let match = rows.find((r) =>
@@ -667,10 +655,8 @@
          */
         async _deleteEvidenceViaRewrite(idsToRemove, deleteAll) {
             const caseId = this.analysisCaseId;
-            const listRes = await axios.get(
-                this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
-            );
-            const rows = Array.isArray(listRes.data) ? listRes.data : [];
+            const listData = await API.triageEvidence(caseId);
+            const rows = Array.isArray(listData) ? listData : [];
             const removeSet = new Set((idsToRemove || []).map((id) => Number(id)));
 
             const remaining = deleteAll
@@ -695,16 +681,13 @@
 
             let lastState = null;
             for (const sourceSystem of Object.keys(bySource)) {
-                const res = await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence',
-                    {
-                        source_system: sourceSystem,
-                        replace_existing: true,
-                        entries: bySource[sourceSystem]
-                    }
-                );
-                if (res.data && res.data.investigation_state) {
-                    lastState = res.data.investigation_state;
+                const data = await API.saveEvidence(caseId, {
+                    source_system: sourceSystem,
+                    replace_existing: true,
+                    entries: bySource[sourceSystem]
+                });
+                if (data && data.investigation_state) {
+                    lastState = data.investigation_state;
                 }
             }
             return lastState;
@@ -716,10 +699,7 @@
                 throw new Error('No evidence ids to delete');
             }
             try {
-                return await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/batch-delete',
-                    { ids: uniqueIds }
-                );
+                return { data: await API.deleteEvidenceBatch(this.analysisCaseId, uniqueIds) };
             } catch (err) {
                 const status = err.response && err.response.status;
                 if (status === 404 || status === 405) {
@@ -733,9 +713,7 @@
 
         async _postDeleteAll() {
             try {
-                return await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/delete-all'
-                );
+                return { data: await API.deleteAllEvidence(this.analysisCaseId) };
             } catch (err) {
                 const status = err.response && err.response.status;
                 if (status === 404 || status === 405) {
@@ -939,7 +917,7 @@
                 // remains responsible for using the complete evidence ledger.
                 const priorAnalysisText = (this.analysisResult && this.analysisResult.analysis || '').toString().trim();
 
-                const res = await axios.post(this.apiUrl + '/db/analyze', {
+                const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: this.analysisModel,
                     context: combinedContext,
@@ -948,7 +926,6 @@
                 }, { signal: this.analysisAbortController.signal });
                 // Ignore stale responses if a newer analysis has been started or cancelled.
                 if (requestId === this.analysisRequestId) {
-                    const newResult = res.data;
                     // If the new response lacks phase2_queries but we previously had
                     // them, preserve the existing list so phase 2 cards do not vanish.
                     if (
@@ -1080,7 +1057,7 @@
                     ''
                 ).toString().trim();
 
-                const res = await axios.post(this.apiUrl + '/db/analyze', {
+                const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: effectiveModel,
                     context: combinedContext,
@@ -1089,7 +1066,6 @@
                     analysis_phase: phaseNumber
                 }, { signal: this.analysisAbortController.signal });
                 if (requestId === this.analysisRequestId) {
-                    const newResult = res.data;
                     if (
                         (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
                         this.analysisResult &&
@@ -1136,10 +1112,7 @@
             this.supportiveDraftBusy = true;
             this.supportiveDraftError = '';
             try {
-                const res = await axios.post(this.apiUrl + '/db/supportive-queries/draft', {
-                    case_id: this.analysisCaseId,
-                });
-                const data = res.data || {};
+                const data = (await API.draftSupportiveQueries({ case_id: this.analysisCaseId })) || {};
                 if (!data.draft_queries || !data.draft_queries.length) {
                     this.supportiveDraftError = data.playbook_available
                         ? 'A supportive playbook already exists for this rule.'
@@ -1168,12 +1141,11 @@
             this.supportiveImportBusy = true;
             this.supportiveImportError = '';
             try {
-                const res = await axios.post(this.apiUrl + '/db/supportive-queries/import-results', {
+                const data = (await API.importSupportiveResults({
                     case_id: this.analysisCaseId,
                     filename: payload.filename || null,
                     content: payload.content,
-                });
-                const data = res.data || {};
+                })) || {};
                 this.supportiveEditorRuleId = data.rule_id || '';
                 this.supportiveEditorQueries = (data.draft_queries || []).map((q, index) => ({
                     ...q,
@@ -1228,14 +1200,14 @@
                 return;
             }
 
-            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            const data = await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'phase' + (this.followUpPhase || 2) + '_manual',
                 replace_existing: true,
                 entries,
             });
 
-            if (res.data && res.data.investigation_state) {
-                this.investigationState = res.data.investigation_state;
+            if (data && data.investigation_state) {
+                this.investigationState = data.investigation_state;
             }
 
             if (!options.silent) {
@@ -1250,11 +1222,9 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'phase' + (this.followUpPhase || 2) + '_manual' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'phase' + (this.followUpPhase || 2) + '_manual' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getPhase2KeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
                     saved[key] = {
@@ -1329,14 +1299,14 @@
                 return;
             }
 
-            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            const data = await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'supportive_manual',
                 replace_existing: true,
                 entries,
             });
 
-            if (res.data && res.data.investigation_state) {
-                this.investigationState = res.data.investigation_state;
+            if (data && data.investigation_state) {
+                this.investigationState = data.investigation_state;
             }
 
             if (!options.silent) {
@@ -1374,7 +1344,7 @@
                 return;
             }
 
-            await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'generic_enrichment',
                 replace_existing: true,
                 entries,
@@ -1392,11 +1362,9 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'supportive_manual' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'supportive_manual' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getSupportiveKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
                     saved[key] = {
@@ -1416,11 +1384,9 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'generic_enrichment' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'generic_enrichment' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
                     saved[key] = {
@@ -1758,13 +1724,12 @@
 
             this._setSplunkRunStatus(statusKey, 'running', 'Running SPL via the configured search backend…');
             try {
-                const res = await axios.post(this.apiUrl + '/splunk/search-one', {
+                const data = (await API.splunkSearchOne({
                     case_id: this.analysisCaseId,
                     query_title: title,
                     spl: template,
                     target_questions: (q && q.target_questions) || [],
-                });
-                const data = res.data || {};
+                })) || {};
                 const summary = this.formatSplunkAutoSummary(data);
                 this._mergeCard(key, { resultText: summary });
                 if (data.investigation_state) {
@@ -1869,7 +1834,7 @@
             const description = (q.description || '').toString().trim();
 
             try {
-                await axios.post(this.apiUrl + '/db/supportive-queries', {
+                await API.createSupportiveQuery({
                     rule_id: rule.rule_id,
                     title,
                     description,
