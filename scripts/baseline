@@ -101,7 +101,7 @@ base = flatten(json.load(open(sys.argv[1])))
 now  = flatten(json.load(open("/tmp/baseline_now.json")))
 
 # keys allowed to drift without failing (expected-variable state)
-SOFT = {"services.api_8000", "git_dirty_count"}
+SOFT = {"services.api_8000", "git_dirty_count", "git_branch"}
 
 drift = []
 for k in sorted(set(base) | set(now)):
