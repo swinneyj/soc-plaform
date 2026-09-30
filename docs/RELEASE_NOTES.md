@@ -66,9 +66,9 @@ quarantine staging clean.
 ## Known-open items (recorded, not blocking)
 - **`AUTH_MODE` flip deliberately deferred** (decision Sept 30: flag-off
   posture ships) — see the Stage E checklist note.
-- **Vercel project deletion** (owner, dashboard) — hosted deployment retired
-  Sept 30 (`deploy.yml` deleted, pushes no longer deploy anywhere); the stale
-  last build keeps serving until the project is removed —
+- **Vercel project kept on ice** (owner decision, Sept 30) — deploy retired
+  (`deploy.yml` deleted, pushes no longer deploy anywhere) but the project is
+  deliberately retained, frozen on its last build in case circumstances change —
   `docs/VERCEL_HANDOFF.md`.
 - **Dependabot update PRs awaiting human review** — alerts/config live
   (first run Sept 30 ~18:45 opened #1–#7); version bumps need a human merge

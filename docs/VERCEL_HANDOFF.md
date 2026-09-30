@@ -4,8 +4,10 @@
 by owner decision: the hosted Vercel deployment is not needed — the platform
 runs fully locally (`scripts/start`, mock-Splunk default) and the stated goal
 (local fake-Splunk testing → eventual real-Splunk import) never leaves this
-machine. The env-var handoff, routing question, and deploy checklist below are
-all moot without a deploy.*
+machine. A second same-day owner decision keeps the Vercel project itself
+**on ice** — frozen, undeployable, retained in case circumstances change.
+The env-var handoff, routing question, and deploy checklist below are all moot
+without a deploy.*
 
 ## What was retired (Sept 30, 2026)
 
@@ -17,16 +19,23 @@ all moot without a deploy.*
   and no CDN-vs-function injection decision to make.
 - **Status of the running deployment:** the last-built (pre-rotation) bundle
   still serves `soc-plaform-livid.vercel.app` with a stale `DATABASE_URL` and
-  no `API_KEY` **until the project is removed** — it is legacy, not a target.
+  no `API_KEY` — deliberately kept on ice (see below); legacy, not a target.
 
-## Owner-side follow-up (human, outside the repo)
+## Owner decision (Sept 30, 2026): keep the project on ice
 
-- [ ] **Delete (or suspend) the Vercel project** in the dashboard — this is the
-  actual retirement step; the repo side (workflow removal) is done. Deleting it
-  also closes the "which string lives in Vercel" rotation-hygiene question and
-  the publicly-reachable surface behind tracker items #1/#5.
-- [ ] (Optional, once the project is gone) remove the `VERCEL_TOKEN` /
-  `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` repo secrets and the scope grant.
+Deliberately **not** deleting the project — keep it in case circumstances
+change. Effect of that choice:
+
+- The repo can never deploy to it again (`deploy.yml` is gone), so it stays
+  frozen on its last build (pre-rotation `DATABASE_URL`, no `API_KEY`).
+- It keeps publicly serving that stale bundle at `soc-plaform-livid.vercel.app`
+  — treat as legacy: don't point anything sensitive at it, don't put new
+  secrets in its env.
+- Optional cleanup whenever desired (no urgency): delete the project in the
+  Vercel dashboard — closes the "which string lives in Vercel" hygiene
+  question and the publicly-reachable surface behind tracker items #1/#5 —
+  then remove the `VERCEL_TOKEN` / `VERCEL_ORG_ID` / `VERCEL_PROJECT_ID` repo
+  secrets and the scope grant.
 
 ## If hosted preview is ever wanted again
 

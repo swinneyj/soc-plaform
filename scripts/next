@@ -36,8 +36,8 @@ else
 fi
 
 # 3. Vercel retirement (deploy.yml deleted Sept 30, 2026) -----------------
-echo "${TODO}Vercel: deployment retired — delete the project in the dashboard"
-echo "        (stale pre-rotation build still serves until you do; docs/VERCEL_HANDOFF.md)"
+echo "${OK}Vercel: deployment retired — project kept on ice (frozen last build)"
+echo "        (undeployable from this repo; docs/VERCEL_HANDOFF.md)"
 
 # 4. Dependabot -----------------------------------------------------------
 if [ -f .github/dependabot.yml ]; then

@@ -384,7 +384,7 @@ change to `README.md` (the survivor) and, where the line described README.txt's 
 |-------|--------|-------------|-------|
 | Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
 | Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
-| Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves until the owner deletes the project — `docs/VERCEL_HANDOFF.md`. |
+| Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves (project kept on ice, owner decision) — `docs/VERCEL_HANDOFF.md`. |
 | launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |
 ```
 **B4.2 —** Gates (docs-only), commit `docs: deployment-story support matrix`, push, CI green.
@@ -812,8 +812,8 @@ route's response payload (`"batch_id": …`) so the UI/test can reference it.
 > **Status: retired (Sept 30, 2026).** The doc below was assembled (`3d614cc`),
 > then the hosted deployment itself was dropped by owner decision: `deploy.yml`
 > deleted, `docs/VERCEL_HANDOFF.md` stubbed to a retirement notice. Do **not**
-> re-run this stage — there is no deploy to hand off. Remaining owner-side step:
-> delete the Vercel project in the dashboard (retirement stub §"Owner-side").
+> re-run this stage — there is no deploy to hand off. The Vercel project is
+> deliberately kept on ice (frozen last build, undeployable) — see the stub.
 
 **D1.1 — Create `docs/VERCEL_HANDOFF.md`** with these sections and known content:
 1. **Env vars to set in Vercel:** `DATABASE_URL` (Neon, rotated value — see
