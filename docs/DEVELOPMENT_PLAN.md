@@ -9,7 +9,7 @@
 - **Code state:** `dev-dalton` at `8ab1044` — Phase 1 hardening ✅, Phase 2 per-card AI evidence verdicts ✅ (incl. confidence-hint polish), and Phase 3 read-only Splunk integration ✅ pushed (mock loop + `RealSplunkBackend` REST connector, the mid-loop search-one harness, Run All + inline run status, and the Sept 29 live-smoke fixes in §8); CI green on Python 3.14 + 3.9.
 - **Data state:** one shared **Neon** dataset — local API, Vercel prod, and Justin's instance all read/write the same database. Test rows must be clearly marked and deleted the same session; nothing destructive without explicit confirmation.
 - **Runtime:** one-command startup via `scripts/start` (Ollama + BWS preflight + daemonized API on `127.0.0.1:8000`), Ollama `llama3.1:latest`, Neon Postgres (cloud) — app ports loopback-only. Secrets: BWS vault is source of truth (`scripts/pull-secrets` regenerates `.env`); credential-bearing keys live in the **macOS Keychain** (`scripts/secrets-keychain`), not in plaintext `.env`.
-- **Test suite:** 273 tests (pure-unit + TestClient), <2 s runtime, dual-runtime (3.14 + 3.9) matrix in CI, covering evidence ledger validation, AI-derived direction scoring, per-card verdict parsing/precedence, question-driven follow-ups (incl. targeted-evidence question resolution), the Phase 4 advisory-label contract (analyst labels and the stored pre-loop verdict never decide outcomes; promote pins verdict to "suspicious" at the 0.80 gate baseline), model-tag resolution, closure gating, confidence caps/hints, loop-status transitions, boundary/latch, report paths, the notable-parsing pipeline (`evidence_service`), the mid-loop search-one loop harness (phases 2–5 with real executions), the playbook family guard, `RealSplunkBackend` REST contract tests (hermetic via an injectable session), Phase 5 retention selection + API-key activation, the Phase 4 judgment-migration sweep, a pyflakes undefined-name gate in CI (`scripts/check_undefined_names.sh` — 3.14's lazy annotations mask missing typing imports locally, so the F821 class is gated explicitly), and UI regressions via zero-dependency node vm harnesses (`tests/ui_regression/`, shared `harness_core.mjs`) driving the real `runSplunkSearch` plus the evidence save / promote / saved-evidence-load flows (the load path is regression-locked against the `6942458` crash — hydration assertions plus the `console.error` canary fail if legacy raw_result rows ever stop loading; canaries also assert zero blocking `alert()` calls and no swallowed crashes). S7 (Sept 29): per-card analysis state is unified under one `phase2CardState` map — `{ resultText, findingType, editedSpl, coverage, status, runStatus }` keyed by the existing query keys — replacing six parallel keyings; the harness fixtures drive the same shape, and the collection-status select now saves from root state (it was previously read from a child-local map the save methods could never see).
+- **Test suite:** 276 tests (pure-unit + TestClient), <2 s runtime, dual-runtime (3.14 + 3.9) matrix in CI, covering evidence ledger validation, AI-derived direction scoring, per-card verdict parsing/precedence, question-driven follow-ups (incl. targeted-evidence question resolution), the Phase 4 advisory-label contract (analyst labels and the stored pre-loop verdict never decide outcomes; promote pins verdict to "suspicious" at the 0.80 gate baseline), model-tag resolution, closure gating, confidence caps/hints, loop-status transitions, boundary/latch, report paths, the notable-parsing pipeline (`evidence_service`), the mid-loop search-one loop harness (phases 2–5 with real executions), the playbook family guard, `RealSplunkBackend` REST contract tests (hermetic via an injectable session), Phase 5 retention selection + API-key activation, the Phase 4 judgment-migration sweep, a pyflakes undefined-name gate in CI (`scripts/check_undefined_names.sh` — 3.14's lazy annotations mask missing typing imports locally, so the F821 class is gated explicitly), and UI regressions via zero-dependency node vm harnesses (`tests/ui_regression/`, shared `harness_core.mjs`) driving the real `runSplunkSearch` plus the evidence save / promote / saved-evidence-load flows (the load path is regression-locked against the `6942458` crash — hydration assertions plus the `console.error` canary fail if legacy raw_result rows ever stop loading; canaries also assert zero blocking `alert()` calls and no swallowed crashes). S7 (Sept 29): per-card analysis state is unified under one `phase2CardState` map — `{ resultText, findingType, editedSpl, coverage, status, runStatus }` keyed by the existing query keys — replacing six parallel keyings; the harness fixtures drive the same shape, and the collection-status select now saves from root state (it was previously read from a child-local map the save methods could never see).
 - **Known debt:** ops backlog remainder (Phase 5: session auth/roles, service hardening, multi-model per-stage choice; backups + retention landed Sept 29, activated Sept 30 via start-riding ops instead of launchd — no schedulers by decision — and the API-key UI wiring is server-injected, both verified live Sept 30), Vercel env-var handoff pending Justin, and dead monolith remnants pending cleanup (Sept 29: the corrupted legacy tail in `index.html` was stripped, the 9 zero-reference root one-shots moved to `scripts/attic/`, `api/main.py` bare `print()` error paths converted to structured `logging` — last-resort handler keeps stderr so log redirects are unaffected — and `api/main.py` split into focused routers + `api/schemas.py` + `api/helpers/*` (`api/main.py` is now a ~155-line app shell, see `docs/BACKEND_MODULARIZATION_PLAN.md`) with dead `api/db_routes.py` retired to `scripts/attic/`; and `web/app.js` + `web/Old/` retired to `scripts/attic/` — they were referenced by nothing and every fix risked drifting into the dead copies; Sept 30: `web/Old_archive/` relocated to `scripts/attic/web-Old_archive/`, leaving the served web/ tree live-only). Phase 4 closed Sept 29: the last analyst-judgment inputs (promote-time triage verdicts + `question_resolution`) are advisory-only.
 
 ### Collaboration hazard (read this first)
@@ -120,7 +120,7 @@ Sweep remaining analyst-judgment surfaces with the evidence-model lens:
 
 ---
 
-## 10. Suggested sequence
+## 10. Suggested sequence (historical — all steps complete)
 
 ```
 Push queued commits → Phase 1 (CI + API tests + docs) → Phase 2 (per-card verdicts)
@@ -128,3 +128,92 @@ Push queued commits → Phase 1 (CI + API tests + docs) → Phase 2 (per-card ve
 ```
 
 Phases 2 and 3 are independent of each other after Phase 1; pick by appetite — Phase 2 deepens the analysis model, Phase 3 removes the manual paste bottleneck.
+
+---
+
+## 11. Execution roadmap (Sept 30, 2026 — full-codebase review)
+
+**Health snapshot:** 75+ endpoints across 11 routers (`api/routes/`), 12 services, 11 ORM
+models; 8.9k-LOC modular frontend, zero axios outside the transport; 276 tests + 23
+node-vm harness scenarios, green on 3.14 + 3.9; zero TODO/FIXME/HACK debt in live
+code. The foundation is solid — what remains is security floor, hygiene, the named-
+but-unplanned Phase 5 remainder, and externals. Phased by risk:
+
+### Phase A — Security floor (P0 · one session)
+
+- **A1 — Close the GET-delete mutation-gate bypass.** `/api/db/notables/{event_id}/delete`
+  and `/api/db/triage/{case_id}/delete` are deliberate GET wrappers ("for environments
+  that disallow POST/DELETE") that call the destructive handlers directly — when
+  `API_KEY` is armed they sail past the method-based mutation gate (`POST/PUT/PATCH/DELETE`
+  only), leaving two unauthenticated destructive endpoints. The UI already uses the
+  POST spellings (`API.deleteNotable`, `deleteTriageCase`), so: **remove the GET wrappers**
+  *and* make `mutation_gate_rejects` path-aware (`*/delete`, `*/batch-delete`,
+  `*/delete-all` count as mutations regardless of verb) — belt and suspenders. Update
+  `tests/api_path_contract.json` spellings + `docs/API_ENDPOINTS.md` (the V2 doc-drift
+  guard enforces accuracy). **Exit test: a route-semantics audit** — enumerate
+  `api_main.app.routes` and assert every GET route sits in an explicit read-only
+  allowlist; any future GET route fails CI until classified. Closes the whole bug class.
+- **A2 — Supply chain.** `requirements*.txt` are completely unpinned (zero `==`); three
+  deps have zero live imports (`redis`, `python-pptx`, `cryptography` — verify psycopg
+  needs none of them, then drop). Pin floors, run `pip-audit`, enable Dependabot alerts
+  (tracker items). Exit: clean audit + reproducible installs.
+- **A3 — Doc-status sync.** The tracker's “Wire `SOC_CONFIG.apiKey` into the served
+  pages” item is done (server injection, `99ee625`); `BACKEND_MODULARIZATION_PLAN.md`'s
+  “further phases planned” header is stale (Pieces A–D landed). Refresh both and check
+  off the tracker's API-key-dependency item (middleware gate covers it).
+
+### Phase B — Repo hygiene (P1 · one session)
+
+- **B1 — Root triage.** Zero-reference one-shots → `scripts/attic/`: `inspect_db.py`,
+  `ingest_notables.py`, `wipe_db.py`, `seed_dummy_closed_notables.py`,
+  `close_freebuff_tabs.py`, `add_code_review.py`. **Keep** `commander.py` (live via
+  `Tools/automated_reporter`) and seeders with refs (`seed_test_cases.py`,
+  `seed_supportive_results.py`). **Open decision:** the Windows ops set (`*.ps1`,
+  `*.bat`, `Reset-DummyDb.ps1`, `git-flow*`) — is Windows still Justin's deployment
+  story? Hold until D1 answers, or attic now.
+- **B2 — Debris.** 4 PPTX + 2 DOCX (~3.8 MB): keep one FINAL deck, attic the rest.
+  `sample_rules.json` vs `updated_rules.json` are byte-size twins — hash-compare, drop
+  one. `README.txt` vs `README.md` — one README wins. `Downloads_Map.txt`,
+  `README_MOVED_*.txt`, `BUILD_SUMMARY.md`, `multi-user-workflow.md`, `payload.json`,
+  `unsupported_rule_splunk_results.csv`, `closure_form_snippet.html`, `code_review_ui.html`,
+  `*.code-workspace` ×2 → attic or delete per age.
+- **B3 —** `Tools/chat_language_models_2_-_staging_copy/` → attic (dead copy inside the
+  live tool catalog).
+- **B4 — Deployment-story matrix.** Three coexisting stories: Mac `scripts/start`
+  (canonical, start-riding ops), `docker-compose` (Linux/Windows), Vercel (Justin's
+  target). Add a support matrix to `SETUP.md`/`CONTAINERIZATION.md`. Note: there is no
+  `vercel.json` — routing (does `/index.modular.html` hit the FastAPI app or Vercel's
+  CDN?) lives in dashboard config and determines whether the SOC_CONFIG injection
+  works on Vercel. Capture it during D1.
+- **B5 —** `.gitignore` opens with a UTF-8 BOM — strip.
+
+### Phase C — Phase 5 product work (P2 · several sessions · plan-then-build)
+
+- **C1 — Session auth + analyst/admin roles.** Prerequisite for any non-localhost
+  exposure (tracker gates public exposure on it). Write `docs/SESSION_AUTH_PLAN.md`
+  first in the modularization-plan style: session cookie + CSRF for the UI, keep
+  `X-API-Key` for API clients, roles gate admin surfaces (tools/registry, jobs,
+  boundary admit/release, retention apply).
+- **C2 — Service hardening.** Scope first: analyze/job timeouts + queue bounds, artifact
+  size caps (`services/artifact_guard.py`), paste payload limits, rate limiting on
+  Ollama-backed endpoints. Exit: documented limits + tests for each bound.
+- **C3 — Multi-model per-stage choice.** Analysis wizard: per-stage model select
+  (stages 3/4/5 may use different Ollama models), persisted in investigation state.
+- **C4 — Paste-box storage through a boundary batch** (tracker) for manifest/purge
+  parity; sanitization must stay (see `ingest_json_notables` docstring).
+
+### Phase D — Externals & wait-states (P3)
+
+- **D1 — Vercel handoff (blocked on Justin).** Assemble the doc *now* so the unblock is
+  a conversation, not a project: env vars (`DATABASE_URL`, `API_KEY`, `CORS_ORIGINS`,
+  `ENABLE_DOCS` off), the injection-routing question (B4), deploy.yml smoke
+  expectations, and the rotation history from the security tracker.
+- **D2 — Live Splunk rehearsal (blocked on credentials).** Turnkey checklist:
+  `SEARCH_BACKEND=splunk` + `SPLUNK_URL`/`SPLUNK_TOKEN`, run the mid-loop search-one
+  scenario, verify CSV normalization + boundary-latch interplay.
+- **D3 — User-side hygiene (not automatable):** Safari history scrub, thread-deletion
+  decision (security tracker).
+
+**Recommended order:** A → B (fast, compounding wins) while drafting C1's plan and D1's
+doc in parallel; C builds in the sessions after. A1 is the only item with live exposure
+risk — do it first.
