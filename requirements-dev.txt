@@ -2,7 +2,9 @@
 # Install with:  pip install -r requirements-dev.txt
 #
 # httpx is required by starlette's TestClient (used by the API-level tests).
+# On the Python 3.9 runtime the older starlette requires httpx; the 3.14
+# env's starlette 1.6 prefers httpx2 and falls back to httpx if present.
 # pyflakes backs scripts/check_undefined_names.sh (the CI import lint).
-pytest
-httpx
-pyflakes
+pytest==9.1.1
+httpx==0.28.1
+pyflakes==4.0.0
