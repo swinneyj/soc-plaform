@@ -22,7 +22,7 @@ The Database tab is a local operational view of data received from Splunk ES, no
 
 Source references:
 
-- [ingest_notables.py](ingest_notables.py)
+- [scripts/attic/ingest_notables.py](scripts/attic/ingest_notables.py) (archived one-shot ingest; live ingestion is the Splunk-boundary + paste flow)
 - [data_source_catalog.json](data_source_catalog.json)
 - [Database and API map](docs/API_DB_VISUAL_MAP.md)
 
