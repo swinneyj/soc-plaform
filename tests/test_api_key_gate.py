@@ -242,3 +242,53 @@ def test_session_info_flag_off_is_admin_bootstrap(client):
     resp = client.get("/api/auth/session")
     assert resp.status_code == 200
     assert resp.json() == {"mode": "api-key", "role": "admin", "user": "", "csrf_token": ""}
+
+
+# ---------------------------------------------------------------------------
+# C1B.4 — auth matrix: roles, API-key-as-admin, expiry (SESSION_AUTH_PLAN.md)
+# ---------------------------------------------------------------------------
+
+def test_role_gate_analyst_403(session_client):
+    """An analyst session is authenticated but not admin: job deletion 403s."""
+    db = session_client.test_session()
+    _make_user(db, username="erin", role="analyst", password="pw123")
+    login = session_client.post("/api/auth/login", json={"username": "erin", "password": "pw123"})
+    csrf = login.json()["csrf_token"]
+    resp = session_client.delete(
+        "/api/jobs/some-job-id", headers={"X-CSRF-Token": csrf}
+    )
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "Insufficient role"
+
+
+def test_api_key_still_admin_in_session_mode(session_client, monkeypatch):
+    """The deployment credential authenticates as the admin machine actor in
+    session mode — no cookie, no CSRF header needed (plan §2)."""
+    monkeypatch.setattr(api_auth, "_API_KEY", "test-secret-key")
+    # Read gate: the key satisfies it without any session.
+    resp = session_client.get("/api/db/stats", headers={"X-API-Key": "test-secret-key"})
+    assert resp.status_code == 200
+    # Mutation: admin machine actor needs no CSRF (that check is session-only).
+    resp = session_client.post(
+        "/api/notables/paste", json={"raw_text": "probe"},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert resp.status_code not in (401, 403)
+
+
+def test_expired_session_401(session_client):
+    from datetime import timedelta
+
+    from db.models import AuthSession
+    from db.util import utcnow_naive
+
+    db = session_client.test_session()
+    _make_user(db, username="frank", password="pw123")
+    session_client.post("/api/auth/login", json={"username": "frank", "password": "pw123"})
+    row = db.query(AuthSession).first()
+    row.expires_at = utcnow_naive() - timedelta(hours=1)
+    db.commit()
+    resp = session_client.get("/api/auth/session")
+    assert resp.status_code == 401
+    # And the read gate treats the expired cookie as anonymous.
+    assert session_client.get("/api/db/stats").status_code == 401
