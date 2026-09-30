@@ -133,6 +133,10 @@ Phases 2 and 3 are independent of each other after Phase 1; pick by appetite —
 
 ## 11. Execution roadmap (Sept 30, 2026 — full-codebase review)
 
+**→ Mechanical step-by-step runbook for executors: [`docs/EXECUTION_PLAYBOOK.md`](EXECUTION_PLAYBOOK.md)**
+(every item below is expanded there into atomic steps with exact edits, verify lines,
+guardrails, and commit templates).
+
 **Health snapshot:** 75+ endpoints across 11 routers (`api/routes/`), 12 services, 11 ORM
 models; 8.9k-LOC modular frontend, zero axios outside the transport; 276 tests + 23
 node-vm harness scenarios, green on 3.14 + 3.9; zero TODO/FIXME/HACK debt in live
