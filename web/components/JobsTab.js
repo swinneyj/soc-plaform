@@ -1,5 +1,5 @@
 window.JobsTab = {
-    props: ['jobs', 'selectedJobIds'],
+    props: ['jobs', 'selectedJobIds', 'isAdmin'],
     data() {
         return { searchTerm: '', statusFilter: 'all', toolFilter: 'all', page: 1, pageSize: 10, expandedJobIds: [], collapsedGroups: [] };
     },
@@ -61,8 +61,12 @@ window.JobsTab = {
                 <div class="flex gap-2">
                     <button v-if="filteredJobs.length" @click="$emit('update:selected-job-ids', filteredJobs.map(job => job.job_id))" class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded text-sm font-semibold">Select All</button>
                     <button v-if="selectedJobIds && selectedJobIds.length" @click="$emit('update:selected-job-ids', [])" class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded text-sm font-semibold">Clear Selection</button>
-                    <button v-if="selectedJobIds && selectedJobIds.length" @click="$emit('delete-selected-jobs')" class="bg-red-700 hover:bg-red-600 px-3 py-2 rounded text-sm font-semibold">Delete Selected ({{ selectedJobIds.length }})</button>
-                    <button v-if="jobs && jobs.length" @click="$emit('clear-jobs')" class="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded text-sm font-semibold">Clear All</button>
+                    <button v-if="selectedJobIds && selectedJobIds.length" @click="$emit('delete-selected-jobs')" :disabled="isAdmin === false"
+                            :title="isAdmin === false ? 'Requires an admin account' : ''"
+                            class="bg-red-700 hover:bg-red-600 disabled:opacity-50 px-3 py-2 rounded text-sm font-semibold">Delete Selected ({{ selectedJobIds.length }})</button>
+                    <button v-if="jobs && jobs.length" @click="$emit('clear-jobs')" :disabled="isAdmin === false"
+                            :title="isAdmin === false ? 'Requires an admin account' : ''"
+                            class="bg-gray-700 hover:bg-gray-600 disabled:opacity-50 px-3 py-2 rounded text-sm font-semibold">Clear All</button>
                 </div>
             </div>
 
@@ -127,7 +131,9 @@ window.JobsTab = {
                             }"
                             class="px-3 py-1 rounded text-sm font-semibold"
                         >{{ (job.status || 'unknown').toUpperCase() }}</span>
-                        <button @click="$emit('delete-job', job.job_id)" class="text-xs text-red-300 hover:text-red-200 border border-red-800 px-2 py-1 rounded">Delete</button>
+                        <button @click="$emit('delete-job', job.job_id)" :disabled="isAdmin === false"
+                                :title="isAdmin === false ? 'Requires an admin account' : ''"
+                                class="text-xs text-red-300 hover:text-red-200 border border-red-800 px-2 py-1 rounded disabled:opacity-50">Delete</button>
                     </div>
                 </div>
 

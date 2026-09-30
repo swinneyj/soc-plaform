@@ -234,3 +234,11 @@ def test_session_read_gate_401(session_client):
     resp = session_client.get("/api/db/stats")
     assert resp.status_code == 401
     assert resp.json()["detail"] == "Authentication required"
+
+
+def test_session_info_flag_off_is_admin_bootstrap(client):
+    """Flag-off byte-compat: session info answers 200 with the api-key mode
+    marker so the UI keeps admin controls enabled exactly like pre-C1B."""
+    resp = client.get("/api/auth/session")
+    assert resp.status_code == 200
+    assert resp.json() == {"mode": "api-key", "role": "admin", "user": "", "csrf_token": ""}

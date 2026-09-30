@@ -70,7 +70,17 @@ def logout(request: Request, response: Response):
 
 @router.get("/api/auth/session")
 def session_info(request: Request):
+    """Actor bootstrap for the UI.
+
+    AUTH_MODE=session: 200 {user, role, csrf_token} for a live session, 401
+    otherwise (the UI shows the login modal). Flag off: 200 {mode:'api-key',
+    role:'admin'} — auth is inert and the UI keeps admin controls enabled
+    exactly like today; the constant shape lets app.modular.js branch on
+    `mode` without feature-detecting.
+    """
     actor = auth.resolve_actor(request)
+    if not auth.session_mode():
+        return {"mode": "api-key", "role": "admin", "user": "", "csrf_token": ""}
     if actor.kind != "session":
         raise HTTPException(status_code=401, detail="Not signed in")
-    return {"user": actor.user.username, "role": actor.role, "csrf_token": actor.csrf_token}
+    return {"mode": "session", "user": actor.user.username, "role": actor.role, "csrf_token": actor.csrf_token}

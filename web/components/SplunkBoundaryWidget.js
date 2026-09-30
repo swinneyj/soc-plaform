@@ -10,6 +10,7 @@
  * Load order: after axios/utils, alongside other components.
  */
 window.SplunkBoundaryWidget = {
+    props: ['isAdmin'],
     data() {
         return {
             status: null,
@@ -89,7 +90,9 @@ window.SplunkBoundaryWidget = {
                                 <button
                                     v-if="confirmBatchId !== b.batch_id"
                                     @click="askPurge(b.batch_id)"
-                                    class="text-red-400 hover:text-red-300 transition"
+                                    :disabled="isAdmin === false"
+                                    :title="isAdmin === false ? 'Requires an admin account' : ''"
+                                    class="text-red-400 hover:text-red-300 disabled:opacity-50 transition"
                                 >purge</button>
                                 <span v-else class="inline-flex items-center space-x-2">
                                     <span class="text-red-300">Delete {{ b.ingested_rows ?? '?' }} rows?</span>

@@ -36,4 +36,15 @@
         // Visible confirmation without console spam on every request
         global.console && global.console.info('[auth] X-API-Key attached to axios requests');
     }
+
+    // Session mode (SESSION_AUTH_PLAN.md): stamp X-CSRF-Token on every
+    // request when the app has a live session. window.__SOC_CSRF__ is seeded
+    // from GET /api/auth/session by app.modular.js and refreshed after login.
+    if (global.axios) {
+        global.axios.interceptors.request.use(function (config) {
+            config.headers = config.headers || {};
+            if (global.__SOC_CSRF__) config.headers['X-CSRF-Token'] = global.__SOC_CSRF__;
+            return config;
+        });
+    }
 })(typeof window !== 'undefined' ? window : globalThis);

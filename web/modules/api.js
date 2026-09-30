@@ -77,13 +77,19 @@
                 return res.data;
             } catch (err) {
                 if (!isNotFound(err)) {
+                    noteSessionExpired(err);
                     throw err;
                 }
                 // Older deploy without the alias rewrite: fall back.
             }
         }
-        const res = await axios.get(url(path), config);
-        return res.data;
+        try {
+            const res = await axios.get(url(path), config);
+            return res.data;
+        } catch (err) {
+            noteSessionExpired(err);
+            throw err;
+        }
     }
 
     async function send(method, path, body, config) {
@@ -94,17 +100,35 @@
                 return res.data;
             } catch (err) {
                 if (!isNotFound(err)) {
+                    noteSessionExpired(err);
                     throw err;
                 }
             }
         }
-        const res = await axios[method](url(path), body, config);
-        return res.data;
+        try {
+            const res = await axios[method](url(path), body, config);
+            return res.data;
+        } catch (err) {
+            noteSessionExpired(err);
+            throw err;
+        }
     }
 
     const post = (path, body, config) => send('post', path, body, config);
     const put = (path, body, config) => send('put', path, body, config);
     const del = (path, config) => send('delete', path, undefined, config);
+
+    // Session auth (SESSION_AUTH_PLAN.md): 401 on an authenticated request
+    // means the session is gone — notify so the app can reopen the login
+    // modal. One place covers every call in the app.
+    function noteSessionExpired(err) {
+        if (err && err.response && err.response.status === 401
+            && !String(err.config && err.config.url || '').includes('/api/auth/')) {
+            if (typeof global.__SOC_ON_SESSION_EXPIRED__ === 'function') {
+                try { global.__SOC_ON_SESSION_EXPIRED__(); } catch (e) { /* UI hook only */ }
+            }
+        }
+    }
 
     // -------------------------------------------------------------------------
     // Public API surface (grouped by domain)
@@ -148,6 +172,17 @@
         },
         executeTool(payload) {
             return post('/execute', payload);
+        },
+
+        // ---- Session auth (SESSION_AUTH_PLAN.md Piece C) ---------------------
+        sessionInfo() {
+            return get('/auth/session');
+        },
+        sessionLogin(payload) {
+            return post('/auth/login', payload);
+        },
+        sessionLogout() {
+            return post('/auth/logout');
         },
 
         // ---- Cases (triage) ---------------------------------------------------

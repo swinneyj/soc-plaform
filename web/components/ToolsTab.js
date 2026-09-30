@@ -1,5 +1,5 @@
 window.ToolsTab = {
-    props: ['tools', 'toolSearch', 'selectedCategory', 'toolArgs', 'selectedToolForExecution', 'regressionResult', 'regressionRunning'],
+    props: ['tools', 'toolSearch', 'selectedCategory', 'toolArgs', 'selectedToolForExecution', 'regressionResult', 'regressionRunning', 'isAdmin'],
     emits: [
         'update:tool-search',
         'update:selected-category',
@@ -36,7 +36,9 @@ window.ToolsTab = {
             <div>
                 <h2 class="text-3xl font-bold mb-2">Tools Catalog</h2>
                 <p class="text-gray-400">{{ tools.length }} tools available • Filter and execute SOC tasks</p>
-                <button @click="$emit('run-regression')" :disabled="regressionRunning" class="mt-3 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded text-xs font-semibold">
+                <button @click="$emit('run-regression')" :disabled="regressionRunning || isAdmin === false"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
+                        class="mt-3 px-3 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 rounded text-xs font-semibold">
                     {{ regressionRunning ? 'Running catalog checks…' : 'Run Catalog Regression Test' }}
                 </button>
             </div>
@@ -172,7 +174,9 @@ window.ToolsTab = {
                     <div class="flex space-x-2">
                         <button
                             @click="$emit('execute-tool', selectedToolForExecution)"
-                            class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded text-sm font-semibold transition"
+                            :disabled="isAdmin === false"
+                            :title="isAdmin === false ? 'Requires an admin account' : ''"
+                            class="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded text-sm font-semibold transition"
                         >
                             Execute
                         </button>
