@@ -326,3 +326,18 @@ def test_job_queue_cap_429(client, with_api_key, monkeypatch):
     finally:
         for job_id in seeded:
             tools_route.jobs.pop(job_id, None)
+
+
+def test_paste_payload_cap_413(client, monkeypatch):
+    """C2.1.4: an oversized raw paste is rejected 413 before any parsing."""
+    import api.routes.notables as notables_route
+
+    monkeypatch.setattr(notables_route, "PASTE_MAX_BYTES", 10)
+    resp = client.post("/api/notables/paste", json={"raw_text": "x" * 11})
+    assert resp.status_code == 413
+    assert "exceeds" in resp.json()["detail"]
+    # At the cap the gate passes; whitespace-only content then 400s at the
+    # handler's first validation (before any DB touch, keeping this hermetic).
+    resp = client.post("/api/notables/paste", json={"raw_text": " " * 10})
+    assert resp.status_code == 400
+    assert "No notable text" in resp.json()["detail"]

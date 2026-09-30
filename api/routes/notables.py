@@ -21,6 +21,10 @@ from db.util import utcnow_naive
 
 router = APIRouter()
 
+# C2.1.4 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30): cap raw paste
+# payload size before any parsing/sanitization work. Over-limit answers 413.
+PASTE_MAX_BYTES = int(os.environ.get("PASTE_MAX_BYTES", str(5 * 1024 * 1024)))
+
 def build_notable_fetch_spl(req: "NotableFetchSplRequest") -> Dict[str, Any]:
     """Build production SPL for open notables with a flawless paste_block.
 
@@ -1272,6 +1276,11 @@ def generate_notable_fetch_spl_get(
 @router.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
+    if len(request.raw_text or "") > PASTE_MAX_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Paste payload exceeds {PASTE_MAX_BYTES} bytes",
+        )
     raw_text = normalize_pasted_text(request.raw_text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=400, detail="No notable text was provided")
