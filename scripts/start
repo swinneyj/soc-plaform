@@ -18,19 +18,28 @@
 #   scripts/start --check      # report status of every piece, start nothing
 #   scripts/start --stop       # stop the API daemon (Ollama left running)
 #   scripts/start --port 8001  # custom API port
+#   scripts/start --backup     # force a fresh DB backup + retention report
 #
 # Exit codes: 0 = all healthy, 1 = something failed (see output).
+#
+# Phase 5 ops note: there is deliberately NO launchd/cron for backups or
+# retention. Ops rides along with platform starts instead — the launcher
+# refreshes the DB backup (skipped when the newest dump is < 20h old) and
+# writes a retention dry-run report every run. `--backup` forces a fresh
+# dump on demand; apply-time pruning stays a manual, deliberate step.
 
 set -euo pipefail
 
 PORT="${SOC_PORT:-8000}"
 DO_CHECK=0
 DO_STOP=0
+DO_BACKUP=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) DO_CHECK=1 ;;
         --stop)  DO_STOP=1 ;;
+        --backup) DO_BACKUP=1 ;;
         --port)  PORT="$2"; shift ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
@@ -215,6 +224,40 @@ PYEOF
         || { report "api" "✗ failed to become healthy in ${API_TIMEOUT_SECS}s — log tail:"; tail -10 "$LOG_FILE" >&2; exit 1; }
 fi
 
+# ── 3.5 Ops maintenance — Phase 5 without a scheduler ───────────────────
+# Every platform start brings the ops pass with it (or --backup forces one):
+#   • backup_db.sh — gzipped pg_dump into local-backups/, skipped when the
+#     newest dump is < 20h old so restart-heavy days don't multiply dumps.
+#   • retention — dry-run report only; apply-time pruning stays manual
+#     (RETENTION_APPLY=1 .venv314/bin/python scripts/prune_analysis_results.py --apply).
+# Non-fatal by design: a failed backup must never take the platform down.
+if [ "$DO_STOP" -eq 0 ]; then
+    if [ -x ".venv314/bin/python" ]; then MAINT_PY=".venv314/bin/python"; else MAINT_PY=".venv/bin/python"; fi
+    NEWEST_DUMP="$(ls -t "${ROOT}/local-backups"/postgres_dump_*.sql.gz 2>/dev/null | head -1 || true)"
+    DUMP_AGE_H=""
+    if [ -n "$NEWEST_DUMP" ]; then
+        DUMP_AGE_H=$(( ( $(date +%s) - $(stat -f %m "$NEWEST_DUMP") ) / 3600 ))
+    fi
+    if [ "$DO_BACKUP" != "1" ] && [ -n "$DUMP_AGE_H" ] && [ "$DUMP_AGE_H" -lt 20 ]; then
+        report "backup" "fresh (${DUMP_AGE_H}h old) — skipping"
+    else
+        if [ -n "${BWS_BIN:-}" ]; then
+            "$BWS_BIN" run -- bash "$SCRIPT_DIR/backup_db.sh" > /tmp/soc-backup.log 2>&1 \
+              && report "backup" "dump complete ($(basename "$(ls -t "${ROOT}/local-backups"/postgres_dump_*.sql.gz 2>/dev/null | head -1)"))" \
+              || report "backup" "✗ failed (see /tmp/soc-backup.log)"
+        else
+            bash "$SCRIPT_DIR/backup_db.sh" > /tmp/soc-backup.log 2>&1 \
+              && report "backup" "dump complete" \
+              || report "backup" "✗ failed (see /tmp/soc-backup.log)"
+        fi
+    fi
+    if [ -n "${BWS_BIN:-}" ]; then
+        "$BWS_BIN" run -- "$MAINT_PY" scripts/prune_analysis_results.py > /tmp/soc-retention.log 2>&1 \
+          && report "retention" "dry-run report (/tmp/soc-retention.log)" \
+          || report "retention" "✗ report failed (see /tmp/soc-retention.log)"
+    fi
+fi
+
 # ── 4. Final health summary ──────────────────────────────────────────────
 if [ "$DO_CHECK" -eq 1 ]; then
     echo "── status only (nothing was started if already up) ───"
@@ -224,6 +267,7 @@ if [ "$(api_health)" = "200" ]; then
     echo "✓ Platform healthy."
     echo "  API:        ${API_BASE}/api/health"
     echo "  Dashboard:  ${API_BASE}/index.modular.html"
+    echo "  Backup now: scripts/start --backup"
     echo "  Stop:       scripts/start --stop"
     echo "  Logs:       tail -f $LOG_FILE"
     exit 0

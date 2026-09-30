@@ -5,10 +5,11 @@ Serves web UI at root path. Includes database and AI analysis endpoints.
 """
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+import json
 import logging
 import os
 import re
@@ -78,10 +79,14 @@ _enable_docs = os.environ.get("ENABLE_DOCS", "") == "1"
 #   - explicit `dependencies=[Depends(require_api_key)]` on dangerous routes
 #     in api.routes.* stays as defense in depth.
 # Deliberately NOT gated (read-only / health / static UI): /api/health and
-# other GETs, the mounted web UI. The frontend already stamps X-API-Key on
-# every axios request (web/utils/auth.js reads window.SOC_CONFIG.apiKey or
-# ?apiKey= for local testing), so activation is: put API_KEY in the BWS vault
-# + .env, set SOC_CONFIG.apiKey in the deployed HTML, restart.
+# other GETs, the mounted web UI. The frontend stamps X-API-Key on every
+# axios request (web/utils/auth.js reads window.SOC_CONFIG.apiKey or
+# ?apiKey= for local testing); the server injects window.SOC_CONFIG into
+# index.modular.html when the gate is armed (see the /index.modular.html
+# route below), so activation is just: put API_KEY in the BWS vault + .env,
+# restart. Anyone who can load the UI can read the injected key — that is
+# inherent to browser-side auth and acceptable while the UI is only exposed
+# on localhost/Tailscale.
 # ---------------------------------------------------------------------------
 # The key itself lives in api.auth — one patch point for the middleware and
 # the require_api_key dependency used across api.routes.*.
@@ -211,9 +216,38 @@ async def global_exception_handler(request, exc):
         content={"detail": str(exc)}
     )
 
-# Serve web UI
+# Serve web UI. index.modular.html is served through a small route that
+# injects the window.SOC_CONFIG bootstrap (O2) when the API-key mutation
+# gate is armed: web/utils/auth.js reads window.SOC_CONFIG.apiKey and stamps
+# X-API-Key on every axios request, so UI writes work without ever putting
+# the key in the repo. When gating is disarmed the page is served verbatim
+# (bootstrap omitted — nothing needs to authenticate). Every other static
+# asset, including the index.html redirect shim, stays on the plain mount.
 web_dir = os.path.join(os.path.dirname(__file__), '..', 'web')
 if os.path.exists(web_dir):
+    @app.get("/index.modular.html", include_in_schema=False)
+    def _index_modular():
+        index_path = os.path.join(web_dir, "index.modular.html")
+        if not os.path.exists(index_path):
+            raise HTTPException(status_code=404, detail="UI not found")
+        with open(index_path, "r", encoding="utf-8") as fh:
+            html = fh.read()
+        from api.auth import _API_KEY
+        if not _API_KEY:
+            return Response(content=html, media_type="text/html",
+                            headers={"Cache-Control": "no-cache"})
+        # json.dumps keeps arbitrary key bytes safely inside the JS string
+        # literal; placed before the first script tag so auth.js's interceptor
+        # (loaded later) sees the config.
+        bootstrap = "<script>window.SOC_CONFIG = %s;</script>\n" % json.dumps({"apiKey": _API_KEY})
+        cut = html.find("<script")
+        if cut == -1:
+            html = bootstrap + html
+        else:
+            html = html[:cut] + bootstrap + html[cut:]
+        return Response(content=html, media_type="text/html",
+                        headers={"Cache-Control": "no-cache"})
+
     app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")
 
 if __name__ == "__main__":

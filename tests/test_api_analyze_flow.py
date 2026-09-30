@@ -1180,6 +1180,41 @@ class TestApiKeyActivation:
         assert api_client.get(f"/api/db/triage/{case_id}/evidence").status_code == 200
         assert api_client.get("/api/health").status_code == 200
 
+    # O2 browser-side wiring (Sept 30): the served UI must carry a
+    # window.SOC_CONFIG bootstrap when the gate is armed, so web/utils/auth.js
+    # can stamp X-API-Key on every request. The key never lives in the repo —
+    # it is injected from the armed environment at serve time.
+    def test_ui_injects_soc_config_when_gate_armed(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        resp = api_client.get("/index.modular.html")
+        assert resp.status_code == 200
+        assert "window.SOC_CONFIG" in resp.text
+        assert "sekret" in resp.text
+        # Injected before the first script tag so auth.js sees it.
+        assert resp.text.index("window.SOC_CONFIG") < resp.text.index("<script src=")
+
+    def test_ui_served_verbatim_when_gate_disarmed(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "")
+        resp = api_client.get("/index.modular.html")
+        assert resp.status_code == 200
+        assert "window.SOC_CONFIG" not in resp.text
+
+    def test_injected_key_authenticates_ui_writes(self, api_client, monkeypatch):
+        """End-to-end: the key the UI page carries is the key the gate wants."""
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        page = api_client.get("/index.modular.html").text
+        start = page.index("window.SOC_CONFIG = ") + len("window.SOC_CONFIG = ")
+        end = page.index("</script>", start)
+        import json as _json
+        cfg = _json.loads(page[start:end].strip().rstrip(";"))
+        case_id = seed_case(api_client, "AUTH-6")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence",
+            json=self._evidence_body(),
+            headers={"X-API-Key": cfg["apiKey"]},
+        )
+        assert resp.status_code == 200, resp.text
+
 
 def _load_migration_module():
     """Import scripts/normalize_phase4_judgments.py by path (not a package)."""
