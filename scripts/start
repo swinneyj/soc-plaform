@@ -69,21 +69,67 @@ if [ "$DO_STOP" -eq 1 ]; then
     exit 0
 fi
 
+if [ "$DO_CHECK" -eq 1 ]; then
+    # --check is read-only status reporting; it must not start anything
+    # (it used to fall through into the API-start branch, a real side effect).
+    # .env is only sourced for accurate reporting — no service is touched.
+    if [ -f ".env" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        source .env
+        set +a
+    fi
+    # Keychain fallback (read-only retrieval) so the database line is accurate.
+    if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
+        eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
+    fi
+    OH="$(ollama_health)"
+    [ "$OH" = "200" ] && report "ollama" "running (:11434)" || report "ollama" "not running"
+    if [ ! -f ".env" ]; then
+        report "secrets" "✗ no .env found — run scripts/pull-secrets after BWS setup"
+    elif [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
+        report "secrets" "BWS mode (token + cli present)"
+    else
+        report "secrets" "env-only mode (.env values, no BWS injection)"
+    fi
+    if [ -n "${DATABASE_URL:-}" ]; then
+        case "$DATABASE_URL" in
+            *neon.tech*) report "database" "Neon (cloud) — nothing to start locally" ;;
+            *localhost*) report "database" "local Postgres — expected on :5432/:5433" ;;
+            *)           report "database" "custom target" ;;
+        esac
+    else
+        report "database" "⚠ no DATABASE_URL — API will run degraded (health-only)"
+    fi
+    [ "$(api_health)" = "200" ] && report "api" "running (:${PORT})" || report "api" "not running"
+    echo "──────────────────────────────────────────────────────"
+    exit 0
+fi
+
 echo "── SOC Platform startup ──────────────────────────────"
 
 # ── 1. Ollama ────────────────────────────────────────────────────────
-# (--check is read-only status; start nothing)
-if [ "$DO_CHECK" -eq 1 ]; then
-    OH="$(ollama_health)"
-    [ "$OH" = "200" ] && report "ollama" "running (:11434)" || report "ollama" "not running"
-else
 if [ "$(ollama_health)" = "200" ]; then
     report "ollama" "already running (:11434)"
 else
     if command -v ollama >/dev/null 2>&1; then
         report "ollama" "starting…"
-        nohup ollama serve > /tmp/ollama.log 2>&1 &
-        disown 2>/dev/null || true
+        # Double-fork + setsid (same pattern as the API below): plain nohup
+        # does NOT survive tool-shell teardown on this machine — see AGENTS.md.
+        python3 - <<'PYEOF'
+import os
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    if os.fork() != 0:
+        os._exit(0)
+    devnull = os.open("/dev/null", os.O_RDONLY)
+    log = os.open("/tmp/ollama.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    os.dup2(devnull, 0); os.dup2(log, 1); os.dup2(log, 2)
+    os.execvp("ollama", ["ollama", "serve"])
+else:
+    os.waitpid(pid, 0)
+PYEOF
         for _ in $(seq 1 10); do
             sleep 1
             [ "$(ollama_health)" = "200" ] && break
@@ -95,7 +141,6 @@ else
         echo "    (install: https://ollama.com — the platform runs without it,"
         echo "     but /api/db/analyze endpoints will 503)"
     fi
-fi
 fi
 
 # ── 2. Secrets preflight (same contract as scripts/dev) ─────────────────

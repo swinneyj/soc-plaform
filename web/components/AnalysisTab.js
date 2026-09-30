@@ -164,6 +164,12 @@ window.AnalysisTab = {
             return Boolean(this.analysisCaseId);
         },
         stage2Complete() {
+            // No active case → no stage can be complete. Without this guard,
+            // the "no playbook" fallback below marked Evidence Collection ✓
+            // as soon as the page loaded, before any case was selected.
+            if (!this.analysisCaseId) {
+                return false;
+            }
             const evidenceSummary = this.investigationState && this.investigationState.evidence_summary;
             const hasEvidence = Boolean(
                 evidenceSummary &&

@@ -25,7 +25,7 @@
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  *   draft_autosave_debounce  evidence_ledger_view
  *   loop_timeline_panel  snapshot_migration_folds_legacy_maps
- *   api_layer_canonical_fallback
+ *   api_layer_canonical_fallback  stepper_guards
  * Exit code 0 = all assertions held.
  */
 import {
@@ -922,6 +922,59 @@ const scenarios = {
         await api.rules();
         assert(requests.length === 1 && requests[0].url === '/api/db/rules',
             'non-aliased routes must call their only spelling directly, got ' + JSON.stringify(requests));
+    },
+
+    // Stepper completion guards (live-UI smoke finding, Sept 30): with no case
+    // selected, the stage2Complete "no playbook" fallback marked Evidence
+    // Collection ✓ before the analyst picked anything. The guard must key off
+    // analysisCaseId first; the legitimate fallback still works with a case.
+    async stepper_guards() {
+        const { ctx } = makeSandbox({});
+        const tab = await loadModuleMethods(ctx, 'web/components/AnalysisTab.js', 'AnalysisTab');
+        const computed = tab.computed || {};
+        for (const name of ['stage1Complete', 'stage2Complete', 'stage3Complete']) {
+            assert(typeof computed[name] === 'function', 'AnalysisTab is missing computed.' + name);
+        }
+        const stub = (over) => ({
+            analysisCaseId: '',
+            analysisRule: null,
+            analysisResult: null,
+            phase2Result: null,
+            investigationState: null,
+            supportivePlaybookAvailable: null,
+            displayPhase2Queries: [],
+            ...over,
+        });
+
+        // The regression: fresh page, no case chosen — nothing may read ✓.
+        const fresh = stub();
+        assert(computed.stage1Complete.call(fresh) === false, 'stage1 must be incomplete with no case');
+        assert(computed.stage2Complete.call(fresh) === false,
+            'stage2 must be incomplete with no case selected (no-playbook fallback ran without a case)');
+        assert(computed.stage3Complete.call(fresh) === false, 'stage3 must be incomplete with no results');
+
+        // Legitimate fallback preserved: case active, rule has no playbook,
+        // nothing to collect — analyst may proceed to Initial Assessment.
+        const noPlaybook = stub({ analysisCaseId: 'MOCK-CASE-001' });
+        assert(computed.stage2Complete.call(noPlaybook) === true,
+            'unsupported-rule fallback must still allow proceeding with an active case');
+
+        // Playbook present but nothing collected yet: not complete.
+        const collecting = stub({
+            analysisCaseId: 'MOCK-CASE-001',
+            supportivePlaybookAvailable: true,
+            displayPhase2Queries: [{ id: 1, title: 'q' }],
+        });
+        assert(computed.stage2Complete.call(collecting) === false,
+            'open playbook with no evidence must not read complete');
+
+        // Evidence collected: complete.
+        const collected = stub({
+            analysisCaseId: 'MOCK-CASE-001',
+            investigationState: { evidence_summary: { total_items: 2, substantive_items: 1 } },
+        });
+        assert(computed.stage2Complete.call(collected) === true,
+            'saved evidence must complete stage 2');
     },
 };
 
