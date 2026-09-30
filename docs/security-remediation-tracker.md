@@ -97,7 +97,8 @@
 - **What:** No evidence of `pip-audit` or Dependabot.
 - **Remediation:**
   - [x] **Done Sept 30 (stage A2):** pip-audit clean on the production (>=3.10) branch; the 3.9-branch advisories are recorded accepted risk (see the requirements.txt header).
-  - [ ] Enable GitHub Dependabot alerts (Settings → Security → Dependabot) — free, ~2 minutes
+  - [x] **Done Sept 30 (~18:45):** Dependabot alerts/config live — first weekly run opened 7 update PRs (#1–#7). Pending human review: merge the pip bumps + action bumps, mind the dual-runtime pins (Dependabot's `
+` targets the py3.10 line only; verify the `<3.10` pin still satisfies the advisories before merging).
 - **Watch list:** `fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`.
 
 ### 12. `triage.db` (SQLite) in working tree
