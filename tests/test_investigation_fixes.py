@@ -1103,7 +1103,7 @@ class TestRouteSemanticsAudit:
     thus a potential unauthenticated mutation) exists."""
 
     READ_ONLY_GET_ALLOWLIST = {
-        "/api/", "/health", "/api/health", "/api/db/ollama/health",
+        "/api/", "/health", "/api/health", "/api/auth/session", "/api/db/ollama/health",
         "/api/db/operations", "/api/db/stats",
         "/api/db/triage", "/api/db/triage/{case_id}",
         "/api/db/triage/{case_id}/closure-readiness",

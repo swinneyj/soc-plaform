@@ -62,6 +62,14 @@ middleware were removed. Everything else mutating is
 | GET | — | `/api/registry` | Open | Tool registry snapshot. |
 | POST | — | `/api/registry/reload` | Key when armed (middleware) | Re-scan the Tools directory. |
 
+## Auth — session login/logout (SESSION_AUTH_PLAN.md)
+
+| Method | Canonical | Legacy alias | Auth | Purpose |
+| --- | --- | --- | --- | --- |
+| POST | `/api/auth/login` | — | Open (issues `soc_session` cookie) | Exchange username + password for a session + CSRF token (AUTH_MODE=session). |
+| POST | `/api/auth/logout` | — | Open (destroys the presented session) | Invalidate the server-side session row and clear the cookie. |
+| GET | `/api/auth/session` | — | Session or API key | Echo the signed-in actor: `{user, role, csrf_token}`; 401 when anonymous. |
+
 ## Cases (triage) — canonical family `/api/cases`
 
 | Method | Canonical | Legacy alias | Auth | Purpose |

@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from api import deps
 from services import splunk_boundary
 
-from api.auth import require_api_key
+from api.auth import require_api_key, require_role
 from api.schemas import (
     InvestigationEvidenceBatchPayload,
     InvestigationEvidenceEntryPayload,
@@ -53,7 +53,8 @@ def get_splunk_boundary_status():
     return splunk_boundary.status()
 
 
-@router.post("/api/splunk-boundary/admit", tags=["System"], dependencies=[Depends(require_api_key)])
+@router.post("/api/splunk-boundary/admit", tags=["System"],
+             dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def admit_splunk_file(file: UploadFile = File(...)):
     """Admit a Splunk export through the boundary (validate -> quarantine -> ingest)."""
     if splunk_boundary.current_mode() == "quarantined":
@@ -84,7 +85,8 @@ def admit_splunk_file(file: UploadFile = File(...)):
     return result
 
 
-@router.delete("/api/splunk-boundary/batches/{batch_id}", tags=["System"], dependencies=[Depends(require_api_key)])
+@router.delete("/api/splunk-boundary/batches/{batch_id}", tags=["System"],
+               dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def purge_splunk_batch(batch_id: str):
     """Purge one admitted batch: staged files and its ingested DB rows."""
     try:

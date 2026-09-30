@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 
 from api import deps
 
-from api.auth import require_api_key
+from api.auth import require_api_key, require_role
 from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
 from db.util import utcnow_naive
 
@@ -178,7 +178,8 @@ def _persist_tool_run(job: Dict[str, Any]) -> None:
 
 
 
-@router.get("/api/tools", response_model=List[ToolInfo], tags=["Tools"])
+@router.get("/api/tools", response_model=List[ToolInfo], tags=["Tools"],
+           dependencies=[Depends(require_role("admin"))])
 def list_tools():
     """List all available tools with metadata."""
     registry = load_registry()
@@ -194,7 +195,8 @@ def list_tools():
         for t in registry
     ]
 
-@router.get("/api/tools/{tool_name}", response_model=ToolInfo, tags=["Tools"])
+@router.get("/api/tools/{tool_name}", response_model=ToolInfo, tags=["Tools"],
+           dependencies=[Depends(require_role("admin"))])
 def get_tool(tool_name: str):
     """Get metadata for a specific tool."""
     registry = load_registry()
@@ -210,7 +212,8 @@ def get_tool(tool_name: str):
         arguments=tool.get("arguments", [])
     )
 
-@router.post("/api/tools/regression", tags=["Tools"], dependencies=[Depends(require_api_key)])
+@router.post("/api/tools/regression", tags=["Tools"],
+             dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def run_tool_catalog_regression():
     """Run safe offline regression checks for the registered tool catalog."""
     runner = os.path.join(deps.get_platform_root(), "scripts", "run_tool_catalog_regression.py")
@@ -227,7 +230,8 @@ def run_tool_catalog_regression():
     payload["exit_code"] = result.returncode
     return payload
 
-@router.post("/api/execute", response_model=JobResponse, tags=["Execution"], dependencies=[Depends(require_api_key)])
+@router.post("/api/execute", response_model=JobResponse, tags=["Execution"],
+             dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
     registry = load_registry()
@@ -341,7 +345,8 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
         job_list = [j for j in job_list if j["status"] == status]
     return [JobResponse(**j) for j in job_list]
 
-@router.delete("/api/jobs/{job_id}", tags=["Execution"], dependencies=[Depends(require_api_key)])
+@router.delete("/api/jobs/{job_id}", tags=["Execution"],
+               dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def delete_job(job_id: str):
     """Delete one job from memory and the persisted tool-run history."""
     deleted_job_ids.add(job_id)
@@ -358,7 +363,8 @@ def delete_job(job_id: str):
         logger.warning("[tool_runs] Could not delete persisted job: %s", exc)
     return {"deleted": job_id}
 
-@router.delete("/api/jobs", tags=["Execution"], dependencies=[Depends(require_api_key)])
+@router.delete("/api/jobs", tags=["Execution"],
+               dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def clear_jobs():
     """Clear all in-memory and persisted tool-run history."""
     deleted_job_ids.update(jobs.keys())
@@ -429,12 +435,12 @@ def download_tool_artifact(artifact_path: str):
         raise HTTPException(status_code=404, detail="Tool artifact not found")
     return FileResponse(path=str(candidate), filename=candidate.name)
 
-@router.get("/api/registry", tags=["System"])
+@router.get("/api/registry", tags=["System"], dependencies=[Depends(require_role("admin"))])
 def get_registry():
     """Get the full tool registry as JSON."""
     return load_registry()
 
-@router.post("/api/registry/reload", tags=["System"])
+@router.post("/api/registry/reload", tags=["System"], dependencies=[Depends(require_role("admin"))])
 def reload_registry():
     """Force a registry rebuild (runs tool_indexer)."""
     indexer_path = os.path.join(deps.get_platform_root(), 'Tools', 'tool_indexer', 'tool_indexer.py')

@@ -13,9 +13,11 @@ import hashlib
 import hmac
 import os
 import secrets
+from collections import namedtuple
+from datetime import timedelta
 from typing import Optional
 
-from fastapi import Header, HTTPException, Query
+from fastapi import Header, HTTPException, Query, Request
 
 _API_KEY = os.environ.get("API_KEY", "").strip()
 
@@ -44,21 +46,18 @@ def require_api_key(
 
 
 def mutation_gate_rejects(request) -> bool:
-    """True when the middleware must reject this request.
+    """True when the request is a mutating or destructive /api/* call.
 
-    Every mutating /api/* request (POST/PUT/PATCH/DELETE) is gated when
-    API_KEY is armed. Read-only GETs, /api/health (deploy smoke test), and
-    the static UI stay open per the contract in api.main.
-
-    Belt and suspenders (A1): GET requests to delete-shaped paths
-    (*/delete, */batch-delete, */delete-all) are gated too, so a future
-    GET mutation surface can never sail past the method-based gate.
+    Key-independent since C1B.2: this classifies the REQUEST; whether a key,
+    a session, or nothing satisfies the gate is decided by the middleware
+    branch in api.main based on AUTH_MODE. The destructive-suffix clause is
+    the A1 path-aware belt-and-suspenders: even a hypothetical future GET
+    delete-shaped route lands in the gate.
     """
     path = request.url.path
     destructive_suffix = path.endswith(("/delete", "/batch-delete", "/delete-all"))
     return bool(
-        _API_KEY
-        and path.startswith("/api/")
+        path.startswith("/api/")
         and (
             request.method in ("POST", "PUT", "PATCH", "DELETE")
             or (request.method == "GET" and destructive_suffix)
@@ -132,3 +131,118 @@ def verify_password(password: str, encoded: str) -> bool:
         return False
     except (ValueError, TypeError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# Session auth (SESSION_AUTH_PLAN.md) — active only in AUTH_MODE=session.
+# DB access goes through in-function imports of db.models so tests can
+# repoint SessionLocal the way test_api_analyze_flow does.
+# ---------------------------------------------------------------------------
+
+Actor = namedtuple("Actor", "kind role user csrf_ok csrf_token")
+
+EXEMPT_PATHS = ("/health", "/api/health", "/api/auth/login", "/api/auth/session")
+SESSION_COOKIE = "soc_session"
+SESSION_TTL_HOURS = 12
+
+
+def session_mode() -> bool:
+    """True when AUTH_MODE=session (cookie sessions + CSRF + roles active)."""
+    return bool(_SESSION_MODE)
+
+
+def session_expiry():
+    """Naive-UTC now + 12h (db.util is the api-side clock)."""
+    from db.util import utcnow_naive
+
+    return utcnow_naive() + timedelta(hours=SESSION_TTL_HOURS)
+
+
+def secure_cookies() -> bool:
+    """SESSION_SECURE=1 marks the session cookie Secure (set behind HTTPS)."""
+    return os.environ.get("SESSION_SECURE", "").strip() in ("1", "true", "yes")
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _session_from_request(request):
+    """(AuthSession, User) for the request's cookie, or None if absent/expired."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return None
+    from db.models import AuthSession, SessionLocal, User
+    from db.util import utcnow_naive
+
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(AuthSession)
+            .filter(AuthSession.token_hash == hash_token(token))
+            .first()
+        )
+        if row is None or row.expires_at <= utcnow_naive():
+            return None
+        user = db.query(User).filter(User.id == row.user_id).first()
+        if user is None or not user.is_active:
+            return None
+        return row, user
+    finally:
+        db.close()
+
+
+def resolve_actor(request) -> Actor:
+    """Classify the request: session user, API-key machine actor, or anonymous.
+
+    A valid API key is a deployment credential and authenticates as admin
+    (SESSION_AUTH_PLAN §2); sessions need an unexpired AuthSession row for
+    the cookie's token hash.
+    """
+    session = _session_from_request(request)
+    if session is not None:
+        row, user = session
+        header = request.headers.get("X-CSRF-Token")
+        csrf_ok = bool(header) and hmac.compare_digest(
+            header.encode("utf-8"), row.csrf_token.encode("utf-8")
+        )
+        return Actor(
+            kind="session", role=user.role, user=user,
+            csrf_ok=csrf_ok, csrf_token=row.csrf_token,
+        )
+    if _API_KEY and request_has_api_key(request):
+        return Actor(kind="api-key", role="admin", user=None, csrf_ok=True, csrf_token="")
+    return Actor(kind="anonymous", role="", user=None, csrf_ok=False, csrf_token="")
+
+
+def destroy_session(request) -> None:
+    """Delete the AuthSession row for the request's cookie (logout)."""
+    token = request.cookies.get(SESSION_COOKIE)
+    if not token:
+        return
+    from db.models import AuthSession, SessionLocal
+
+    db = SessionLocal()
+    try:
+        db.query(AuthSession).filter(AuthSession.token_hash == hash_token(token)).delete()
+        db.commit()
+    finally:
+        db.close()
+
+
+def require_role(role: str):
+    """FastAPI dependency: in session mode require an actor with `role`.
+
+    Flag-off this is a no-op — roles only bind in AUTH_MODE=session — which
+    keeps every existing route and test byte-identical until the flag flips.
+    """
+    def _dependency(request: Request) -> None:
+        if not session_mode():
+            return
+        actor = resolve_actor(request)
+        if actor.kind == "anonymous":
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if actor.role != role:
+            raise HTTPException(status_code=403, detail="Insufficient role")
+
+    return _dependency

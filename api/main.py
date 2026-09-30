@@ -160,16 +160,28 @@ app = FastAPI(
 
 @app.middleware("http")
 async def _api_key_mutation_gate(request, call_next):
-    """Reject unauthenticated mutating /api/* requests when API_KEY is set.
+    """Gate /api/* requests per AUTH_MODE (SESSION_AUTH_PLAN.md).
 
-    Read-only GETs, /api/health (deploy smoke test), and the static UI stay
-    open per the contract above. The key is accepted as the X-API-Key header
-    (what web/utils/auth.js sends) or an ?api_key= query parameter.
+    Flag off: mutating /api/* requests need the armed API key (X-API-Key
+    header or ?api_key=) — exactly the pre-C1B behavior, byte-identical.
+    AUTH_MODE=session: every /api/* request needs an authenticated actor
+    (session cookie, or the API key as the admin machine actor); cookie-backed
+    mutations additionally need X-CSRF-Token. /health, /api/health and the
+    /api/auth/* endpoints themselves stay reachable for health checks/login.
     """
-    if auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
-        return JSONResponse(
-            {"detail": "Invalid or missing API key"}, status_code=401
-        )
+    path = request.url.path
+    if auth.session_mode():
+        actor = auth.resolve_actor(request)
+        is_api = path.startswith("/api/")
+        if is_api and path not in auth.EXEMPT_PATHS and actor.kind == "anonymous":
+            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+        if auth.mutation_gate_rejects(request) and path not in auth.EXEMPT_PATHS:
+            if actor.kind == "anonymous":
+                return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+            if actor.kind == "session" and not actor.csrf_ok:
+                return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
+    elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
+        return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
     return await call_next(request)
 
 # The hosted branch preview can call a locally running API through a secure
@@ -206,6 +218,11 @@ app.include_router(_code_review_router)
 app.include_router(_splunk_router)
 app.include_router(_tools_router)
 app.include_router(_triage_router)
+
+# Session auth routes (SESSION_AUTH_PLAN.md Piece B) — registered before the
+# static mount block so /api/auth/* wins over the catch-all StaticFiles mount.
+from api.routes.auth import router as auth_router  # noqa: E402
+app.include_router(auth_router)
 
 
 @app.exception_handler(Exception)
