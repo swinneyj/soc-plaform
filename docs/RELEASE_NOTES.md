@@ -67,7 +67,9 @@ quarantine staging clean.
 - **`AUTH_MODE` flip deliberately deferred** (decision Sept 30: flag-off
   posture ships) — see the Stage E checklist note.
 - **Vercel env vars + routing answer** (Justin) — `docs/VERCEL_HANDOFF.md` §5.
-- **Dependabot vulnerability-alerts toggle** — needs repo admin
+- **Dependabot update PRs awaiting human review** — alerts/config live
+  (first run Sept 30 ~18:45 opened #1–#7); version bumps need a human merge
+  decision, watching the dual-runtime pins
   (Settings → Code security); `dependabot.yml` itself is live.
 - **3.9 accepted-risk pins** — starlette 0.49.3 / pytest 8.4.2 have advisories
   with no 3.9-compatible fix; retires with the 3.9 CI leg (tracker #9).
