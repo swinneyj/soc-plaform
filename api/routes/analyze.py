@@ -4,6 +4,7 @@
 generation, phase-2 query planning, and investigation-state derivation.
 """
 
+import concurrent.futures
 import json
 import logging
 import os
@@ -48,6 +49,11 @@ def _utcnow():
 
 
 logger = logging.getLogger("soc.api")
+
+# C2.1.1 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30): wall-clock cap
+# on the Ollama generation call. Over-limit runs answer 504 and persist
+# nothing. Env-tunable so ops can adjust without a code edit.
+ANALYZE_TIMEOUT_S = int(os.environ.get("ANALYZE_TIMEOUT_S", "300"))
 
 router = APIRouter()
 
@@ -422,7 +428,14 @@ def analyze_case(request: AnalyzeRequest):
             prompt_parts.append(f"\n\n=== ANALYST CONTEXT ===\n{context[:1000]}")
 
         composite_prompt = "\n".join(prompt_parts)
-        result = client.generate(
+        # C2.1.1: run the model call under a wall-clock cap. The 504 must not
+        # wait for the hung request, so the executor is abandoned with
+        # shutdown(wait=False) instead of a `with` block — the worker thread
+        # finishes (or dies with the process) on its own. The timeout raises
+        # BEFORE any DB write below, so nothing is persisted.
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(
+            client.generate,
             composite_prompt,
             model=model,
             temperature=0.1,
@@ -432,6 +445,15 @@ def analyze_case(request: AnalyzeRequest):
             # per-card flow explicitly needs the larger budget.
             options={"num_predict": int(os.environ.get("OLLAMA_ANALYSIS_NUM_PREDICT", "640"))},
         )
+        try:
+            result = future.result(timeout=ANALYZE_TIMEOUT_S)
+        except concurrent.futures.TimeoutError:
+            executor.shutdown(wait=False)
+            raise HTTPException(
+                status_code=504,
+                detail=f"Analysis timed out after {ANALYZE_TIMEOUT_S}s — nothing was persisted",
+            )
+        executor.shutdown(wait=False)
         # Report the tag actually used after auto-resolution so API consumers
         # and the audit trail reflect reality, not the (possibly empty)
         # requested value.

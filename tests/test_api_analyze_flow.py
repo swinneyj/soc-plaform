@@ -1348,5 +1348,33 @@ class TestPhase4MigrationSweep:
         }
 
 
+class TestAnalyzeHardening:
+    """C2.1.x service-hardening limits on the analyze surface."""
+
+    def test_analyze_timeout_504(self, api_client, monkeypatch):
+        """C2.1.1: a hung model call must answer 504 and persist nothing."""
+        import api.routes.analyze as analyze_route
+
+        case_id = seed_case(api_client)
+
+        class SlowClient(FakeOllamaClient):
+            def generate(self, prompt, model=None, temperature=None, options=None):
+                time.sleep(0.5)  # far longer than the patched timeout below
+                return super().generate(prompt, model=model, temperature=temperature, options=options)
+
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: SlowClient())
+        monkeypatch.setattr(analyze_route, "ANALYZE_TIMEOUT_S", 0.1)
+
+        resp = api_client.post("/api/db/analyze", json={"case_id": case_id})
+        assert resp.status_code == 504
+        assert "timed out" in resp.json()["detail"]
+        # The timeout raised BEFORE any persist: no analysis row exists.
+        db = api_client.test_session()
+        rows = db.query(db_models.AnalysisResult).filter(
+            db_models.AnalysisResult.case_id == case_id
+        ).all()
+        assert rows == []
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
