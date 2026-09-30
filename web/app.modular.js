@@ -79,6 +79,9 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
+                    // C3: per-stage model overrides for the analysis wizard
+                    // (Stage 3 initial / Stage 4 follow_up / Stage 5 closure).
+                    stageModels: { initial: '', follow_up: '', closure: '' },
                     // Session auth (SESSION_AUTH_PLAN.md Piece C): bootstrap
                     // from GET /api/auth/session; mode 'session' shows the
                     // login modal and binds role-aware controls. Flag-off the

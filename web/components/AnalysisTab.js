@@ -12,6 +12,7 @@ window.AnalysisTab = {
         'analysisCases',
         'filteredAnalysisCases',
         'analysisModel',
+        'stageModels',
         'analysisContext',
         'analysisRunning',
         'analysisStatus',
@@ -65,6 +66,7 @@ window.AnalysisTab = {
         'update:analysis-case-search',
         'update:analysis-case-id',
         'update:analysis-model',
+        'update:stage-models',
         'update:analysis-context',
         'update:phase2-model',
         'update:show-phase1-analysis',
@@ -1291,6 +1293,17 @@ window.AnalysisTab = {
                 </div>
             </div>
 
+            <div class="flex items-center gap-3 pt-2">
+                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">Stage {{ followUpPhase }} Model Override</label>
+                <select
+                    :value="(stageModels && stageModels.follow_up) || ''"
+                    @input="$emit('update:stage-models', { ...(stageModels || {}), follow_up: $event.target.value })"
+                    class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
+                    <option value="">Default model</option>
+                    <option v-for="model in ollamaHealth.models" :key="model" :value="model">{{ model }}</option>
+                </select>
+            </div>
             <div class="flex items-center justify-end gap-3 pt-2">
                 <button
                     type="button"
@@ -1367,6 +1380,18 @@ window.AnalysisTab = {
         <div>
             <h3 class="text-lg font-bold text-blue-300">Stage 5: Final Verdict & Closure</h3>
             <p class="text-xs text-gray-400 mt-1">Review investigation loop confidence, verify active blockers, and transition to structured closure note compilation.</p>
+        </div>
+
+        <div class="mt-4 flex items-center gap-3">
+            <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">Closure Model Override</label>
+            <select
+                :value="(stageModels && stageModels.closure) || ''"
+                @input="$emit('update:stage-models', { ...(stageModels || {}), closure: $event.target.value })"
+                class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+            >
+                <option value="">Default model</option>
+                <option v-for="model in ollamaHealth.models" :key="model" :value="model">{{ model }}</option>
+            </select>
         </div>
 
         <!-- Investigation Loop State Dashboard -->

@@ -936,6 +936,7 @@
                 const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: this.analysisModel,
+                    stage_models: this.stageModels || {},
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: 'initial'
@@ -959,7 +960,7 @@
                     this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
-                    const metrics = res.data && res.data.ollama_metrics;
+                    const metrics = newResult && newResult.ollama_metrics;
                     const detail = metrics && metrics.total_duration_seconds
                         ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
                         : '';
@@ -1074,6 +1075,7 @@
                 const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: effectiveModel,
+                    stage_models: this.stageModels || {},
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: priorAnalysisText ? 'follow_up' : 'initial',
@@ -1095,7 +1097,7 @@
                     this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
-                    const metrics = res.data && res.data.ollama_metrics;
+                    const metrics = newResult && newResult.ollama_metrics;
                     const detail = metrics && metrics.total_duration_seconds
                         ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
                         : '';

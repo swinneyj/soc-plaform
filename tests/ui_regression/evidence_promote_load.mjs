@@ -25,7 +25,7 @@
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
  *   draft_autosave_debounce  evidence_ledger_view
  *   loop_timeline_panel  snapshot_migration_folds_legacy_maps
- *   api_layer_canonical_fallback  stepper_guards
+ *   api_layer_canonical_fallback  stepper_guards  analyze_stage_models
  * Exit code 0 = all assertions held.
  */
 import {
@@ -975,6 +975,41 @@ const scenarios = {
         });
         assert(computed.stage2Complete.call(collected) === true,
             'saved evidence must complete stage 2');
+    },
+
+    // C3: the analysis wizard POST must carry per-stage model overrides.
+    async analyze_stage_models() {
+        const posts = spy(async () => ({
+            data: {
+                analysis: 'Initial assessment text',
+                model: 'fake-model:latest',
+                investigation_state: { evidence_summary: { total_items: 0 } },
+            },
+        }));
+        const { ctx, alertCalls, errorCalls } = makeSandbox({ post: posts });
+        ctx.AbortController = class { constructor() { this.signal = undefined; } abort() {} };
+        const methods = await loadAnalysis(ctx);
+        const comp = analysisComp(methods, {
+            analysisModel: 'llama3.1:latest',
+            stageModels: { initial: 'wizard-a:latest', follow_up: '', closure: '' },
+            analysisContext: '',
+            _startAnalysisStatus: () => {},
+            _setAnalysisStatus: () => {},
+            _stopAnalysisStatusTimer: () => {},
+            _hydrateTimelineFromEvidence: async () => {},
+            _storeAnalysisStateSnapshot: () => {},
+        });
+
+        await comp.runAnalysis();
+
+        const analyzeCall = posts.calls.find(([url]) => url === '/api/analyses' || url === '/api/db/analyze');
+        assert(analyzeCall, 'no analyze POST captured: ' + JSON.stringify(posts.calls.map(c => c[0])));
+        const body = analyzeCall[1];
+        assert(body.stage_models && body.stage_models.initial === 'wizard-a:latest',
+            'analyze body must carry stage_models.initial: ' + JSON.stringify(body.stage_models));
+        assert(body.analysis_stage === 'initial', 'stage must be initial: ' + body.analysis_stage);
+        assert(alertCalls.length === 0, 'runAnalysis alerted: ' + JSON.stringify(alertCalls));
+        assert(errorCalls.length === 0, 'runAnalysis hit console.error: ' + JSON.stringify(errorCalls));
     },
 };
 

@@ -175,6 +175,8 @@
                 @update:analysis-case-search="analysisCaseSearch = $event"
                 @update:analysis-case-id="analysisCaseId = $event"
                 @update:analysis-model="analysisModel = $event"
+                :stage-models="stageModels"
+                @update:stage-models="stageModels = $event"
                 @update:analysis-context="analysisContext = $event"
                 @update:phase2-model="phase2Model = $event"
                 @update:follow-up-phase="followUpPhase = $event"
@@ -342,7 +344,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=13"></script>
     <script src="modules/database.js?v=20"></script>
-    <script src="modules/analysis.js?v=19"></script>
+    <script src="modules/analysis.js?v=20"></script>
     <script src="modules/tools.js?v=12"></script>
     <script src="modules/closure.js?v=10"></script>
     <script src="modules/codeReview.js?v=10"></script>
@@ -353,13 +355,13 @@
     <script src="components/SplunkBoundaryWidget.js?v=2"></script>
     <script src="components/ToolsTab.js?v=12"></script>
     <script src="components/DatabaseTab.js?v=28"></script>
-    <script src="components/AnalysisTab.js?v=19"></script>
+    <script src="components/AnalysisTab.js?v=20"></script>
     <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=16"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=20"></script>
+    <script src="app.modular.js?v=21"></script>
 </body>
 </html>

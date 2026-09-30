@@ -1377,5 +1377,56 @@ class TestAnalyzeHardening:
         assert rows == []
 
 
+class TestAnalyzeStageModels:
+    """C3: per-stage model overrides must reach the model call, with
+    missing/empty keys falling back to the request's base model."""
+
+    @staticmethod
+    def _install_recorder(api_client, monkeypatch):
+        class RecordingClient(FakeOllamaClient):
+            models_seen = []
+
+            def generate(self, prompt, model=None, temperature=None, options=None):
+                RecordingClient.models_seen.append(model)
+                return super().generate(prompt, model=model, temperature=temperature, options=options)
+
+        RecordingClient.models_seen = []
+        monkeypatch.setattr(ollama_service, "get_ollama_client", lambda: RecordingClient())
+        return RecordingClient
+
+    def test_initial_stage_uses_override(self, api_client, monkeypatch):
+        case_id = seed_case(api_client)
+        Recording = self._install_recorder(api_client, monkeypatch)
+        resp = api_client.post("/api/db/analyze", json={
+            "case_id": case_id,
+            "stage_models": {"initial": "override-a:latest"},
+        })
+        assert resp.status_code == 200
+        assert Recording.models_seen and set(Recording.models_seen) == {"override-a:latest"}
+
+    def test_follow_up_stage_uses_override(self, api_client, monkeypatch):
+        case_id = seed_case(api_client)
+        Recording = self._install_recorder(api_client, monkeypatch)
+        resp = api_client.post("/api/db/analyze", json={
+            "case_id": case_id,
+            "analysis_stage": "follow_up",
+            "stage_models": {"follow_up": "override-b:latest"},
+        })
+        assert resp.status_code == 200
+        assert Recording.models_seen and set(Recording.models_seen) == {"override-b:latest"}
+
+    def test_missing_key_falls_back_to_model(self, api_client, monkeypatch):
+        case_id = seed_case(api_client)
+        Recording = self._install_recorder(api_client, monkeypatch)
+        # No "initial" key in stage_models -> base request.model is used.
+        resp = api_client.post("/api/db/analyze", json={
+            "case_id": case_id,
+            "model": "base-m:latest",
+            "stage_models": {"follow_up": "unrelated:latest"},
+        })
+        assert resp.status_code == 200
+        assert Recording.models_seen and set(Recording.models_seen) == {"base-m:latest"}
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -62,9 +62,11 @@ router = APIRouter()
 def analyze_case(request: AnalyzeRequest):
     try:
         case_id = request.case_id
-        model = request.model
         context = request.context
         requested_analysis_stage = (request.analysis_stage or "initial").strip().lower() or "initial"
+        # C3: per-stage model override; missing/empty entry falls back to
+        # request.model ("" keeps the auto-resolve-an-installed-model behavior).
+        model = (request.stage_models or {}).get(requested_analysis_stage) or request.model
         requested_phase_number = max(1, int(request.analysis_phase or 1))
 
         sys.path.insert(0, deps.get_platform_root())

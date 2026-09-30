@@ -66,6 +66,7 @@ class AnalyzeRequest(BaseModel):
     prior_analysis: str = ""
     analysis_stage: str = "initial"
     analysis_phase: int = 1
+    stage_models: Optional[Dict[str, str]] = None  # C3: per-stage override initial|follow_up|closure
 
 
 # ---------------------------------------------------------------------------

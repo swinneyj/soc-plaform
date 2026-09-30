@@ -77,6 +77,7 @@ def generate_closure_note(request: dict):
     advisory/audited only (echoed as operator_disposition with a
     disposition_conflict flag) and never overrides the derived conclusion.
     """
+    # stage_models["closure"] reserved (C3) — this handler threads no model today.
     try:
         sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal
