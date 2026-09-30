@@ -85,6 +85,25 @@ def test_validate_rejects_binary_content_with_allowed_extension(tmp_path):
     assert any("binary" in v for v in report["violations"])
 
 
+def test_artifact_size_cap(tmp_path, monkeypatch):
+    """C2.1.3: a file over SPLUNK_BOUNDARY_MAX_BYTES fails validation (the
+    fail-closed contract), regardless of its otherwise-clean extension and
+    content. The cap is env-tunable, so patch it small instead of writing
+    50 MiB of zeros."""
+    path = tmp_path / "big.csv"
+    path.write_text("host,user\nalpha,beta\n")
+    assert sb.validate_file(path)["ok"] is True  # sane baseline first
+
+    monkeypatch.setenv("SPLUNK_BOUNDARY_MAX_BYTES", "10")
+    report = sb.validate_file(path)
+    assert report["ok"] is False
+    assert any("exceeds cap" in v for v in report["violations"])
+
+    # Exactly at the cap is allowed (cap is a strict upper bound).
+    path.write_text("1234567890")
+    assert sb.validate_file(path)["ok"] is True
+
+
 def test_validate_rejects_oversized_file(tmp_path, monkeypatch):
     monkeypatch.setenv("SPLUNK_BOUNDARY_MAX_BYTES", "10")
     path = _make_csv(tmp_path)
