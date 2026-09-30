@@ -292,3 +292,37 @@ def test_expired_session_401(session_client):
     assert resp.status_code == 401
     # And the read gate treats the expired cookie as anonymous.
     assert session_client.get("/api/db/stats").status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# C2.1.x — route-level hardening gates (signed-off limits)
+# ---------------------------------------------------------------------------
+
+def test_job_queue_cap_429(client, with_api_key, monkeypatch):
+    """C2.1.2: a full in-memory job queue rejects admission with 429 BEFORE
+    registry lookup (unknown tool would 404; the cap must win)."""
+    import api.routes.tools as tools_route
+
+    monkeypatch.setattr(tools_route, "JOB_QUEUE_MAX", 2)
+    seeded = [f"queued-{i}" for i in range(2)]
+    for job_id in seeded:
+        tools_route.jobs[job_id] = {
+            "job_id": job_id, "status": "pending", "tool_name": "x",
+            "created_at": "2026-09-30T00:00:00", "completed_at": None,
+            "stdout": None, "stderr": None, "exit_code": None,
+            "arguments": {}, "artifacts": [],
+        }
+    try:
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 429
+        assert "queue is full" in resp.json()["detail"]
+
+        # One slot free -> admission proceeds (unknown tool then 404s).
+        tools_route.jobs.pop(seeded[0])
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 404
+    finally:
+        for job_id in seeded:
+            tools_route.jobs.pop(job_id, None)

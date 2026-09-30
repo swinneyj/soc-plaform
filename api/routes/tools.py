@@ -28,6 +28,11 @@ jobs: Dict[str, Dict[str, Any]] = {}
 deleted_job_ids = set()
 STALE_JOB_SECONDS = 600
 
+# C2.1.2 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30): cap the
+# in-memory job queue so a runaway client cannot grow it without bound.
+# Counts unfinished (pending/running) jobs; over-limit admission answers 429.
+JOB_QUEUE_MAX = int(os.environ.get("JOB_QUEUE_MAX", "100"))
+
 def _job_status_value(status: Any) -> str:
     """Normalize enum instances and legacy persisted enum strings."""
     if isinstance(status, JobStatus):
@@ -234,6 +239,14 @@ def run_tool_catalog_regression():
              dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
+    # C2.1.2: admission check before registry/disk work — under load this is
+    # the cheap first gate.
+    unfinished = sum(1 for job in jobs.values() if job.get("status") in (JobStatus.PENDING.value, JobStatus.RUNNING.value))
+    if unfinished >= JOB_QUEUE_MAX:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Job queue is full ({unfinished} unfinished >= {JOB_QUEUE_MAX}); retry later",
+        )
     registry = load_registry()
     tool = next((t for t in registry if t["name"].lower() == request.tool_name.lower()), None)
     if not tool:
