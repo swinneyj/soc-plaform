@@ -94,10 +94,17 @@ quarantine staging clean.
   `scripts/manage_users.py`, set `AUTH_MODE=session` (+ `SESSION_SECURE=1`
   behind HTTPS), restart per `scripts/start` — rollback is unsetting the
   var (`docs/SESSION_AUTH_PLAN.md` §6).
-- [ ] **E.4 human:** restart the local daemon so the C2 limits + C4 paste
-  bookkeeping are live (`scripts/start`)
-- [ ] **E.4 human:** CI green on `dev-dalton` at the release commit, clean tree
-- [ ] **E.4 human:** `git checkout main && git merge --no-ff dev-dalton`
-- [ ] **E.4 human:** tag the release
-- [ ] **E.4 human:** deploy per `docs/VERCEL_HANDOFF.md`; smoke
-  `GET /api/health` + one authenticated UI write
+- [x] **E.4 daemon restarted** Sept 30 — running release code (`main @
+  e6aff09`); live smoke passed: seed cases, draft round-trip, paste →
+  boundary batch → purge, 413 paste cap, real Stage 3+4 analyses via
+  `stage_models`, 429 rate-limit probe, health unaffected.
+- [x] **E.4 CI green + clean tree** at the release commits (`main e6aff09`,
+  `dev-dalton 1919285`)
+- [x] **E.4 merge executed** — `main` fast-forwarded to `origin/main`
+  (autosave-drafts feature) then `--no-ff` merge of `dev-dalton`
+  (`eeefe06`); the drafts feature was ported into the modular routers
+  (`c41e7c8`) with a round-trip test
+- [x] **E.4 tagged `v1.0.0`** (annotation = this document's summary)
+- [ ] **E.4 deploy** per `docs/VERCEL_HANDOFF.md` — blocked on env vars +
+  routing answer (Justin); smoke `GET /api/health` + one authenticated UI
+  write once deployed
