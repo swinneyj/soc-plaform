@@ -25,7 +25,7 @@ splunk-es-backup-toolkit.old/
 .DS_Store
 
 # Modularization archives (kept locally, not committed)
-web/Old_archive/
+scripts/attic/web-Old_archive/
 scripts/_archive_oneoffs/
 web/Old/app.js-pre-modular-monolith.bak
 

@@ -138,21 +138,21 @@ Browser console errors that name a missing method usually mean a method was not 
 
 ## Backups on disk (rollback)
 
-Under `web/`:
+The pre-modularization monolith snapshots and peel-era backups were moved
+(Sept 30, 2026) out of the served web root into `scripts/attic/web-Old_archive/`
+(untracked). They are dead copies — git history and the modular files themselves
+are the source of truth. If a rollback is ever genuinely needed:
 
-| File | Purpose |
-|------|---------|
-| `index.live-backup-before-piece5.html` | Full pre-modular **monolith** (restore live HTML if needed) |
-| `index.live-backup-20260904.html` | Earlier monolith snapshot from Piece 1 |
-| `app.modular.js.bak-before-db-peel` | Root app before Database peel |
-| `app.modular.js.bak-before-analysis-peel` | Before Analysis peel |
-| `app.modular.js.bak-before-cr-tools-peel` | Before Code Review / Tools / Closure peel |
-| `modules/*.bak-before-full` | Module files before full method bodies were written |
+| Need | Where |
+|------|-------|
+| Full pre-modular **monolith** HTML | `scripts/attic/web-old/` and `scripts/attic/web-Old_archive/index2.html` |
+| Root app before Database / Analysis / CodeReview-Tools peels | `scripts/attic/web-Old_archive/app.modular.js.bak-before-*.peel` |
+| Module files before full method bodies | `scripts/attic/web-Old_archive/modules-old/*.bak-before-full` |
 
 **Restore live UI to old monolith:**
 
 ```bash
-cp web/index.live-backup-before-piece5.html web/index.html
+cp scripts/attic/web-Old_archive/index2.html web/index.html
 ```
 
 Then hard-refresh the browser (Ctrl+Shift+R).
@@ -160,8 +160,8 @@ Then hard-refresh the browser (Ctrl+Shift+R).
 **Restore only root app logic** (example — Database peel):
 
 ```bash
-cp web/app.modular.js.bak-before-db-peel web/app.modular.js
-cp web/modules/database.js.bak-before-full web/modules/database.js
+cp scripts/attic/web-Old_archive/app.modular.js.bak-before-db-peel web/app.modular.js
+cp scripts/attic/web-Old_archive/modules-old/database.js.bak-before-full web/modules/database.js
 ```
 
 ---
