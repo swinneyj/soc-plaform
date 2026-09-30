@@ -97,7 +97,7 @@ Each follow-up phase has targeted queries, a phase-specific evidence source, inq
 - docs/ — operator and architecture references
 - Data/Reports/ — generated reports
 
-Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [multi-user-workflow.md](multi-user-workflow.md).
+Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [docs/multi-user-workflow.md](docs/multi-user-workflow.md).
 
 ## Security
 

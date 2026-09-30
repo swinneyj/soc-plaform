@@ -754,8 +754,8 @@ def list_rules():
         # requiring a database migration.
         catalog_by_id: Dict[str, Dict[str, Any]] = {}
         for catalog_path in [
-            Path(deps.get_platform_root()) / "updated_rules.json",
-            Path(__file__).resolve().parent.parent / "updated_rules.json",
+            Path(deps.get_platform_root()) / "sample_rules.json",
+            Path(__file__).resolve().parent.parent / "sample_rules.json",
         ]:
             try:
                 if catalog_path.exists():

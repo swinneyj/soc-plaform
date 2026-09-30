@@ -14,7 +14,7 @@ Use this as the fastest orientation guide for the clean working copy.
 
 If you are new to this repo, read in this order:
 
-1. `README.txt`
+1. `README.md`
 2. `RUNBOOK.md`
 3. `OPERATOR_CHEAT_SHEET.md`
 4. `docs\FLOW_SHEETS.md`
@@ -82,7 +82,7 @@ If you are new to this repo, read in this order:
 
 ### Documentation
 
-- `README.txt`
+- `README.md` (README.txt archived to scripts/attic/)
   Quick start and operator-facing overview
 - `RUNBOOK.md`
   Runtime/database model and onboarding flow
@@ -208,6 +208,6 @@ If you cannot quickly find something, look in this order:
 
 1. `scripts\` for runnable operational workflows
 2. `docs\` for operator instructions
-3. `README.txt` and `RUNBOOK.md` for environment and handoff expectations
+3. `README.md` and `RUNBOOK.md` for environment and handoff expectations
 4. `api\`, `db\`, `services\`, `web\` for app/runtime code
 5. `Tools\` for analyst and workflow tooling
