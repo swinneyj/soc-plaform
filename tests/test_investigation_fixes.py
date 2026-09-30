@@ -36,6 +36,24 @@ from services import investigation_state as isvc  # noqa: E402
 # Helpers / fakes
 # ---------------------------------------------------------------------------
 
+def _iter_api_routes(routes=None):
+    """Yield (path, methods) for every FastAPI route, descending into included
+    routers. FastAPI >= 0.141 wraps include_router() targets in
+    _IncludedRouter objects that carry no .path/.methods themselves, so a
+    flat iteration over app.routes sees almost nothing."""
+    if routes is None:
+        routes = api_main.app.routes
+    for route in routes:
+        inner = getattr(route, "original_router", None)
+        if inner is not None:
+            yield from _iter_api_routes(inner.routes)
+            continue
+        path = getattr(route, "path", None)
+        methods = getattr(route, "methods", None)
+        if path and methods:
+            yield path, methods
+
+
 class FakeEntry:
     """Duck-typed InvestigationEvidenceEntryPayload."""
 
@@ -1045,11 +1063,10 @@ class TestCanonicalRestPaths:
         doc = (PLATFORM_ROOT / "docs" / "API_ENDPOINTS.md").read_text()
 
         missing = []
-        for route in api_main.app.routes:
-            path = getattr(route, "path", "")
+        for path, raw_methods in _iter_api_routes():
             if not path.startswith(("/api", "/health")):
                 continue  # static mount and internals are not API surface
-            methods = {m for m in getattr(route, "methods", ()) if m not in ("HEAD", "OPTIONS")}
+            methods = {m for m in raw_methods if m not in ("HEAD", "OPTIONS")}
             if not methods:
                 continue
             # A route counts as documented when its literal path (parameterized

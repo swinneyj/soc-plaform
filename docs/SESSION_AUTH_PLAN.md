@@ -103,7 +103,7 @@ class User(Base):
     password_hash = Column(String(256), nullable=False)   # encoded, see below
     role          = Column(String(16), nullable=False, default="analyst")  # analyst|admin
     is_active     = Column(Boolean, nullable=False, default=True)
-    created_at    = Column(DateTime, nullable=False, default=utcnow_naive)
+    created_at    = Column(DateTime, nullable=False, default=_utcnow)
 
 class AuthSession(Base):
     __tablename__ = "auth_sessions"
@@ -111,9 +111,12 @@ class AuthSession(Base):
     token_hash    = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex of cookie value
     csrf_token    = Column(String(64), nullable=False)
     user_id       = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    created_at    = Column(DateTime, nullable=False, default=utcnow_naive)
+    created_at    = Column(DateTime, nullable=False, default=_utcnow)
     expires_at    = Column(DateTime, nullable=False)
 ```
+(`_utcnow` is `db/models.py`'s existing naive-UTC column-default callable — its convention
+for every `created_at`; add `Boolean` and `ForeignKey` to its `from sqlalchemy import …`
+line. `db/util.py:utcnow_naive` is the api-side clock used by `session_expiry` below.)
 
 **Password hashing — stdlib `hashlib.scrypt` only** (no new deps): `n=2**14, r=8, p=1`,
 16-byte random salt, `dklen=32`, encoded as `scrypt$n$r$p$salthex$hashhex`. Helpers
@@ -190,7 +193,8 @@ note, and this doc's `Status` line updated.
 **Exit criteria (from the playbook):** tests prove login, logout, CSRF reject, role gate,
 and API-key-still-works; zero new dependencies; the three `/api/auth/*` routes appear
 literally in `docs/API_ENDPOINTS.md`; full suite green on 3.14 **and** 3.9 with the flag
-off; `AUTH_MODE=session` matrix green; 23 UI harness scenarios still green.
+off; `AUTH_MODE=session` matrix green; all UI harness scenarios still green (23 at C1B
+time — the count grows to 24 when the playbook's C3.3 lands).
 
 **Fast checks (no runtime needed):** deterministic scrypt verify unit test (fixed salt
 vector); `bash scripts/check_undefined_names.sh`; `node --check` on touched web files.

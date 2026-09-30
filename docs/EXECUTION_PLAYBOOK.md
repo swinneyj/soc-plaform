@@ -37,7 +37,9 @@ bash scripts/check_no_merge_markers.sh              # expect: OK
 bash scripts/baseline --verify 2>&1 | tail -2       # expect: BASELINE HOLDING
 for f in $(find web -name '*.js' -not -path 'web/Old_archive/*'); do node --check "$f" || echo "FAIL $f"; done   # expect: no FAIL
 ```
-UI-harness scenarios (run each separately; 23 total must stay green when you touch `web/`):
+UI-harness scenarios (run each separately; ALL of them must stay green when you touch
+`web/` — 23 today, +1 when C3.3 adds `analyze_stage_models`; run every name listed here
+plus any a later stage added):
 ```bash
 node tests/ui_regression/evidence_promote_load.mjs <scenario>   # scenarios:
 # save_supportive save_phase2 save_busy_guard load_saved_evidence load_saved_error
@@ -51,13 +53,15 @@ node tests/ui_regression/run_splunk_search_status.mjs <scenario>  # success fail
 ### Commit protocol (every stage)
 ```bash
 printf '%s\n' '<type>: <summary>' '' '<bullet details>' '' \
-  'Gates: pytest 276x2 (3.14+3.9), <other gates run>.' '' \
+  'Gates: pytest <N>x2 (3.14+3.9), <other gates run>.' '' \
   'Generated with Codebuff 🤖' 'Co-Authored-By: Codebuff <noreply@codebuff.com>' > /tmp/msg
 git add <files-this-stage-only>        # never `git add -A`
 git commit -F /tmp/msg
 git push origin dev-dalton
 sleep 8; RUN_ID=$(gh run list --repo swinneyj/soc-plaform --workflow=Tests --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch "$RUN_ID" --repo swinneyj/soc-plaform --exit-status >/dev/null 2>&1; gh run list --repo swinneyj/soc-plaform --workflow=Tests --limit 1 --json conclusion --jq '.[0].conclusion'   # expect: success
 ```
+(`<N>` = the count pytest prints in its final summary line — 276 as of Sept 30. It grows as
+C2/C3/C4 add tests, so never hardcode a stale count in the commit body.)
 
 ### Gotchas learned the hard way
 - `pytest.ini` already sets `addopts = -q`. Do NOT pass `-q` again (it hides the summary).
@@ -69,6 +73,31 @@ sleep 8; RUN_ID=$(gh run list --repo swinneyj/soc-plaform --workflow=Tests --lim
 - Harness file reads need `await fsRead(path, 'utf8')`; use the `ROOT` export from `harness_core.mjs`.
 - The API doc guard (`TestCanonicalRestPaths`) requires every registered `/api*|/health` route
   to appear literally in `docs/API_ENDPOINTS.md` — update that doc whenever routes change.
+  Route enumeration goes through the `_iter_api_routes` helper in
+  `tests/test_investigation_fixes.py` (FastAPI 0.141 wraps included routers in
+  `_IncludedRouter` objects, so a flat `app.routes` loop sees almost nothing — do not
+  "simplify" it back).
+
+### Session start checklist (first actions in a cold session)
+1. `git log --oneline -3` + `git status` — confirm branch `dev-dalton` and a clean tree.
+2. Run the §0 gates once WITHOUT changing anything. If anything is red before you start,
+   STOP and report — the baseline must be green.
+3. Read the whole stage you are about to run before editing anything.
+
+### Stage order & cross-stage state (do not reorder)
+- Order: A1 → A2 → A3 → B1–B5 → C1B.1–C1B.4 → C2.0–C2.1.5 → C3 → C4 → D1–D3 → E.
+- C1B.2 RESTRUCTURES `mutation_gate_rejects` (replacing A1.4's form) and extends the A1.6
+  GET allowlist with `/api/auth/session` — it may only run after A1.
+- Cache-buster `?v=N` values move as stages bump them. Every bump instruction means "read
+  the current N in `web/index.modular.html`, write N+1" — the numbers quoted in a stage are
+  the values ON SEPT 30, when this playbook was written.
+- The harness scenario count only grows (C3.3 adds one); the test-file count must NEVER
+  change (8 `tests/test_*.py`).
+
+### If a verify fails
+STOP. Do not improvise. If the stage's files are still uncommitted, restore them
+(`git checkout -- <files>`) so the tree returns to green, then report what failed with the
+exact command output. Never commit or push a red state.
 
 ---
 
@@ -107,8 +136,10 @@ The UI's `deleteTriageCase` currently uses the third one.
   ```
 - Then delete the entire `if delete_case_id:` block that follows (~line 132 through its closing
   lines, up to where the plain listing begins). Read lines 125–155 first to see the full block.
-- Verify: `grep -n "delete_case_id\|delete_analysis" api/routes/triage.py` → only the POST
-  handler's `delete_analysis` (line ~248) and the shared helper (line ~22) remain.
+- Verify: `grep -n "delete_case_id\|delete_analysis" api/routes/triage.py` → zero
+  `delete_case_id` matches; `delete_analysis` remains only in the shared helper
+  `_purge_case_related_records` (lines ~22/~55), the POST delete handler + its call site
+  (lines ~248/~266), and the batch-delete payload parser (~line 297).
 
 **A1.3 — Convert the frontend off the GET delete path.**
 - `web/modules/api.js`, next to `deleteNotable` (~line 166), add (POST delete takes
@@ -125,7 +156,8 @@ The UI's `deleteTriageCase` currently uses the third one.
                 await API.deleteCase(case_.case_id, this.deleteAnalysisWithCase);
                 this.triageData = await API.triage();
   ```
-- Bump cache-busters in `web/index.modular.html`: `api.js?v=11` → `v=12`, `database.js?v=19` → `v=20`.
+- Bump cache-busters in `web/index.modular.html` — read the current `?v=N` first, write
+  N+1 (Sept 30 values when written: `api.js?v=11`, `database.js?v=19`).
 - Verify: `grep -rn "delete_case_id" web/ tests/` → no matches. Run the full harness list (§0).
 
 **A1.4 — Path-aware mutation gate (belt and suspenders).**
@@ -145,10 +177,10 @@ The UI's `deleteTriageCase` currently uses the third one.
 - Verify: gates green — no existing test GETs a `/delete` path (confirmed: zero usages).
 
 **A1.5 — Update `docs/API_ENDPOINTS.md`.**
-- Line ~69: change the `GET /api/cases` row description to `List triage cases.` (drop the
+- Line ~68: change the `GET /api/cases` row description to `List triage cases.` (drop the
   `delete_case_id`/`delete_analysis` mention).
-- Delete the two rows: `| GET | \`/api/cases/{case_id}/delete\` …` (line ~72) and
-  `| GET | \`/api/notables/{event_id}/delete\` …` (line ~90).
+- Delete the two rows: `| GET | \`/api/cases/{case_id}/delete\` …` (line ~71) and
+  `| GET | \`/api/notables/{event_id}/delete\` …` (line ~88).
 - Verify: `PYTHON=.venv314/bin/python -m pytest tests/test_investigation_fixes.py::TestCanonicalRestPaths 2>&1 | tail -1` → passed.
 
 **A1.6 — Route-semantics audit test (locks the bug class forever).**
@@ -182,10 +214,13 @@ The UI's `deleteTriageCase` currently uses the third one.
       }
 
       def test_every_get_route_is_classified_read_only(self):
+          # _iter_api_routes (module helper, shared with the doc-drift guard) recurses
+          # into included routers — FastAPI 0.141 wraps them in _IncludedRouter objects,
+          # so a flat app.routes loop sees almost nothing. Do not "simplify" this back.
           get_paths = {
-              route.path
-              for route in api_main.app.routes
-              if "GET" in getattr(route, "methods", set())
+              path
+              for path, methods in _iter_api_routes()
+              if "GET" in methods
           }
           assert get_paths == self.READ_ONLY_GET_ALLOWLIST, (
               "GET routes changed — classify each new route read-only (add to "
@@ -196,14 +231,16 @@ The UI's `deleteTriageCase` currently uses the third one.
           )
 
       def test_no_get_route_is_delete_shaped(self):
-          for route in api_main.app.routes:
-              if "GET" in getattr(route, "methods", set()):
-                  assert not route.path.endswith(("/delete", "/batch-delete", "/delete-all")), (
-                      f"GET {route.path} is delete-shaped — destructive actions must be "
+          for path, methods in _iter_api_routes():
+              if "GET" in methods:
+                  assert not path.endswith(("/delete", "/batch-delete", "/delete-all")), (
+                      f"GET {path} is delete-shaped — destructive actions must be "
                       "POST/DELETE so the API-key mutation gate covers them"
                   )
   ```
-  (`api_main` is already imported in that file. If the equality set mismatches on
+  (`api_main` and the `_iter_api_routes` helper are already in that file. Remember: when
+  C1B.2 later adds `GET /api/auth/session`, add it to this allowlist in the same commit.
+  If the equality set mismatches on
   `/docs`-style routes, the test env has `ENABLE_DOCS` unset so docs routes do not exist —
   do not add them.)
 - Verify: `PYTHON=.venv314/bin/python -m pytest tests/test_investigation_fixes.py::TestRouteSemanticsAudit 2>&1 | tail -1` → passed, and negative control: temporarily re-add
@@ -272,7 +309,10 @@ Settings → Code security (tracker checkbox).
 - Line ~52: append `**Resolved Sept 30:** the injection design decision is made — server-side injection at serve time.`
 **A3.2 — `docs/BACKEND_MODULARIZATION_PLAN.md` line 4:**
 `**Status:** Phase 1 landed 2026-09-29 (further phases planned)` →
-`**Status:** complete (Sept 29–30, 2026) — Pieces A–D all landed: 11 routers in api/routes/, api/schemas.py + api/helpers/ in place, api/main.py is a ~220-line app shell, REPO_MAP.md points at the new layout.`
+`**Status:** complete (Sept 29–30, 2026) — Pieces A–D all landed: 11 routers in api/routes/, api/schemas.py + api/helpers/ in place, api/main.py is a thin app shell, REPO_MAP.md points at the new layout.`
+  Same file, line 5 (Progress line): `api/main.py` is a ~155-line app shell (6,410 → 155)`
+  → `api/main.py is a thin app shell (6,410 → ~255; grows again only with middleware)`.
+  Do not chase exact line counts later — the claim that matters is "the monolith is gone".
 **A3.3 —** Gates (docs-only: pytest ×2 + `check_no_merge_markers` suffice), commit `docs: sync tracker + backend-plan statuses to reality`, push, CI green.
 
 ---
@@ -389,7 +429,7 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
       password_hash = Column(String(256), nullable=False)
       role = Column(String(16), nullable=False, default="analyst")  # analyst|admin
       is_active = Column(Boolean, nullable=False, default=True)
-      created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+      created_at = Column(DateTime, nullable=False, default=_utcnow)
 
   class AuthSession(Base):
       __tablename__ = "auth_sessions"
@@ -397,10 +437,15 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
       token_hash = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex
       csrf_token = Column(String(64), nullable=False)
       user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-      created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+      created_at = Column(DateTime, nullable=False, default=_utcnow)
       expires_at = Column(DateTime, nullable=False)
   ```
 
+- The block above deliberately uses the file's own `_utcnow` naive-UTC callable as the
+  column default (that is `db/models.py`'s convention — every `created_at` uses it).
+  `db/util.py:utcnow_naive` is the api-side clock used in C1B.2. Add `Boolean` and
+  `ForeignKey` to `db/models.py`'s existing `from sqlalchemy import Column, DateTime, …`
+  line — neither is imported today.
 - `api/auth.py` — append the scrypt helpers exactly as specced in SESSION_AUTH_PLAN §4
   (`hash_password` / `verify_password`, format `scrypt$n$r$p$salthex$hashhex`, n=2**14,
   r=8, p=1, dklen=32, `hmac.compare_digest`) plus `import hashlib, hmac, secrets` at top.
@@ -507,7 +552,7 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
                   return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
               if actor.kind == "session" and not actor.csrf_ok:
                   return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
-      elif auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
+      elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
           return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
       return await call_next(request)
   ```
@@ -515,7 +560,10 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
   (`mutation_gate_rejects` keeps its A1 path-aware form but must gate mutations in session
   mode even when `_API_KEY` is empty — restructure it to
   `bool(path.startswith("/api/") and (method mutating or destructive_suffix))` and let the
-  middleware branch decide key-vs-session semantics.)
+  middleware branch decide key-vs-session semantics. The `elif` arm-checks `auth._API_KEY`
+  on purpose: after this restructure `mutation_gate_rejects` is key-independent, so without
+  that check an UNARMED flag-off server would 401 every mutation and break the documented
+  flag-off byte-compat.)
 - Admin dependency on the §3 admin routes (10 decorators, add
   `dependencies=[Depends(require_role("admin"))]`): `GET /api/registry`,
   `POST /api/registry/reload`, `GET /api/tools`, `GET /api/tools/{tool_name}`,
@@ -525,6 +573,9 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
 - **Doc-drift guard:** add literal `docs/API_ENDPOINTS.md` rows for
   `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/session` or
   `TestCanonicalRestPaths` fails.
+- **A1.6 allowlist:** add `GET /api/auth/session` to
+  `TestRouteSemanticsAudit.READ_ONLY_GET_ALLOWLIST` (`tests/test_investigation_fixes.py`)
+  in this same commit or `test_every_get_route_is_classified_read_only` fails.
 - Tests in `tests/test_api_key_gate.py` (a `with_session` helper that inserts a User +
   AuthSession via `api_client.test_session()`-style session and sets the cookie on the
   client): `test_login_ok_sets_cookie`, `test_login_bad_password_401`,
@@ -558,8 +609,10 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
   down as a prop — never `axios` in components (design rule #2).
 - 401-on-mutation → reopen login modal (handle it in the `web/modules/api.js` transport
   error path so one place covers every call).
-- Bump cache-busters for every touched file (`auth.js?v=1`, `HeaderNav.js?v=9`,
-  `api.js` (v11→v12), `app.modular.js` (v19→v20), plus any tab component touched).
+- Bump cache-busters (+1 each) for every touched file in `web/index.modular.html` — read
+  the current `?v=N` first (A1.3 already bumped `api.js`/`database.js` once; Sept 30 values
+  before any stage runs: `auth.js?v=1`, `HeaderNav.js?v=9`, `api.js?v=11`,
+  `app.modular.js?v=19`, plus any tab component touched).
 - Verify: `node --check` clean; all 23 harness scenarios green (they run with auth inert);
   live smoke with `AUTH_MODE=session` and a created user: login → Run All works →
   analyst account sees no admin buttons.
@@ -696,8 +749,9 @@ one-line comment `# stage_models["closure"] reserved` and skip.
   (Stage 5 uses key `closure`.) At the `<analysis-tab>` binding site
   (`grep -n "analysis-model" web/index.modular.html web/app.modular.js` to find it) add
   `v-model:stage-models="stageModels"`.
-- Cache-busters: `api.js` untouched; bump `app.modular.js` (v19→v20), `analysis.js`
-  (v19→v20), `AnalysisTab.js` (v19→v20) in `web/index.modular.html`.
+- Cache-busters: `api.js` untouched; bump (+1 each, read current N first — C1B.3 may
+  already have bumped `app.modular.js`) `app.modular.js`, `analysis.js`, `AnalysisTab.js`
+  in `web/index.modular.html`.
 
 **C3.3 — Tests.** `tests/test_api_analyze_flow.py` — new class `TestAnalyzeStageModels`
 (arrange block copied from that file's simplest analyze test; the fake Ollama stub records
@@ -792,6 +846,35 @@ beyond the doc that carries it.
 
 ---
 
+## Stage E — Release & closeout (final) `[mechanical after sign-off]`
+
+**Human gate:** the human decides when `dev-dalton` merges to `main` — never merge or push
+to `main` yourself. Run this stage when A–D are done (D1/D3 may remain open on their named
+external blockers — record them in the release notes instead of waiting).
+
+**E.1 — Final sweep.** On a clean tree run the COMPLETE §0 gate list (both pytest runs,
+undefined-names, merge-markers, baseline, `node --check`, ALL harness scenarios), then:
+```bash
+grep -rn "delete_case_id" web/ tests/ api/          # expect: no matches
+ls tests/test_*.py | wc -l                          # expect: 8
+```
+**E.2 — Status sync.** Mark each stage's outcome in `docs/DEVELOPMENT_PLAN.md` §11 and
+`docs/security-remediation-tracker.md`; update `docs/SESSION_AUTH_PLAN.md` Status if C1B
+landed; record the final pytest count in the DoD table below.
+
+**E.3 — Release notes + ops handoff.** Write `docs/RELEASE_NOTES.md`: what landed (by
+stage), final gate counts, known-open items (D1 Vercel routing question, D2 rehearsal
+pending `SPLUNK_URL`/`SPLUNK_TOKEN`, D3 user-side hygiene), and the ops entry points
+(`scripts/start` — backup with 20h staleness skip + retention dry-run every start;
+`scripts/start --backup`; secrets via BWS/keychain).
+
+**E.4 — Merge readiness (human executes).** Checklist for the human: CI green on
+`dev-dalton`, clean tree, `git merge --no-ff dev-dalton` on `main`, tag the release, deploy
+per `docs/VERCEL_HANDOFF.md`. Commit the E docs (`docs: release notes + closeout status
+(E)`), push `dev-dalton`, CI green.
+
+---
+
 ## Definition of done
 
 | Stage | DoD |
@@ -805,3 +888,4 @@ beyond the doc that carries it.
 | C3 | Per-stage model overrides reach the Ollama stub; fallback proven |
 | C4 | Manifest/purge parity + byte-identical sanitization proven |
 | D1–D2 | Docs assembled so unblocking = one conversation/checklist run |
+| E | Final sweep green on a clean tree; statuses + release notes written; merge checklist handed to the human |
