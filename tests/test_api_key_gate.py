@@ -351,6 +351,48 @@ def test_paste_payload_cap_413(client, monkeypatch):
     assert "No notable text" in resp.json()["detail"]
 
 
+def test_analysis_draft_roundtrip(client, with_api_key, monkeypatch):
+    """Autosave drafts (ported from main): PUT persists a snapshot inside the
+    investigation state; the GET read strips it back out as draft_state."""
+    import db.models as db_models
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    db_models.Base.metadata.create_all(bind=engine)
+    test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr(db_models, "SessionLocal", test_session)
+
+    db = test_session()
+    db.add(db_models.TriageResult(case_id="DRAFT-1", rule_name="r1", analysis_summary="s"))
+    db.commit()
+
+    snap = {"analysisContext": "half-written notes", "analysisModel": "llama3.1:latest"}
+    resp = client.put(
+        "/api/db/triage/DRAFT-1/analysis-draft",
+        json={"snapshot": snap},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert resp.status_code == 200 and resp.json()["success"] is True
+
+    read = client.get(
+        "/api/db/triage/DRAFT-1/investigation-state",
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert read.status_code == 200
+    body = read.json()
+    assert body["draft_state"] == snap
+    assert "_draft_state" not in (body.get("evidence_summary") or {}), "internal key must not leak"
+
+    # A case with no state row still reports a null draft cleanly.
+    db.add(db_models.TriageResult(case_id="DRAFT-2", rule_name="r2", analysis_summary="s"))
+    db.commit()
+    empty = client.get("/api/db/triage/DRAFT-2/investigation-state", headers={"X-API-Key": "test-secret-key"})
+    assert empty.status_code == 200 and empty.json()["draft_state"] is None
+    engine.dispose()
+
+
 def test_rate_limit_429(client, monkeypatch):
     """C2.1.5: Ollama-backed POSTs are limited to RATE_LIMIT_PER_MIN per IP.
     The limiter counts requests before handlers run, so handler outcomes

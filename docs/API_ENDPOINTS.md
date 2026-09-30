@@ -79,7 +79,8 @@ middleware were removed. Everything else mutating is
 | POST | `/api/cases/{case_id}/delete` | `/api/db/triage/{case_id}/delete` | Key when armed (middleware) | Delete a case (and optionally its analysis). |
 | POST | `/api/cases/batch-delete` | `/api/db/triage/batch-delete` | Key when armed (middleware) | Delete many cases. |
 | GET | `/api/cases/{case_id}/notable` | `/api/db/triage/{case_id}/notable` | Open | The source notable linked to the case. |
-| GET | `/api/cases/{case_id}/investigation-state` | `/api/db/triage/{case_id}/investigation-state` | Open | Persisted loop state (status, confidence, timeline). |
+| GET | `/api/cases/{case_id}/investigation-state` | `/api/db/triage/{case_id}/investigation-state` | Open | Persisted loop state (status, confidence, timeline, `draft_state`). |
+| PUT | `/api/cases/{case_id}/analysis-draft` | `/api/db/triage/{case_id}/analysis-draft` | Key when armed (middleware) | Persist the analyst's unfinished UI draft (autosave); returned inside the investigation-state read as `draft_state`. |
 | GET | `/api/cases/{case_id}/closure-readiness` | `/api/db/triage/{case_id}/closure-readiness` | Open | Gating evaluation; each blocker annotated with a `{stage, label}` routing action (S9). |
 
 ## Notables — canonical family `/api/notables`

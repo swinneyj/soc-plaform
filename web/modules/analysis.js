@@ -1505,8 +1505,10 @@
             return {
                 analysisContext: this.analysisContext,
                 analysisModel: this.analysisModel,
+                stageModels: this.stageModels || {},
                 phase2Model: this.phase2Model,
                 followUpPhase: this.followUpPhase,
+                phase2CardState: this.phase2CardState || {},
                 supportiveManualResults: this.supportiveManualResults,
                 supportiveFindingTypes: this.supportiveFindingTypes,
                 enrichmentManualResults: this.enrichmentManualResults,

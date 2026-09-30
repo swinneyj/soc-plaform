@@ -11,6 +11,7 @@ import sys
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 
 from api import deps
 from services.investigation_state import (
@@ -153,6 +154,11 @@ def get_investigation_state(case_id: str):
         state = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
         if state:
             payload = _serialize_investigation_state_record(state)
+            # UI draft data (autosave feature, ported from main) is kept
+            # alongside the durable loop state so an analyst can resume
+            # unfinished work from another browser.
+            summary = payload.get("evidence_summary") if isinstance(payload.get("evidence_summary"), dict) else {}
+            payload["draft_state"] = summary.pop("_draft_state", None)
             return _enrich_timeline_with_evidence_ids(db, case_id, payload)
 
         return {
@@ -174,6 +180,7 @@ def get_investigation_state(case_id: str):
             },
             "last_analysis_stage": "initial",
             "updated_at": None,
+            "draft_state": None,
         }
     finally:
         try:
@@ -181,6 +188,62 @@ def get_investigation_state(case_id: str):
                 db.close()
         except Exception:
             pass
+
+
+class AnalysisDraftRequest(BaseModel):
+    """Browser-independent working copy for an in-progress investigation."""
+    snapshot: Dict[str, Any] = Field(default_factory=dict)
+
+
+@router.put("/api/db/triage/{case_id}/analysis-draft", tags=["Database"])
+def save_analysis_draft(case_id: str, request: AnalysisDraftRequest):
+    """Persist the analyst's unfinished UI state in the shared database.
+
+    Ported from main (autosave drafts) into the modular routers: the draft
+    snapshot rides inside InvestigationState.evidence_summary under a
+    reserved `_draft_state` key and is stripped back out by the GET read.
+    """
+    db = None
+    try:
+        sys.path.insert(0, deps.get_platform_root())
+        from db.models import SessionLocal, TriageResult, InvestigationState
+
+        db = SessionLocal()
+        case = db.query(TriageResult).filter(TriageResult.case_id == case_id).first()
+        if not case:
+            raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+        state = db.query(InvestigationState).filter(InvestigationState.case_id == case_id).first()
+        if state is None:
+            state = InvestigationState(
+                case_id=case_id, rule_id=case.rule_id or "",
+                current_hypothesis=case.analysis_summary or "",
+                provisional_disposition=case.verdict or "undetermined",
+                disposition_confidence=case.confidence_score or 0.0,
+                loop_status="collecting_evidence", iteration_count=0,
+                unresolved_questions="[]", closure_blockers="[]",
+                recommended_next_actions="[]", evidence_summary="{}",
+                last_analysis_stage="initial",
+            )
+            db.add(state)
+        try:
+            summary = json.loads(state.evidence_summary or "{}")
+            if not isinstance(summary, dict):
+                summary = {}
+        except Exception:
+            summary = {}
+        summary["_draft_state"] = request.snapshot or {}
+        state.evidence_summary = json.dumps(summary, ensure_ascii=False)
+        db.commit()
+        return {"success": True, "case_id": case_id, "draft_state": request.snapshot or {}}
+    except HTTPException:
+        raise
+    except Exception as e:
+        if db is not None:
+            db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if db is not None:
+            db.close()
 
 
 @router.get("/api/db/triage/{case_id}/evidence", tags=["Database"])
