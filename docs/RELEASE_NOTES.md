@@ -64,6 +64,8 @@ scenarios green, `delete_case_id` grep = 0, test-file count = 8,
 quarantine staging clean.
 
 ## Known-open items (recorded, not blocking)
+- **`AUTH_MODE` flip deliberately deferred** (decision Sept 30: flag-off
+  posture ships) — see the Stage E checklist note.
 - **Vercel env vars + routing answer** (Justin) — `docs/VERCEL_HANDOFF.md` §5.
 - **Dependabot vulnerability-alerts toggle** — needs repo admin
   (Settings → Code security); `dependabot.yml` itself is live.
@@ -86,14 +88,16 @@ quarantine staging clean.
 - [x] E.2 status sync — tracker paste-batch checkbox closed, dev-plan §11
   Phase C marked complete
 - [x] E.3 release notes completed (this document)
-- [ ] **E.4 human:** decide + execute the `AUTH_MODE=session` flip
-  (create your admin via `scripts/manage_users.py`, set `AUTH_MODE=session`
-  + `SESSION_SECURE=1` behind HTTPS, restart via `scripts/start`, smoke
-  login → Run All → analyst restrictions) — or ship flag-off and flip later
+- [x] **Auth posture decision (Sept 30): ship flag-off.** The runtime stays
+  API-key-gated exactly as today; session auth (C1B) remains dormant but
+  CI-tested. Flipping later needs no release: create a user via
+  `scripts/manage_users.py`, set `AUTH_MODE=session` (+ `SESSION_SECURE=1`
+  behind HTTPS), restart per `scripts/start` — rollback is unsetting the
+  var (`docs/SESSION_AUTH_PLAN.md` §6).
+- [ ] **E.4 human:** restart the local daemon so the C2 limits + C4 paste
+  bookkeeping are live (`scripts/start`)
 - [ ] **E.4 human:** CI green on `dev-dalton` at the release commit, clean tree
 - [ ] **E.4 human:** `git checkout main && git merge --no-ff dev-dalton`
 - [ ] **E.4 human:** tag the release
 - [ ] **E.4 human:** deploy per `docs/VERCEL_HANDOFF.md`; smoke
   `GET /api/health` + one authenticated UI write
-- [ ] **E.4 human:** restart the local daemon so the C2 limits + C4 paste
-  bookkeeping are live (`scripts/start`)
