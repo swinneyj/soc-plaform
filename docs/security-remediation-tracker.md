@@ -96,7 +96,7 @@
 ### 11. Dependency audit / Dependabot
 - **What:** No evidence of `pip-audit` or Dependabot.
 - **Remediation:**
-  - [ ] Run `pip-audit` against `requirements.txt`
+  - [x] **Done Sept 30 (stage A2):** pip-audit clean on the production (>=3.10) branch; the 3.9-branch advisories are recorded accepted risk (see the requirements.txt header).
   - [ ] Enable GitHub Dependabot alerts (Settings → Security → Dependabot) — free, ~2 minutes
 - **Watch list:** `fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`.
 

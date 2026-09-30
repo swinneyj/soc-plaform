@@ -68,7 +68,7 @@ export DATABASE_URL='postgresql+psycopg://<db-user>:<db-password>@localhost:5432
 
 ## Running the tests
 
-The regression suite (46 tests, no database or Ollama required) guards the evidence ledger, closure gate, model resolution, and Phase 3+ query generation:
+The regression suite (280+ tests and growing, no database or Ollama required) guards the evidence ledger, closure gate, model resolution, and Phase 3+ query generation:
 
 ~~~bash
 .venv/bin/python -m pytest
