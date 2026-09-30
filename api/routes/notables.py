@@ -1289,6 +1289,14 @@ def paste_notable(request: PastedNotableRequest):
         sys.path.insert(0, deps.get_platform_root())
         from db.models import SessionLocal, SplunkEvent
         from text_sanitizer_pipeline.text_sanitizer_pipeline import sanitize_logs_with_tokens, sanitize_pii_phi
+
+        # C4 (paste-batch adapter): the paste is admitted through the boundary
+        # FIRST, so every paste is an inspectable, purgeable batch. The
+        # pipeline below is byte-for-byte unchanged — the manifest is the
+        # linkage, and its bookkeeping is written after the inserts commit.
+        from services import splunk_boundary
+        paste_manifest = splunk_boundary.admit_text(raw_text)
+
         segments = split_pasted_notables(raw_text)
         if not segments:
             raise HTTPException(status_code=400, detail="Unable to detect any notable segments in the pasted text")
@@ -1515,6 +1523,17 @@ def paste_notable(request: PastedNotableRequest):
                 except Exception:
                     pass
 
+            # C4: record THIS paste's inserts on the boundary manifest exactly
+            # as ingest_manifest does (ingest stats + ingest_window +
+            # inserted_ids), so purge_batch can undo the paste batch.
+            paste_ingest = splunk_boundary.record_paste_ingest(
+                paste_manifest,
+                rows_read=len(segments),
+                rows_inserted=added_count,
+                rows_skipped=skipped_count,
+                inserted_ids=[e.id for e in pending_events],
+            )
+
         for info in events_info:
             ref = info.pop("event_ref", None)
             if ref is not None:
@@ -1547,6 +1566,7 @@ def paste_notable(request: PastedNotableRequest):
             "skipped": skipped_count,
             "message": message,
             "events": events_info,
+            "batch_id": paste_manifest["batch_id"],
             # Backwards-compatible single-event fields (use first segment)
             "event_id": first_event.get("event_id"),
             "raw_fields": first_event.get("raw_fields"),

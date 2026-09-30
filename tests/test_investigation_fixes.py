@@ -14,6 +14,7 @@ Covers three areas that previously regressed silently:
 All tests are pure unit tests: no database, no HTTP, no Ollama.
 """
 
+import json
 import shutil
 import subprocess
 import sys
@@ -1148,6 +1149,163 @@ class TestRouteSemanticsAudit:
                     f"GET {path} is delete-shaped — destructive actions must be "
                     "POST/DELETE so the API-key mutation gate covers them"
                 )
+
+
+import db.models as db_models  # noqa: E402  (C4: pasted-row assertions)
+
+
+class TestPasteBoundaryBatch:
+    """C4 paste-batch adapter: every paste is admitted through the boundary
+    (admit_text), the manifest records the paste's inserts exactly like
+    ingest_manifest does, and purge_batch can undo the pasted batch.
+    The paste_notable handler is called directly (plain function) with an
+    isolated sqlite SessionLocal and an isolated staging dir.
+    """
+
+    SAMPLE = (
+        "Notable\n"
+        "Title: C4 Golden Test\n"
+        "Rule ID: esca_rule@@notable@@abc123def456ghi789jk\n"
+        "Correlation Search: c4_golden_rule\n"
+        "Host: VPNGW01\n"
+        "User: jdoe\n"
+        "Description: Multiple failed logins observed on VPNGW01 from 10.0.0.5\n"
+    )
+
+    @pytest.fixture()
+    def paste_env(self, monkeypatch, tmp_path):
+        import db.models as db_models
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        monkeypatch.setattr(db_models, "SessionLocal", None)  # guard against accidental real-DB use
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        db_models.Base.metadata.create_all(bind=engine)
+        test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        monkeypatch.setattr(db_models, "SessionLocal", test_session)
+        monkeypatch.setenv("SPLUNK_BOUNDARY_STAGING", str(tmp_path / "quarantine"))
+        yield test_session
+        engine.dispose()
+
+    def _paste(self):
+        from api.routes import notables as notables_route
+        from api.schemas import PastedNotableRequest
+
+        return notables_route.paste_notable(PastedNotableRequest(raw_text=self.SAMPLE))
+
+    def test_paste_creates_boundary_manifest(self, paste_env):
+        from services import splunk_boundary as sb
+
+        resp = self._paste()
+        assert resp["success"] is True and resp["added"] == 1
+        assert resp["batch_id"], "paste response must carry the boundary batch_id"
+
+        matches = [b for b in sb.list_batches() if b["batch_id"] == resp["batch_id"]]
+        assert len(matches) == 1, "paste batch manifest missing from staging"
+        manifest = matches[0]
+        assert manifest["source"] == "paste-box"
+        assert manifest["ingest"]["rows_inserted"] == 1
+        assert manifest["ingest_window"]
+        assert manifest["inserted_ids"] and len(manifest["inserted_ids"]) == 1
+
+        row = (
+            paste_env().query(db_models.SplunkEvent)
+            .filter(db_models.SplunkEvent.id == manifest["inserted_ids"][0])
+            .first()
+        )
+        assert row is not None
+        assert row.sourcetype == "splunk:notable:pasted"
+
+    def test_purge_batch_removes_pasted_rows(self, paste_env):
+        from pathlib import Path
+
+        from services import splunk_boundary as sb
+
+        resp = self._paste()
+        batch_id = resp["batch_id"]
+        manifest = [b for b in sb.list_batches() if b["batch_id"] == batch_id][0]
+        inserted_ids = list(manifest["inserted_ids"])
+        staged_path = Path(manifest["staged_path"])
+        assert staged_path.is_file()
+
+        result = sb.purge_batch(batch_id)
+        assert result["events_deleted"] == len(inserted_ids)
+        assert result["purge_strategy"] == "ids"
+        assert result["staged_removed"] is True
+        assert not staged_path.exists(), "staged paste file must be gone"
+        remaining = (
+            paste_env().query(db_models.SplunkEvent)
+            .filter(db_models.SplunkEvent.id.in_(inserted_ids))
+            .all()
+        )
+        assert remaining == [], "pasted SplunkEvent rows must be gone after purge"
+
+    def test_paste_sanitization_byte_identical(self, paste_env):
+        """Golden: the stored payload's sanitized_text must be byte-identical
+        to the (unchanged) text pipeline's output for the same input — proving
+        the C4 boundary wiring did not disturb the paste flow's handling."""
+        from text_sanitizer_pipeline.text_sanitizer_pipeline import (
+            sanitize_logs_with_tokens,
+            sanitize_pii_phi,
+        )
+
+        from api.routes import notables as notables_route
+        from services import splunk_boundary as sb
+
+        resp = self._paste()
+        manifest = [b for b in sb.list_batches() if b["batch_id"] == resp["batch_id"]][0]
+        row = (
+            paste_env().query(db_models.SplunkEvent)
+            .filter(db_models.SplunkEvent.id == manifest["inserted_ids"][0])
+            .first()
+        )
+        payload = json.loads(row.raw)
+
+        # Replay the route's own text chain (redaction on): split -> parse ->
+        # normalize -> render -> tokenize -> PII/PHI scrub.
+        segment = notables_route.split_pasted_notables(self.SAMPLE)[0]
+        fields = notables_route.normalize_notable_fields(
+            notables_route.parse_structured_notable(segment)
+        )
+        structured = notables_route.render_notable_fields(fields) or segment
+        sanitized, _mapping = sanitize_logs_with_tokens(structured)
+        sanitized = sanitize_pii_phi(sanitized)
+
+        assert payload["record_type"] == "splunk_notable_paste"
+        assert payload["sanitized_text"] == sanitized, "sanitized text drifted from the pipeline golden"
+        assert payload["fields"] == notables_route.normalize_notable_fields(
+            notables_route.parse_structured_notable(sanitized)
+        )
+
+    def test_paste_dedup_unchanged(self, paste_env):
+        resp1 = self._paste()
+        assert resp1["added"] == 1
+        resp2 = self._paste()
+        assert resp2["added"] == 0
+        assert resp2["skipped"] == 1
+        assert resp2["batch_id"], "second paste still admits its own boundary batch"
+        total = (
+            paste_env().query(db_models.SplunkEvent)
+            .filter(db_models.SplunkEvent.sourcetype == "splunk:notable:pasted")
+            .count()
+        )
+        assert total == 1, "dedup must keep exactly one stored copy"
+
+    def test_paste_allowed_in_quarantined_mode(self, paste_env, monkeypatch):
+        from services import splunk_boundary as sb
+
+        monkeypatch.delenv("SPLUNK_BOUNDARY_MODE", raising=False)
+        assert sb.current_mode() == "quarantined"
+        resp = self._paste()
+        assert resp["success"] is True and resp["added"] == 1
+        manifest = [b for b in sb.list_batches() if b["batch_id"] == resp["batch_id"]][0]
+        assert manifest["mode"] == "quarantined"
+        assert manifest["source"] == "paste-box"
 
 
 if __name__ == "__main__":

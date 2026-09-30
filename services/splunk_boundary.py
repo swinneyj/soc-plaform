@@ -194,6 +194,95 @@ def quarantine_file(path: Union[str, Path], source_label: str = "") -> Dict[str,
     return manifest
 
 
+def admit_text(text: str, source_label: str = "paste-box") -> Dict[str, Any]:
+    """Operator-facing admission for PASTED text (C4 paste-batch adapter).
+
+    Gives the analyst paste-box the boundary's batch bookkeeping WITHOUT
+    merging the flows: the paste pipeline (segmentation, sanitization,
+    promotion) remains the analyst path (see ingest_json_notables docstring).
+    The raw text is staged under ``{batch_id}-pasted.txt`` and a manifest is
+    written exactly like quarantine_file's, plus ``"source": "paste-box"``;
+    the caller records ``ingest`` / ``ingest_window`` / ``inserted_ids`` on
+    the manifest after its own inserts, so purge_batch can undo the paste.
+    Satisfies the quarantined-mode rule "data may only enter via the
+    boundary": pasted admission goes through here, in every mode.
+
+    Fail-closed like quarantine_file (validate_file semantics on the staged
+    text: extension allowlist via the .txt suffix, max_bytes cap, binary
+    sniff); ``open`` mode stays report-only.
+    """
+    if not isinstance(text, str) or not text.strip():
+        raise ValueError("no text to admit")
+
+    # Reuse validate_file's fail-closed semantics: stage to a temp .txt inside
+    # the staging dir (same filesystem -> the move below is a rename; the
+    # .txt suffix keeps the pasted text inside the extension allowlist).
+    tmp_path = staging_dir() / f".admit-text-{uuid.uuid4().hex}.txt"
+    tmp_path.write_text(text, encoding="utf-8")
+    try:
+        report = validate_file(tmp_path)
+        if not report["ok"] and _mode() != "open":
+            raise ValueError("boundary validation failed: " + "; ".join(report["violations"]))
+
+        batch_id = _new_batch_id()
+        staged_path = staging_dir() / f"{batch_id}-pasted.txt"
+        shutil.move(str(tmp_path), staged_path)
+        # The paste has no external original: report the staged file itself.
+        report["original_path"] = str(staged_path)
+        report["filename"] = staged_path.name
+
+        manifest = {
+            "batch_id": batch_id,
+            "mode": _mode(),
+            "source": "paste-box",
+            "source_label": source_label,
+            "staged_path": str(staged_path),
+            "staged_at": _utcnow().isoformat(),
+            "validation": report,
+        }
+        (staging_dir() / f"{batch_id}-manifest.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8"
+        )
+        return manifest
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def record_paste_ingest(
+    manifest: Dict[str, Any],
+    rows_read: int,
+    rows_inserted: int,
+    rows_skipped: int,
+    inserted_ids: List[int],
+) -> Dict[str, Any]:
+    """Record the paste pipeline's inserts on an admit_text manifest.
+
+    Writes exactly the bookkeeping ingest_manifest writes (``ingest`` stats,
+    ``ingest_window``, ``inserted_ids``) and rewrites the manifest file, so
+    purge_batch can undo a pasted batch identically to a boundary ingest.
+    """
+    t0 = _utcnow() - timedelta(seconds=1)
+    t1 = _utcnow() + timedelta(seconds=1)
+    result: Dict[str, Any] = {
+        "success": True,
+        "rows_read": rows_read,
+        "rows_inserted": rows_inserted,
+        "rows_skipped": rows_skipped,
+        "errors": [],
+        "file": Path(manifest["staged_path"]).name,
+        "batch_id": manifest["batch_id"],
+        "ingest_window": [t0.isoformat(), t1.isoformat()],
+    }
+    manifest["ingest"] = result
+    manifest["ingest_window"] = result["ingest_window"]
+    manifest["inserted_ids"] = [int(i) for i in (inserted_ids or [])]
+    (staging_dir() / f"{manifest['batch_id']}-manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+    return result
+
+
 def _load_db_module():
     from db.models import SplunkEvent, SessionLocal  # imported lazily for hermetic tests
 

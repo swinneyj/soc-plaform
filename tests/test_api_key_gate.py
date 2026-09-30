@@ -18,6 +18,13 @@ import api.auth as api_auth
 import api.main as api_main
 
 
+@pytest.fixture(autouse=True)
+def isolated_boundary_staging(tmp_path, monkeypatch):
+    """C4: route pastes now stage boundary batches — keep them out of the
+    repo's Data/quarantine during tests."""
+    monkeypatch.setenv("SPLUNK_BOUNDARY_STAGING", str(tmp_path / "quarantine"))
+
+
 @pytest.fixture()
 def client():
     api_main._RATE_HITS.clear()  # C2.1.5 limiter state is module-global
