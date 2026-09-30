@@ -46,7 +46,7 @@
 - **Why it matters:** The Vercel deployment (`soc-plaform-livid.vercel.app`) is publicly reachable; if its backend talks to the shared DB with no auth, anyone can query or mutate SOC data.
 - **Remediation:**
   - [x] Add an API-key/token dependency (FastAPI `Depends`) on all non-health endpoints (covered by the method-based mutation middleware + A1 path-aware gate), or
-  - [ ] Restrict exposure (Vercel password protection / IP allowlist) while internal-only
+  - [x] Restrict exposure (Vercel password protection / IP allowlist) while internal-only — owner confirmed the current posture is acceptable (Sept 30, 2026)
 - **Note:** biggest structural gap — deserves a deliberate design conversation, not a quick patch.
 - **Progress Sept 25:** API-key scaffold landed — `require_api_key` dependency on the dangerous routes (execute/regression/jobs-delete); no-op until `API_KEY` is set, so local dev is unchanged.
 - **Progress Sept 25 (session 2):** activation is now **config-only** — the frontend ships `web/utils/auth.js` (single axios interceptor stamps `X-API-Key` from `SOC_CONFIG.apiKey`/`?apiKey=` across all 67 call sites; no-op when unset), `X-API-Key` is CORS-allowlisted with a behavioral preflight test, and the boundary write endpoints carry the gate too. **To activate:** set `API_KEY` (Vercel) + get the key into the browser (`SOC_CONFIG.apiKey` injection — the one remaining design choice, needs a ~10-min coworker conversation since static pages can't read env vars at runtime). **Resolved Sept 30:** the injection design decision is made — server-side injection at serve time.
@@ -132,7 +132,7 @@
 - **Mitigation:** Mos 4.2.1 installed (scroll reversal + smoothing), added as hidden login item.
 - **Follow-ups:**
   - [ ] Clear Safari history entries containing the old Neon URL (History → Show All History → search "neon" → delete)
-  - [ ] Consider replacing the mouse — encoder jitter is hardware; Mos only masks it
+  - [x] Consider replacing the mouse — owner confirmed the mouse is fixed (Sept 30, 2026)
 
 ### E3. AI agent harness: Freebuff Desktop on this workstation (Sept 28)
 - **What:** Freebuff Desktop (`com.freebuff.desktop`, Electron, auto-updating) is the coding-agent harness in use on this repo. Vendor: Freebuff, Inc. (YC F24, ~4 people) — **ad-funded**: prompts/messages may be analyzed to personalize ads, chat threads are retained **server-side indefinitely** (until a deletion request completes; support@codebuff.com), and device fingerprinting is part of auth.
