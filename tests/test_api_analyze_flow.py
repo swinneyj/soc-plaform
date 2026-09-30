@@ -109,6 +109,7 @@ def api_client(monkeypatch):
         poolclass=StaticPool,
     )
     db_models.Base.metadata.create_all(bind=engine)
+    api_main._RATE_HITS.clear()  # C2.1.5 limiter state is module-global
     test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
     monkeypatch.setattr(db_models, "SessionLocal", test_session)

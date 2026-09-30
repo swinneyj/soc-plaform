@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import sys
+import time
 
 # Add Tools directory to path
 tools_dir = os.path.join(os.path.dirname(__file__), '..', 'Tools')
@@ -205,6 +206,33 @@ if cors_origins:
 
 # Canonical resource paths rewrite to the legacy /api/db/* routes (S13).
 app.add_middleware(CanonicalPathRewriter)
+
+# C2.1.5 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30): per-client-IP
+# sliding 60 s window on the Ollama-backed POST surfaces; over-limit -> 429.
+# Defined after the rewriter registration so this middleware is outermost and
+# sees the request's PRE-REWRITE path; the list carries both spellings anyway.
+_RATE_HITS: dict = {}  # client ip -> [timestamps]
+RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
+_RATE_PATHS = (
+    "/api/db/analyze", "/api/analyses",
+    "/api/splunk/search-one",
+    "/api/db/supportive-queries/draft",
+    "/api/code-review",
+)
+
+
+@app.middleware("http")
+async def _ollama_rate_limit(request, call_next):
+    if request.method == "POST" and any(request.url.path.startswith(p) for p in _RATE_PATHS):
+        ip = request.client.host if request.client else "?"
+        now = time.time()
+        hits = [t for t in _RATE_HITS.get(ip, []) if now - t < 60.0]
+        if len(hits) >= RATE_LIMIT_PER_MIN:
+            _RATE_HITS[ip] = hits
+            return JSONResponse({"detail": "Too many requests"}, status_code=429)
+        hits.append(now)
+        _RATE_HITS[ip] = hits
+    return await call_next(request)
 
 from api.routes.system import router as system_router
 app.include_router(system_router)

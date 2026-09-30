@@ -20,6 +20,7 @@ import api.main as api_main
 
 @pytest.fixture()
 def client():
+    api_main._RATE_HITS.clear()  # C2.1.5 limiter state is module-global
     return TestClient(api_main.app)
 
 
@@ -341,3 +342,21 @@ def test_paste_payload_cap_413(client, monkeypatch):
     resp = client.post("/api/notables/paste", json={"raw_text": " " * 10})
     assert resp.status_code == 400
     assert "No notable text" in resp.json()["detail"]
+
+
+def test_rate_limit_429(client, monkeypatch):
+    """C2.1.5: Ollama-backed POSTs are limited to RATE_LIMIT_PER_MIN per IP.
+    The limiter counts requests before handlers run, so handler outcomes
+    (500 without a DB here) do not matter."""
+    monkeypatch.setattr(api_main, "RATE_LIMIT_PER_MIN", 2)
+    api_main._RATE_HITS.clear()
+    try:
+        for _ in range(2):
+            client.post("/api/db/analyze", json={"case_id": "x"})
+        resp = client.post("/api/db/analyze", json={"case_id": "x"})
+        assert resp.status_code == 429
+        assert resp.json()["detail"] == "Too many requests"
+        # Non-listed surface unaffected.
+        assert client.get("/api/health").status_code == 200
+    finally:
+        api_main._RATE_HITS.clear()
