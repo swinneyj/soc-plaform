@@ -130,4 +130,4 @@ open https://login.tailscale.com/admin/machines
 4. If Jay can't connect: his Tailscale icon connected? Then `⌘K` again.
 5. If Dalton can't reach Jay's share: probe ports (see reverse-direction section) — if 445 is closed, *his* File Sharing got toggled off.
 6. After macOS updates / reboots / anything weird: `scripts/baseline --verify` — the platform's baseline test (hard drift = investigate)
-7. **Pushes are guarded twice**: a pre-push hook runs the machine baseline (bypass: `git push --no-verify`), and CI runs a repo-state guard before every Vercel build
+7. **Pushes are guarded twice**: a pre-push hook runs the machine baseline (bypass: `git push --no-verify`), and CI runs the pytest + undefined-name gates on every push (`.github/workflows/tests.yml`); the repo-state guard that preceded each Vercel build retired with `deploy.yml` on Sept 30, 2026

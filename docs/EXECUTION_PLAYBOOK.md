@@ -24,7 +24,8 @@ specified. `[mechanical after sign-off]` = run only after the named human gate.
   anything under `api/`, `services/`, `web/` unless a step says so explicitly.
 - The Windows ops set (`*.ps1`, `*.bat`, `Reset-DummyDb.ps1`, `git-flow*`,
   `ai-analysis-helper.ps1`, `make-updates-zip.ps1`) is **HOLD** — leave untouched (decision
-  blocked on the Vercel handoff).
+  pending; the former Vercel-handoff blocker was retired Sept 30, 2026 — see
+  `docs/VERCEL_HANDOFF.md`).
 - If `services/mock_splunk/seed/seed_events.jsonl` shows a diff with ONLY timestamp changes,
   revert it (`git checkout -- <file>`) — the seeder churns timestamps on every run.
 
@@ -383,7 +384,7 @@ change to `README.md` (the survivor) and, where the line described README.txt's 
 |-------|--------|-------------|-------|
 | Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
 | Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
-| Vercel (hosted API + preview) | In progress | `.github/workflows/deploy.yml` | Env handoff pending (see `docs/VERCEL_HANDOFF.md`); routing config lives in the Vercel dashboard (no `vercel.json` in-repo) — determines whether the SOC_CONFIG injection applies. |
+| Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves until the owner deletes the project — `docs/VERCEL_HANDOFF.md`. |
 | launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |
 ```
 **B4.2 —** Gates (docs-only), commit `docs: deployment-story support matrix`, push, CI green.
@@ -807,6 +808,12 @@ route's response payload (`"batch_id": …`) so the UI/test can reference it.
 ---
 
 ## Stage D1 — Vercel handoff doc (P3 · assemble now, unblocks by conversation) `[mechanical]`
+
+> **Status: retired (Sept 30, 2026).** The doc below was assembled (`3d614cc`),
+> then the hosted deployment itself was dropped by owner decision: `deploy.yml`
+> deleted, `docs/VERCEL_HANDOFF.md` stubbed to a retirement notice. Do **not**
+> re-run this stage — there is no deploy to hand off. Remaining owner-side step:
+> delete the Vercel project in the dashboard (retirement stub §"Owner-side").
 
 **D1.1 — Create `docs/VERCEL_HANDOFF.md`** with these sections and known content:
 1. **Env vars to set in Vercel:** `DATABASE_URL` (Neon, rotated value — see

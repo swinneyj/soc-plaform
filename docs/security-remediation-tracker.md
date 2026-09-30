@@ -3,6 +3,7 @@
 **Prepared:** Sept 16, 2026 · **Repo:** `swinneyj/soc-plaform` (public) · **Branch:** `dev-dalton`
 **Updated:** Sept 25, 2026 — added environment notes (E1/E2) + finding #14; synced item statuses with commits `1775c10` (Downloads) / `be4c644` (`~/soc-platform`)
 **Updated (session 2, Sept 25):** #15 fixed & deployed-verified; Python pinned 3.14; frontend auth wiring (config-only activation); Splunk boundary ("the latch") architecture landed — see "Architecture hardening" below. Suite is now 121/121 on both Python 3.14 and 3.9. All work lives on `origin/dev-dalton` in `~/soc-platform` (commits `00c7e69`…`908b6d5`).
+**Updated Sept 30:** owner closed the mouse (E2) + exposure-restriction (#5) sub-item; **Vercel deployment retired** (owner decision) — `deploy.yml` deleted, `docs/VERCEL_HANDOFF.md` stubbed to a retirement notice; owner-side dashboard deletion of the project still pending.
 **Updated Sept 28:** added E3 — AI agent harness (Freebuff Desktop) workstation exposure; canonical risk notes + operating rules live in `AGENTS.md` → "Freebuff Desktop risk notes". Also this session: verified the git restore path (0.040s, sha256-identical) and cleared a stale `postmaster.pid` after unclean shutdown (see AGENTS.md machine quirks).
 **Scope:** code/`git grep` inspection of the working copy at `~/Downloads/soc-plaform-main`. Not a pen-test — a prioritized list of concrete, actionable findings.
 
@@ -10,12 +11,12 @@
 
 ## Priority 1 — Do first
 
-### 1. Rotate the exposed shared Neon password ✅ ROTATION + LOCAL CUTOVER DONE — VERCEL HANDOFF OPEN
+### 1. Rotate the exposed shared Neon password ✅ ROTATION + LOCAL CUTOVER DONE — VERCEL LEG RETIRED (SEPT 30)
 - **What:** The shared Neon `DATABASE_URL` (with password `npg_...`) was pasted into a terminal/chat in plain text. Coworker is already rotating.
 - **Status Sept 28:** cutover executed and verified end to end on Dalton's machine:
   - [x] Coworker resets password in Neon console (Roles → `neondb_owner` → Reset password)
   - [x] `.env` updated via BWS (`scripts/pull-secrets` regenerates from vault; values never transit chat)
-  - [ ] **Vercel env vars still pending (Justin)** — the deploy-breaker; deploy.yml's `/api/health` smoke test will catch a miss loudly
+  - [x] **Vercel env vars — moot (Sept 30):** the hosted deployment was retired (owner decision) — `deploy.yml` deleted, no branch deploys anymore. Owner-side: delete the Vercel project in the dashboard (`docs/VERCEL_HANDOFF.md`)
   - [x] No-other-copies sweep (Sept 28): tracked files clean; git history clean (`git log --all -S neon.tech` = zero commits); `.env.example`/`.env.bws.template` placeholder-only; old `~/soc-platform/.env` clean; Downloads dump clean. Residual dead-URL copies (inert, old password) **scrubbed same day**: 1 line in `~/.zsh_history` + 3 lines across 3 `~/.zsh_sessions` files (Sept 25 era) — targeted line deletion, backups in `/tmp/neon-scrub-backup/`, zero neon.tech mentions remain in shell history. Safari History.db per E2 (manual in-app cleanup, still open — old credential inert, hygiene only).
 - **Verification (Sept 28):** connection smoke passed (PostgreSQL 18.6, `neondb`, 11 tables, 7 triage rows); API restarted against Neon via `scripts/dev`; **write-path roundtrip passed** (evidence POST → id 8 → GET → DELETE → net-zero rows) — live INSERT/SELECT/DELETE confirmed against the cloud DB.
 - **Incident note (stale-URL first pull):** the first BWS-stored URL failed auth (`password authentication failed for neondb_owner`) despite clean structure — it was a pre-rotation string (old password, live address). Fixed by re-copying a fresh connection string from the Neon console into BWS. Lesson: connection strings must come from the console copy button at handoff time, never from prior messages/history — same rule as the original incident, now with a concrete second example.
@@ -165,7 +166,7 @@
 **Mock Splunk backend** (`services/search_backend.py`, `a216ca7`): pluggable `SearchBackend` — deterministic mock (honest SPL subset, committed seed corpus, three ground-truth scenarios) + loud-failure real-Splunk stub + `SEARCH_BACKEND` factory. Phase 3 develops with **zero Splunk credentials in the environment** — itself a posture improvement, and the future REST connector's credentials will live inside the boundary, not beside it.
 
 **Remaining boundary work (deliberate, not urgent):**
-- [x] **Done Sept 30 (local path):** server-injected `window.SOC_CONFIG` in `/index.modular.html` when the gate is armed (commit 99ee625). Vercel deploy-time variant tracked in the D1 handoff.
+- [x] **Done Sept 30 (local path):** server-injected `window.SOC_CONFIG` in `/index.modular.html` when the gate is armed (commit 99ee625). The Vercel deploy-time variant died with the retired deployment (Sept 30).
 - [x] **Done Sept 30 (C4, commit `f7f6556`):** paste-box storage routed through boundary batches — `admit_text` + `record_paste_ingest` give every paste a manifest with `inserted_ids`; `purge_batch` undoes pastes; sanitization pipeline byte-identical (golden test)
 
 ---
@@ -186,8 +187,8 @@
 
 > **Owner triage (Sept 28, 2026):** Dalton reviewed every people-blocked item live (Vercel string confirmation, auth activation, Dependabot toggle, `web/Old` deletion, Safari history pass, Freebuff deletion request) and called them **non-blocking — accepted for now**. Nothing below gates Phase 3; re-open individually if circumstances change. Largest accepted exposure: the unauthenticated prod API (items 3 above / #5–#6) — accepted knowingly.
 1. ~~BWS access token / `bws run` launcher / slim `.env`~~ ✅ done (token live, `scripts/start` runs the API via `bws run`; `.env` is now token + non-secret config + keychain markers — #3 fix)
-2. **New Neon URL distribution** → local side ✅ done (Sept 28 cutover); **Vercel env vars still pending (Justin)** — the classic miss that breaks the next deploy
-3. **Auth activation decision** (coworker conversation) → `API_KEY` in Vercel + `SOC_CONFIG.apiKey` injection in the pages
+2. **New Neon URL distribution** → local side ✅ done (Sept 28 cutover); Vercel leg ✅ moot (Sept 30 — hosted deployment retired; delete the project in the dashboard per `docs/VERCEL_HANDOFF.md`)
+3. **Auth activation decision** (coworker conversation) → `API_KEY` + server-injected `SOC_CONFIG.apiKey` locally (the Vercel leg died with the retired deployment, Sept 30)
 4. **Dependabot alerts** (GitHub Settings → Security, ~2 min, you or Justin) — `pip-audit` already run clean (see "Checked and found OK")
 5. **Deprecation cleanup** from the 3.14 warnings (`utcnow()` → timezone-aware; `httpx2`)
    - [x] **`utcnow()` — done Sept 28, 2026** (commits `e3b91fb` + `b816291`): shared `_utcnow()` helper (`now(timezone.utc)` stripped to naive — byte-identical output to the old calls, so the platform's naive-UTC storage convention is untouched) across `db/models.py` (11 Column defaults), `api/main.py`, `api/routes/system.py`, `services/closure_service.py`, `services/evidence_service.py`, and 6 seed/ingest/tool scripts. Suite: **124 passed, 1 warning** on Python 3.14 **and 124 passed on Python 3.9** (dual-runtime verified the same day — the helpers deliberately use `timezone.utc`, not the 3.11+ `datetime.UTC` shorthand, so both supported interpreters stay green). The only remaining warning is third-party (`anyio.BlockingPortal` via starlette's TestClient), not fixable here. SQLite roundtrip verified: model defaults still store naive UTC. One deliberate exception: `scripts/attic/add_code_review.py` keeps its utcnow — dead one-shot migration kept as historical record (its output already landed in `db/models.py`).

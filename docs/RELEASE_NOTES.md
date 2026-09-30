@@ -66,7 +66,10 @@ quarantine staging clean.
 ## Known-open items (recorded, not blocking)
 - **`AUTH_MODE` flip deliberately deferred** (decision Sept 30: flag-off
   posture ships) — see the Stage E checklist note.
-- **Vercel env vars + routing answer** (Justin) — `docs/VERCEL_HANDOFF.md` §5.
+- **Vercel project deletion** (owner, dashboard) — hosted deployment retired
+  Sept 30 (`deploy.yml` deleted, pushes no longer deploy anywhere); the stale
+  last build keeps serving until the project is removed —
+  `docs/VERCEL_HANDOFF.md`.
 - **Dependabot update PRs awaiting human review** — alerts/config live
   (first run Sept 30 ~18:45 opened #1–#7); version bumps need a human merge
   decision, watching the dual-runtime pins
@@ -82,8 +85,8 @@ quarantine staging clean.
   retention dry-run on every start; `scripts/start --backup` forces a dump.
 - Secrets: BWS vault + macOS Keychain (`scripts/secrets-keychain`); `.env`
   regenerated via `scripts/pull-secrets`. Never in Git, never in chat.
-- Deploy: push to a deploy branch → `deploy.yml` → prod (last push wins);
-  smoke = `GET /api/health` → `{"status": "healthy", …}`.
+- Deploy: **none — retired Sept 30, 2026** (owner decision): `deploy.yml`
+  deleted, no branch deploys anywhere. Run locally via `scripts/start`.
 
 ## Stage E remaining checklist
 - [x] E.1 final sweep green on a clean tree at `f7f6556` (counts above)
@@ -107,6 +110,6 @@ quarantine staging clean.
   (`eeefe06`); the drafts feature was ported into the modular routers
   (`c41e7c8`) with a round-trip test
 - [x] **E.4 tagged `v1.0.0`** (annotation = this document's summary)
-- [ ] **E.4 deploy** per `docs/VERCEL_HANDOFF.md` — blocked on env vars +
-  routing answer (Justin); smoke `GET /api/health` + one authenticated UI
-  write once deployed
+- [x] **E.4 deploy** — N/A: hosted deployment retired Sept 30, 2026 (owner
+  decision, `deploy.yml` deleted); release validated locally instead (daemon
+  smoke above + CI green at the release commits)

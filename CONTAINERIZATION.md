@@ -364,8 +364,10 @@ Refer to:
 
 - **Local dev**: Python 3.14 (`.venv314`; see `.venv314/` README note in services/mock_splunk)
 - **Docker**: `python:3.14-slim` (Dockerfile)
-- **Vercel (production)**: platform default (3.12) — deliberately. Do NOT add a
-  `.python-version` file at the repo root: `vercel build` reads it, and adding
-  `3.14` broke every deployment starting at commit `00c7e69` (see GitHub
-  Actions history). If you want prod on a newer runtime, verify it on a
-  preview deploy first, then land the file deliberately.
+- **Vercel (production)**: **retired Sept 30, 2026** (owner decision —
+  `deploy.yml` deleted, no deploys anymore). The old guidance applied while
+  it lived: `vercel build` reads a root `.python-version`, and adding `3.14`
+  broke 8 consecutive deploys starting at commit `00c7e69` (see GitHub
+  Actions history). The root pin is still deliberately absent (GAP_AUDIT
+  F-note, `09a53e5`) — and with no deploys the concern is moot; if hosted
+  preview ever returns, verify the runtime on a preview deploy first.

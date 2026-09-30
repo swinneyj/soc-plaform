@@ -177,5 +177,5 @@ Result: each push from a feature branch both rebuilds and reseeds its sandbox fr
 |-------|--------|-------------|-------|
 | Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
 | Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
-| Vercel (hosted API + preview) | In progress | `.github/workflows/deploy.yml` | Env handoff pending (see `docs/VERCEL_HANDOFF.md`); routing config lives in the Vercel dashboard (no `vercel.json` in-repo) — determines whether the SOC_CONFIG injection applies. |
+| Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves until the owner deletes the project — `docs/VERCEL_HANDOFF.md`. |
 | launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |

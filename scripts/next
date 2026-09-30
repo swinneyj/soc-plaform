@@ -32,15 +32,12 @@ elif grep -qE '^DATABASE_URL=.*neon\.tech' .env.example 2>/dev/null; then
     echo "${WAIT}Neon: new URL in .env.example? — copy it into .env"
 else
     echo "${TODO}Neon: when the new URL reaches you (call/Signal/BWS — NOT email/chat):"
-    echo "        echo 'DATABASE_URL=<new url>' >> .env   # then update Vercel env vars too"
+    echo "        echo 'DATABASE_URL=<new url>' >> .env"
 fi
 
-# 3. Vercel env vars ------------------------------------------------------
-if grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
-    echo "${TODO}Vercel: confirm DATABASE_URL in project settings matches the new Neon URL"
-else
-    echo "${WAIT}Vercel: env-var update rides along with the Neon URL (don't skip it)"
-fi
+# 3. Vercel retirement (deploy.yml deleted Sept 30, 2026) -----------------
+echo "${TODO}Vercel: deployment retired — delete the project in the dashboard"
+echo "        (stale pre-rotation build still serves until you do; docs/VERCEL_HANDOFF.md)"
 
 # 4. Dependabot -----------------------------------------------------------
 if [ -f .github/dependabot.yml ]; then
@@ -51,10 +48,10 @@ fi
 
 # 5. API key activation ---------------------------------------------------
 if [ -n "${API_KEY:-}" ] && [ "$API_KEY" != "replace-with-a-long-random-password" ]; then
-    echo "${OK}API gate: API_KEY present in .env — mirror it in Vercel to activate on prod"
+    echo "${OK}API gate: API_KEY present in .env — gate armed locally (no hosted leg; Vercel retired Sept 30)"
 else
-    echo "${WAIT}API gate: dormant by design — activate when you + coworker agree (set API_KEY"
-    echo "        in Vercel; the frontend already knows how to send it)"
+    echo "${WAIT}API gate: dormant by design — activate when you + coworker agree (set API_KEY;"
+    echo "        the frontend already knows how to send it)"
 fi
 
 # 6. Hygiene reminders ----------------------------------------------------

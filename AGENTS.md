@@ -45,7 +45,7 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 | File share `[V]` | `/Users/Shared/Exchange` (symlink on Dalton's Desktop) | SMB "Exchange", **guest access on**, port 445. Jay mounts `smb://100.84.93.19` as Guest. Taildrop can't work cross-user `[V]` (docs-confirmed; guest write+read verified live) |
 | Secrets `[V]` | BWS org **SSC-Lewis** → project **SOC Platform** → machine account **Machine-Dev** (scoped to project only) | 4 secrets: `DATABASE_URL` (Neon since Sept 28), `OLLAMA_URL`, `API_KEY` (dormant), `CORS_ORIGINS`. `.env` is a bootstrap: token + local-only keys + `# NAME=@keychain` markers, 0600. **Credential-bearing keys (`DATABASE_URL`, `API_KEY`) live in the macOS login Keychain** (service `soc-platform`, `scripts/secrets-keychain` get/put/inject/migrate) — `scripts/start`/`scripts/dev` inject them; explicit env wins; BWS-injected values win at launch |
 | Local API `[V]` | `scripts/dev` → port 8000 | `scripts/pull-secrets` regenerates `.env` from vault (key names only, never values) |
-| Vercel prod `[I]` | `https://soc-plaform-livid.vercel.app` | **All branches deploy `--prod` to this one domain** — last push wins. Smoke test runs on every deploy. (Inherited from deploy-thread transcripts; re-verify with one `curl` + `gh run list` when it matters) |
+| Vercel prod `[R — retired Sept 30, 2026]` | `https://soc-plaform-livid.vercel.app` (stale last build) | **Retired by owner decision:** `deploy.yml` deleted — no branch deploys anywhere anymore. The pre-rotation build keeps serving until the owner deletes the project in the dashboard (`docs/VERCEL_HANDOFF.md`). |
 
 ## Standing protocols
 
@@ -87,13 +87,13 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 
 ## Open threads (owners marked)
 
-- ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). Prod (Vercel) probed same day: **also Neon-backed, same 7 rows** — Justin's side evidently already works; remaining is a one-line confirmation of WHICH string lives in Vercel (rotation hygiene). First stale-URL detail + no-other-copies sweep in tracker item #1
-- ⚠️ **One shared production dataset** `[V]`: local API, prod Vercel, and Justin's instance all read/write the SAME Neon database. Consequences:
+- ✅ **Neon URL** `[V — cutover done Sept 28, local verified]`: fresh console-copied URL in BWS → `pull-secrets` → API verified live against Neon (read + write roundtrip). Stale-URL first pull failed auth — connection strings come from the console copy button only, never prior messages (second example of protocol 2's why). Prod (Vercel) probed same day: **also Neon-backed, same 7 rows** — Justin's side evidently already works; Vercel leg now moot — the deployment was retired Sept 30, so the remaining action is deleting the project (which takes whatever string lives there with it). First stale-URL detail + no-other-copies sweep in tracker item #1
+- ⚠️ **One shared production dataset** `[V]`: local API and Justin's instance read/write the SAME Neon database (plus the stale Vercel build until its project is deleted — retired Sept 30). Consequences:
   - `wipe_db.py`, the delete-all/batch-delete evidence endpoints, case deletes, and `Restore_SOC_From_Handoff.bat`-style dump restores hit **real shared data**, not a sandbox
   - Test rows created locally appear on prod immediately — use clearly-marked titles (e.g. the `NEON WRITE-PATH SMOKE TEST` + `writepath_smoketest` source_system pattern) and delete them in the same session
   - The Splunk-boundary batch purge is the sanctioned undo for ingest mistakes; nothing analogous exists for wipe_db — it has no undo
   - Before ANY destructive DB action: `scripts/start --check`, confirm which DB you're on (neon.tech in DATABASE_URL = shared prod), and get explicit user confirmation
-- ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; one Vercel env var flips it on
+- ⏳ **API gate activation** (decision: Dalton+Justin) `[I — waiting]`: `API_KEY` already in vault; activation is local-only now (server-injected `SOC_CONFIG`) — the Vercel env-var leg died with the retired deployment (Sept 30)
 - ✅ **CI pytest-on-push** `[V — live since Sept 28]`: `.github/workflows/tests.yml` runs the 124-test suite on every push/PR, Python 3.14 + 3.9 matrix. First runs green. Node20 deprecation annotations are cosmetic.
 - 🔧 **Phases 3–5** (roadmap in `docs/DEVELOPMENT_PLAN.md`) `[I]`: real Splunk REST (mock backend ready), judgment-flow audit, ops backlog (backups, retention, auth)
 - 🔧 **remoteguest SSH** `[V — staged, failing with no diagnostic]`: token-enabled, key installed, perms correct, password **rotated Sep 28, 2026** (old value scrubbed from all docs — never re-document passwords here; new value lives only in Dalton's password manager) — SSH still closes pre-auth. macOS bug hypothesis `[A]`. Retest after OS updates
