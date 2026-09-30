@@ -165,7 +165,7 @@
 
 **Remaining boundary work (deliberate, not urgent):**
 - [x] **Done Sept 30 (local path):** server-injected `window.SOC_CONFIG` in `/index.modular.html` when the gate is armed (commit 99ee625). Vercel deploy-time variant tracked in the D1 handoff.
-- [ ] Consider routing the paste-box flow's *storage* through a boundary batch for manifest/purge parity (sanitization must stay — see `ingest_json_notables` docstring)
+- [x] **Done Sept 30 (C4, commit `f7f6556`):** paste-box storage routed through boundary batches — `admit_text` + `record_paste_ingest` give every paste a manifest with `inserted_ids`; `purge_batch` undoes pastes; sanitization pipeline byte-identical (golden test)
 
 ---
 

@@ -143,7 +143,7 @@ node-vm harness scenarios, green on 3.14 + 3.9; zero TODO/FIXME/HACK debt in liv
 code. The foundation is solid — what remains is security floor, hygiene, the named-
 but-unplanned Phase 5 remainder, and externals. Phased by risk:
 
-### Phase A — Security floor (P0 · one session)
+### Phase A — Security floor (P0 · one session) — ✅ complete (see EXECUTION_PLAYBOOK DoD)
 
 - **A1 — Close the GET-delete mutation-gate bypass.** `/api/db/notables/{event_id}/delete`
   and `/api/db/triage/{case_id}/delete` are deliberate GET wrappers ("for environments
@@ -166,7 +166,7 @@ but-unplanned Phase 5 remainder, and externals. Phased by risk:
   “further phases planned” header is stale (Pieces A–D landed). Refresh both and check
   off the tracker's API-key-dependency item (middleware gate covers it).
 
-### Phase B — Repo hygiene (P1 · one session)
+### Phase B — Repo hygiene (P1 · one session) — ✅ complete
 
 - **B1 — Root triage.** Zero-reference one-shots → `scripts/attic/`: `inspect_db.py`,
   `ingest_notables.py`, `wipe_db.py`, `seed_dummy_closed_notables.py`,
@@ -191,7 +191,7 @@ but-unplanned Phase 5 remainder, and externals. Phased by risk:
   works on Vercel. Capture it during D1.
 - **B5 —** `.gitignore` opens with a UTF-8 BOM — strip.
 
-### Phase C — Phase 5 product work (P2 · several sessions · plan-then-build)
+### Phase C — Phase 5 product work (P2 · several sessions · plan-then-build) — ✅ complete Sept 30 (C1B built behind AUTH_MODE; C2–C4 landed — see docs/RELEASE_NOTES.md)
 
 - **C1 — Session auth + analyst/admin roles.** Prerequisite for any non-localhost
   exposure (tracker gates public exposure on it). Write `docs/SESSION_AUTH_PLAN.md`
@@ -206,7 +206,7 @@ but-unplanned Phase 5 remainder, and externals. Phased by risk:
 - **C4 — Paste-box storage through a boundary batch** (tracker) for manifest/purge
   parity; sanitization must stay (see `ingest_json_notables` docstring).
 
-### Phase D — Externals & wait-states (P3)
+### Phase D — Externals & wait-states (P3) — ✅ docs assembled; execution blocked on externals (Justin / Splunk creds)
 
 - **D1 — Vercel handoff (blocked on Justin).** Assemble the doc *now* so the unblock is
   a conversation, not a project: env vars (`DATABASE_URL`, `API_KEY`, `CORS_ORIGINS`,
