@@ -99,3 +99,40 @@ def test_health_stays_open_when_gated(client, with_api_key):
     """Read-only/health endpoints must remain reachable without a key."""
     resp = client.get("/api/health")
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# C1B.1 — scrypt password hashing (SESSION_AUTH_PLAN.md Piece A)
+# ---------------------------------------------------------------------------
+
+def test_scrypt_roundtrip():
+    encoded = api_auth.hash_password("correct horse battery staple")
+    # scrypt is preferred; runtimes without OpenSSL scrypt fall back to pbkdf2.
+    assert encoded.startswith(("scrypt$", "pbkdf2$"))
+    assert api_auth.verify_password("correct horse battery staple", encoded)
+
+
+def test_scrypt_wrong_password_fails():
+    encoded = api_auth.hash_password("hunter2")
+    assert not api_auth.verify_password("hunter3", encoded)
+    assert not api_auth.verify_password("", encoded)
+    assert not api_auth.verify_password("hunter2", "not-a-valid-encoding")
+
+
+def test_password_never_stored_plaintext():
+    encoded = api_auth.hash_password("swordfish")
+    assert "swordfish" not in encoded
+    # Random salt: the same password hashes differently every time.
+    assert encoded != api_auth.hash_password("swordfish")
+
+
+def test_pbkdf2_scheme_verify_path():
+    """Exercise the pbkdf2 branch directly so both schemes verify on every
+    runtime (C1B.1 fallback — some Python 3.9 builds lack hashlib.scrypt)."""
+    import hashlib as _hashlib
+
+    salt = bytes.fromhex("ab" * 16)
+    digest = _hashlib.pbkdf2_hmac("sha256", b"pw123", salt, api_auth._PBKDF2_ITERATIONS, dklen=32)
+    encoded = "pbkdf2$%d$%s$%s" % (api_auth._PBKDF2_ITERATIONS, salt.hex(), digest.hex())
+    assert api_auth.verify_password("pw123", encoded)
+    assert not api_auth.verify_password("pw124", encoded)

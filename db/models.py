@@ -7,7 +7,7 @@ files are no longer used as a fallback at runtime.
 from datetime import datetime, timezone
 import os
 
-from sqlalchemy import Column, DateTime, Float, Integer, String, Text, create_engine
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 
@@ -217,6 +217,37 @@ class ToolRun(Base):
     artifact_paths = Column(Text)  # JSON array of repo-relative paths
     created_at = Column(DateTime, default=_utcnow, index=True)
     completed_at = Column(DateTime)
+
+
+class User(Base):
+    """Operator account for session auth (SESSION_AUTH_PLAN.md Piece A).
+
+    Inert until AUTH_MODE=session; the API-key gate never reads these rows.
+    """
+
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(64), unique=True, nullable=False, index=True)
+    password_hash = Column(String(256), nullable=False)  # scrypt$n$r$p$salthex$hashhex
+    role = Column(String(16), nullable=False, default="analyst")  # analyst|admin
+    is_active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+
+
+class AuthSession(Base):
+    """Live browser session. Stores only the SHA-256 hash of the cookie value.
+    """
+
+    __tablename__ = "auth_sessions"
+
+    id = Column(Integer, primary_key=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex
+    csrf_token = Column(String(64), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=_utcnow)
+    expires_at = Column(DateTime, nullable=False)
+
 
 def get_db():
     """Dependency for FastAPI to get DB session."""
