@@ -13,7 +13,8 @@ MUST pass before you continue. If a verify fails, **STOP** and report — do not
   appears in served HTML — do not `curl` that HTML into your output).
 - Never `git push` to `main`. Work only on `dev-dalton`.
 - **Never create new test files.** The test-file count must stay **8** (`tests/test_*.py`).
-  Add tests to `tests/test_investigation_fixes.py` or `tests/test_api_analyze_flow.py`.
+  Add tests to `tests/test_investigation_fixes.py`, `tests/test_api_analyze_flow.py`, or
+  `tests/test_api_key_gate.py` (auth tests go in the last one).
 - Never delete `commander.py`, `seed_test_cases.py`, `seed_supportive_results.py`,
   `supportive_rules.json`, `placeholder_aliases.json`, `data_source_catalog.json`, or
   anything under `api/`, `services/`, `web/` unless a step says so explicitly.
