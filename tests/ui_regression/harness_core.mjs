@@ -18,6 +18,24 @@ import { fileURLToPath } from 'node:url';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
+/**
+ * Build one phase2CardState card cell (S7/fold schema):
+ *   { resultText, findingType, editedSpl, coverage, status, runStatus }
+ * Only the given fields are set, so scenarios assert on exactly what they
+ * seeded. `runStatus` shorthand: makeCard({ run: 'running' }) etc.
+ */
+export function makeCard(fields = {}) {
+    const card = {};
+    for (const [k, v] of Object.entries(fields)) {
+        if (k === 'run') {
+            card.runStatus = { state: v, message: v === 'running' ? 'Running…' : v === 'error' ? 'Run failed' : 'Saved ✓', short: v === 'running' ? 'Running…' : v === 'error' ? 'Run failed' : 'Saved ✓' };
+        } else {
+            card[k] = v;
+        }
+    }
+    return card;
+}
+
 export function fail(msg) {
     console.error('FAIL: ' + msg);
     process.exit(1);

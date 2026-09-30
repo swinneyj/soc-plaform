@@ -32,9 +32,13 @@ import {
     assert,
     makeSandbox,
     makeComponent,
+    makeCard,
     loadModuleMethods,
     runScenarios,
+    ROOT,
 } from './harness_core.mjs';
+import { readFile as fsRead } from 'node:fs/promises';
+import path from 'node:path';
 
 async function loadApiLayer(ctx) {
     const api = await loadModuleMethods(ctx, 'web/modules/api.js', 'API');
@@ -151,9 +155,9 @@ const scenarios = {
         const comp = analysisComp(methods, {
             analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: SUPPORTIVE_QUERIES },
             phase2CardState: {
-                'id:1': { resultText: '6 failures on VPN-GW-01' },
-                'id:2': { resultText: '' },   // blank + status success -> skipped
-                'id:3': { resultText: '', status: 'no_results' },  // explicit no_results -> real evidence, saved
+                'id:1': makeCard({ resultText: '6 failures on VPN-GW-01' }),
+                'id:2': makeCard({ resultText: '' }),   // blank + status success -> skipped
+                'id:3': makeCard({ resultText: '', status: 'no_results' }),  // explicit no_results -> real evidence, saved
             },
         }, { loadInvestigationState: async () => { stateLoads += 1; } });
 
@@ -201,9 +205,9 @@ const scenarios = {
                 { title: 'Blank card', spl: 'index=y' },
             ] },
             phase2CardState: {
-                'phase2:brute_followup': { resultText: '12 failures', coverage: 'user scope' },
-                'phase2:edited_card': { resultText: 'found pivot', editedSpl: 'index=analyst_edit' },
-                'phase2:untouched_card': { status: 'no_results' },
+                'phase2:brute_followup': makeCard({ resultText: '12 failures', coverage: 'user scope' }),
+                'phase2:edited_card': makeCard({ resultText: 'found pivot', editedSpl: 'index=analyst_edit' }),
+                'phase2:untouched_card': makeCard({ status: 'no_results' }),
             },
         });
 
@@ -242,7 +246,7 @@ const scenarios = {
         const comp = analysisComp(methods, {
             supportiveSaveBusy: true,
             analysisRule: { rule_id: 'MOCK-RULE-001', supportive_queries: SUPPORTIVE_QUERIES },
-            phase2CardState: { 'id:1': { resultText: 'text that must never post' } },
+            phase2CardState: { 'id:1': makeCard({ resultText: 'text that must never post' }) },
         });
 
         await comp.saveSupportiveEvidence();
@@ -802,7 +806,7 @@ const scenarios = {
         // Post-S7 snapshot: cardState AND legacy maps coexist; both survive.
         comp.phase2CardState = {};
         stored = JSON.stringify({
-            phase2CardState: { 'phase2:brute': { resultText: 'phase2 draft' } },
+            phase2CardState: { 'phase2:brute': makeCard({ resultText: 'phase2 draft' }) },
             supportiveManualResults: { 'id:9': 'supportive draft' },
         });
         comp.loadAnalysisState('CASE-OLD');
@@ -850,15 +854,21 @@ const scenarios = {
         sandbox.axios.delete = record('delete');
         const api = await loadApiLayer(ctx);
 
-        // Mapping table parity with the server's rewriter (inverted).
-        assert(api.canonicalFor('/db/triage') === '/cases', 'cases list mapping');
-        assert(api.canonicalFor('/db/triage/CASE-1/notable') === '/cases/CASE-1/notable', 'case notable mapping');
+        // Contract fixture is the single source of truth: the client mapping
+        // must satisfy every legacy->canonical pair (the server rewriter is
+        // checked against the same fixture by TestCanonicalRestPaths).
+        const contract = JSON.parse(
+            await fsRead(path.join(ROOT, 'tests', 'api_path_contract.json'), 'utf8')
+        );
+        for (const pair of contract.pairs) {
+            const got = api.canonicalFor(pair.legacy);
+            assert(got === pair.canonical,
+                `contract drift for ${pair.legacy}: got ${got}, expected ${pair.canonical}`);
+        }
+
+        // Spot-checks beyond the fixture (behavioral shape).
         assert(api.canonicalFor('/db/triage/CASE-1/evidence/batch-delete') === '/evidence/CASE-1/batch-delete',
             'evidence subroute must win over the generic tails: ' + api.canonicalFor('/db/triage/CASE-1/evidence/batch-delete'));
-        assert(api.canonicalFor('/db/notables/9/promote') === '/notables/9/promote', 'notables tail mapping');
-        assert(api.canonicalFor('/db/analyze') === '/analyses', 'analyze mapping');
-        assert(api.canonicalFor('/db/rules') === null, 'rules have no canonical alias');
-        assert(api.canonicalFor('/db/closure-note') === null, 'closure-note has no canonical alias');
 
         // Modern deploy: canonical hits exactly once, legacy never dialed.
         const listed = await api.triage();

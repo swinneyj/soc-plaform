@@ -1,0 +1,39 @@
+{
+  "_comment": [
+    "Single source of truth for the canonical <-> legacy API path contract (S13).",
+    "Both implementations must satisfy every pair:",
+    "  - server: canonical_to_legacy_path(canonical) === legacy  (tests/test_investigation_fixes.py)",
+    "  - client: API.canonicalFor(legacy) === canonical          (tests/ui_regression/evidence_promote_load.mjs)",
+    "A canonical of null means the legacy path has NO canonical alias and must",
+    "pass through untouched in both directions."
+  ],
+  "pairs": [
+    { "legacy": "/db/triage", "canonical": "/cases" },
+    { "legacy": "/db/triage/CASE-1", "canonical": "/cases/CASE-1" },
+    { "legacy": "/db/triage/CASE-1/delete", "canonical": "/cases/CASE-1/delete" },
+    { "legacy": "/db/triage/batch-delete", "canonical": "/cases/batch-delete" },
+    { "legacy": "/db/triage/CASE-1/notable", "canonical": "/cases/CASE-1/notable" },
+    { "legacy": "/db/triage/CASE-1/investigation-state", "canonical": "/cases/CASE-1/investigation-state" },
+    { "legacy": "/db/triage/CASE-1/closure-readiness", "canonical": "/cases/CASE-1/closure-readiness" },
+    { "legacy": "/db/triage/CASE-1/evidence", "canonical": "/evidence/CASE-1" },
+    { "legacy": "/db/triage/CASE-1/evidence/99", "canonical": "/evidence/CASE-1/99" },
+    { "legacy": "/db/triage/CASE-1/evidence/batch-delete", "canonical": "/evidence/CASE-1/batch-delete" },
+    { "legacy": "/db/triage/CASE-1/evidence/delete-all", "canonical": "/evidence/CASE-1/delete-all" },
+    { "legacy": "/db/notables", "canonical": "/notables" },
+    { "legacy": "/db/notables/historical", "canonical": "/notables/historical" },
+    { "legacy": "/db/notables/42", "canonical": "/notables/42" },
+    { "legacy": "/db/notables/42/promote", "canonical": "/notables/42/promote" },
+    { "legacy": "/db/notables/42/delete", "canonical": "/notables/42/delete" },
+    { "legacy": "/db/notables/batch-delete", "canonical": "/notables/batch-delete" },
+    { "legacy": "/db/analyze", "canonical": "/analyses" },
+    { "legacy": "/db/rules", "canonical": null },
+    { "legacy": "/db/supportive-queries", "canonical": null },
+    { "legacy": "/db/supportive-queries/draft", "canonical": null },
+    { "legacy": "/db/supportive-queries/import-results", "canonical": null },
+    { "legacy": "/db/placeholder-aliases", "canonical": null },
+    { "legacy": "/db/closure-note", "canonical": null },
+    { "legacy": "/db/stats", "canonical": null },
+    { "legacy": "/db/operations", "canonical": null },
+    { "legacy": "/db/ollama/health", "canonical": null }
+  ]
+}

@@ -777,8 +777,11 @@ class TestUIEvidencePromoteLoadFlows:
     the real web/modules/analysis.js and web/modules/database.js run in a
     sandbox with stubbed axios and canaries for window.alert (blocking modals),
     console.error (swallowed crashes), and console.warn (guarded aborts). The
-    load-path scenario is mutation-checked: restoring the crashy lines must
-    fail it (hydration lost + canary fires).
+    load-path scenario locks the fix in place: hydration assertions (and the
+    console.error canary) fail if the load path ever stops surviving legacy
+    raw_result rows. (Not mutation-tested: no automated mutant of the crashy
+    lines is re-injected; the original manual mutation check against 6942458
+    confirmed the scenario fails with hydration lost + canary firing.)
     """
 
     HARNESS = PLATFORM_ROOT / "tests" / "ui_regression" / "evidence_promote_load.mjs"
@@ -1003,24 +1006,26 @@ class TestCanonicalRestPaths:
     the ASGI layer so handlers stay untouched and behavior is identical."""
 
     def test_mapping_table_covers_the_resource_families(self):
+        """Contract fixture is the single source of truth: the server rewriter
+        must satisfy every canonical->legacy pair (the client api.js mapping
+        is checked against the same fixture by the node harness)."""
+        import json
+
         m = api_main.canonical_to_legacy_path
-        assert m("/api/cases") == "/api/db/triage"
-        assert m("/api/analyses") == "/api/db/analyze"
-        assert m("/api/notables") == "/api/db/notables"
-        assert m("/api/notables/historical") == "/api/db/notables/historical"
-        assert m("/api/notables/42/promote") == "/api/db/notables/42/promote"
-        assert m("/api/cases/CASE-1/notable") == "/api/db/triage/CASE-1/notable"
-        assert m("/api/cases/CASE-1") == "/api/db/triage/CASE-1"
-        assert m("/api/cases/CASE-1/delete") == "/api/db/triage/CASE-1/delete"
-        assert m("/api/cases/batch-delete") == "/api/db/triage/batch-delete"
-        assert m("/api/cases/CASE-1/investigation-state") == "/api/db/triage/CASE-1/investigation-state"
+        contract = json.loads(
+            (PLATFORM_ROOT / "tests" / "api_path_contract.json").read_text()
+        )
+        for pair in contract["pairs"]:
+            legacy = "/api" + pair["legacy"]
+            if pair["canonical"] is None:
+                assert m(legacy) is None, f"{legacy} must have no canonical alias"
+            else:
+                assert m("/api" + pair["canonical"]) == legacy, (
+                    f"contract drift: /api{pair['canonical']} -> {m('/api' + pair['canonical'])}, expected {legacy}"
+                )
+
         # Unknown tails rewrite too (and 404 at routing exactly like legacy).
         assert m("/api/cases/CASE-1/unknown-subresource") == "/api/db/triage/CASE-1/unknown-subresource"
-        assert m("/api/cases/CASE-1/closure-readiness") == "/api/db/triage/CASE-1/closure-readiness"
-        assert m("/api/cases/CASE-1/evidence") == "/api/db/triage/CASE-1/evidence"
-        assert m("/api/cases/CASE-1/evidence/batch-delete") == "/api/db/triage/CASE-1/evidence/batch-delete"
-        assert m("/api/evidence/CASE-1") == "/api/db/triage/CASE-1/evidence"
-        assert m("/api/evidence/CASE-1/99") == "/api/db/triage/CASE-1/evidence/99"
 
     def test_non_canonical_paths_pass_through_untouched(self):
         m = api_main.canonical_to_legacy_path
@@ -1030,6 +1035,32 @@ class TestCanonicalRestPaths:
             "/api/notable", "/api/evidencex",
         ):
             assert m(path) is None, "path must not rewrite: " + path
+
+    def test_api_endpoints_doc_covers_every_registered_route(self):
+        """Drift guard: every FastAPI-registered route must appear in
+        docs/API_ENDPOINTS.md (canonical or legacy spelling, both count).
+        Add new routes to the doc in the same PR that adds the route."""
+        import re
+
+        doc = (PLATFORM_ROOT / "docs" / "API_ENDPOINTS.md").read_text()
+
+        missing = []
+        for route in api_main.app.routes:
+            path = getattr(route, "path", "")
+            if not path.startswith(("/api", "/health")):
+                continue  # static mount and internals are not API surface
+            methods = {m for m in getattr(route, "methods", ()) if m not in ("HEAD", "OPTIONS")}
+            if not methods:
+                continue
+            # A route counts as documented when its literal path (parameterized
+            # FastAPI style, e.g. /api/db/triage/{case_id}/evidence) appears in
+            # the doc at all - the doc lists every route at one spelling.
+            if path not in doc:
+                missing.append(f"{sorted(methods)[0]} {path}")
+        assert not missing, (
+            "docs/API_ENDPOINTS.md is missing routes (add them to the doc): "
+            + ", ".join(sorted(set(missing)))
+        )
 
     def test_canonical_and_legacy_routes_serve_identically(self):
         from fastapi.testclient import TestClient

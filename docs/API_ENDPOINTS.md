@@ -159,7 +159,7 @@ Readiness evaluation lives under the cases family above
 | DELETE | — | `/api/jobs` | Key (middleware + pinned) | Clear all jobs. |
 | GET | — | `/api/reports` | Open | List generated reports. |
 | GET | — | `/api/reports/{report_name}` | Open | Fetch a report. |
-| GET | — | `/api/tool-artifacts/{artifact_path}` | Open | Fetch a tool artifact file. |
+| GET | — | `/api/tool-artifacts/{artifact_path:path}` | Open | Fetch a tool artifact file. |
 
 ## Code review
 

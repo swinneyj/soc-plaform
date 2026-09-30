@@ -11,6 +11,22 @@
 (function (global) {
     'use strict';
 
+    /**
+     * One per-card analysis state cell (the S7 unified schema).
+     * @typedef {Object} CardCell
+     * @property {string}  [resultText]  Analyst-pasted / auto-run results shown in the card textarea.
+     * @property {string}  [findingType] Advisory finding label ('neutral'|'supports'|'refutes'|...).
+     * @property {string}  [editedSpl]   Analyst-edited SPL template (Phase 2 cards).
+     * @property {string}  [coverage]    Coverage note (time window / scope).
+     * @property {string}  [status]      Collection status ('success'|'no_results'|'data_source_unavailable'|'query_failed').
+     * @property {{state: string, message: string, short: string}} [runStatus] Inline Splunk run chip state.
+     */
+    /**
+     * All per-card state, keyed by the query key ('id:7', 'title:foo',
+     * 'phase2:foo', 'enrichment:foo') — one keying scheme for every kind.
+     * @typedef {Object.<string, CardCell>} CardStateMap
+     */
+
     // Lowercase-trim + collapse-whitespace + truncate (64). The one slug rule
     // behind every query key (supportive / phase2 / enrichment), kept local so
     // this module has no load-order dependency on utils/keys.js.
@@ -975,10 +991,8 @@
             return s ? 'phase2:' + s : 'phase2:title:unknown';
         },
 
-        // Single per-card state cell for Phase 2+ follow-up cards. Everything
-        // a card owns (analyst input, edits, run status, collection status)
-        // lives under one derived key so no field can drift to a different
-        // keying scheme than the rest.
+        // Read one CardCell (or {} when the card has no state yet).
+        // @param {string} key @returns {CardCell}
         _phase2Card(key) {
             const cards = this.phase2CardState || {};
             return cards[key] || {};
@@ -1421,6 +1435,7 @@
         },
 
         // Merge one patch into a card cell (the S7 one-keying scheme).
+        // @param {string} key @param {Partial<CardCell>} patch
         _mergeCard(key, patch) {
             this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), ...patch } };
         },
