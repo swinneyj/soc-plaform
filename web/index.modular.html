@@ -18,13 +18,22 @@
             :current-tab="currentTab"
             :ollama-health="ollamaHealth"
             :api-healthy="apiHealthy"
+            :auth="auth"
             @change-tab="changeTab"
+            @open-login="openLogin"
+            @logout="logout"
         ></header-nav>
 
+        <login-modal :show="auth.showLogin" @logged-in="applyAuthInfo($event); auth.showLogin = false"
+                     @close="auth.showLogin = false"></login-modal>
+
         <main class="flex-1 max-w-7xl mx-auto w-full py-8 px-4">
+            <splunk-boundary-widget :is-admin="isAdmin"></splunk-boundary-widget>
+
             <!-- Tools -->
             <tools-tab
                 v-if="currentTab === 'tools'"
+                :is-admin="isAdmin"
                 :tools="tools"
                 :tool-search="toolSearch"
                 :selected-category="selectedCategory"
@@ -54,6 +63,10 @@
                 :notable-paste-result="notablePasteResult"
                 :show-open-notables-only="showOpenNotablesOnly"
                 :filtered-recent-notables="filteredRecentNotables"
+                :bulk-promote-notables-running="bulkPromoteNotablesRunning"
+                :bulk-promote-progress="bulkPromoteProgress"
+                :bulk-promote-outcome="bulkPromoteOutcome"
+                :bulk-promote-summary="bulkPromoteSummary"
                 :historical-notables-visible="historicalNotablesVisible"
                 :historical-notables="historicalNotables"
                 :filtered-triage-data="filteredTriageData"
@@ -64,6 +77,11 @@
                 :selected-notable-ids="selectedNotableIds"
                 :selected-triage-case-ids="selectedTriageCaseIds"
                 :triage-notable-details="triageNotableDetails"
+                :evidence-ledger-case-id="evidenceLedgerCaseId"
+                :evidence-ledger-items="evidenceLedgerItems"
+                :evidence-ledger-loading="evidenceLedgerLoading"
+                :evidence-ledger-error="evidenceLedgerError"
+                :evidence-ledger-busy-id="evidenceLedgerBusyId"
                 @change-tab="changeTab"
                 @update:notable-paste-text="notablePasteText = $event"
                 @update:notable-redaction-enabled="notableRedactionEnabled = $event"
@@ -86,6 +104,9 @@
                 @load-triage-data="loadTriageData"
                 @load-db-stats="loadDbStats"
                 @delete-triage-case="deleteTriageCase"
+                @update:evidence-ledger-case-id="evidenceLedgerCaseId = $event"
+                @load-case-evidence-ledger="loadCaseEvidenceLedger"
+                @delete-evidence-ledger-item="deleteEvidenceLedgerItem"
                 @delete-selected-triage-cases="deleteSelectedTriageCases"
                 @load-triage-notable-details="loadTriageNotableDetails"
                 @copy-triage-notable-fields="copyTriageNotableFields"
@@ -118,15 +139,10 @@
                 :phase2-result="phase2Result"
                 :investigation-state="investigationState"
                 :evidence-finding-options="evidenceFindingOptions"
-                :supportive-manual-results="supportiveManualResults"
-                :supportive-finding-types="supportiveFindingTypes"
-                :enrichment-manual-results="enrichmentManualResults"
-                :enrichment-finding-types="enrichmentFindingTypes"
-                :phase2-manual-results="phase2ManualResults"
-                :phase2-finding-types="phase2FindingTypes"
-                :phase2-resolution-types="phase2ResolutionTypes"
-                :phase2-resolution-questions="phase2ResolutionQuestions"
-                :phase2-edited-queries="phase2EditedQueries"
+                :run-all-busy="runAllBusy"
+                :run-all-summary="runAllSummary"
+                :supportive-save-busy="supportiveSaveBusy"
+                :phase2-card-state="phase2CardState"
                 :supportive-playbook-available="supportivePlaybookAvailable"
                 :supportive-draft-busy="supportiveDraftBusy"
                 :supportive-draft-error="supportiveDraftError"
@@ -152,12 +168,15 @@
                 :get-enrichment-key-fn="getEnrichmentKey"
                 :get-phase2-key-fn="getPhase2Key"
                 :get-phase2-template-fn="getPhase2Template"
+                :build-loop-timeline-fn="buildLoopTimeline"
                 :format-loop-status-fn="formatLoopStatus"
                 :format-disposition-label-fn="formatDispositionLabel"
                 :format-finding-label-fn="formatFindingLabel"
                 @update:analysis-case-search="analysisCaseSearch = $event"
                 @update:analysis-case-id="analysisCaseId = $event"
                 @update:analysis-model="analysisModel = $event"
+                :stage-models="stageModels"
+                @update:stage-models="stageModels = $event"
                 @update:analysis-context="analysisContext = $event"
                 @update:phase2-model="phase2Model = $event"
                 @update:follow-up-phase="followUpPhase = $event"
@@ -189,17 +208,19 @@
                 @copy-supportive-spl="copySupportiveSPL"
                 @copy-enrichment-spl="copyEnrichmentSPL"
                 @copy-phase2-spl="copyPhase2SPL"
+                @run-splunk-search="runSplunkSearch"
+                @run-all-supportive="runAllSupportiveSplunk"
                 @promote-phase2-query="promotePhase2Query"
                 @on-phase2-template-input="onPhase2TemplateInput"
-                @update-supportive-manual="({key, value}) => supportiveManualResults = { ...supportiveManualResults, [key]: value }"
-                @update-supportive-finding="({key, value}) => supportiveFindingTypes = { ...supportiveFindingTypes, [key]: value }"
-                @update-enrichment-manual="({key, value}) => enrichmentManualResults = { ...enrichmentManualResults, [key]: value }"
-                @update-enrichment-finding="({key, value}) => enrichmentFindingTypes = { ...enrichmentFindingTypes, [key]: value }"
-                @update-phase2-manual="({key, value}) => phase2ManualResults = { ...phase2ManualResults, [key]: value }"
-                @update-phase2-finding="({key, value}) => phase2FindingTypes = { ...phase2FindingTypes, [key]: value }"
-                @update-phase2-coverage="({key, value}) => phase2CoverageNotes = { ...phase2CoverageNotes, [key]: value }"
-                @update-phase2-resolution="({key, value}) => { phase2ResolutionTypes = { ...phase2ResolutionTypes, [key]: value }; if (value === 'not_resolved') { const next = { ...phase2ResolutionQuestions }; delete next[key]; phase2ResolutionQuestions = next; } }"
-                @update-phase2-resolution-question="({key, value}) => phase2ResolutionQuestions = { ...phase2ResolutionQuestions, [key]: value }"
+                @update-supportive-manual="({key, value}) => updateSupportiveResult(key, value)"
+                @update-supportive-finding="({key, value}) => _updateCardField('phase2CardState', key, 'findingType', value)"
+                @update-enrichment-manual="({key, value}) => _updateCardField('phase2CardState', key, 'resultText', value)"
+                @update-enrichment-finding="({key, value}) => _updateCardField('phase2CardState', key, 'findingType', value)"
+                @update-phase2-manual="({key, value}) => _updateCardField('phase2CardState', key, 'resultText', value)"
+                @update-phase2-finding="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), findingType: value } }"
+                @update-phase2-coverage="({key, value}) => _updateCardField('phase2CardState', key, 'coverage', value)"
+                @update-card-status="({key, value}) => phase2CardState = { ...phase2CardState, [key]: { ...(phase2CardState[key] || {}), status: value } }"
+                @update-card-state="(next) => phase2CardState = next || {}"
                 @delete-evidence="deleteEvidence"
                 @delete-evidence-batch="deleteEvidenceBatch"
                 @delete-all-evidence="deleteAllEvidence"
@@ -216,17 +237,21 @@
                 :closure-generating="closureGenerating"
                 :closure-suggested-rule-name="closureSuggestedRuleName"
                 :closure-suggested-disposition="closureSuggestedDisposition"
+                :closure-readiness="closureReadiness"
                 @update:closure-form="closureForm = $event"
                 @select-case="onCaseSelected"
                 @select-rule="onRuleSelected"
                 @generate-closure-note="generateClosureNote"
                 @copy-closure-note="copyToClipboard"
                 @download-closure-note="downloadClosureNote"
+                @load-closure-readiness="loadClosureReadiness(closureForm.caseId)"
+                @resolve-blocker="goResolveBlocker"
             ></closure-tab>
 
             <!-- Jobs -->
             <jobs-tab
                 v-if="currentTab === 'jobs'"
+                :is-admin="isAdmin"
                 :jobs="jobs"
                 :selected-job-ids="selectedJobIds"
                 @update:selected-job-ids="selectedJobIds = $event"
@@ -299,7 +324,7 @@
         <footer class="bg-gray-800 border-t border-gray-700 mt-auto">
             <div class="max-w-7xl mx-auto px-4 py-4 text-center text-sm text-gray-400">
                 <p>SOC Platform v1.1.0 • Local AI • Modular shell • <a href="/docs" class="text-blue-400 hover:text-blue-300">API Docs</a></p>
-                <p class="text-xs mt-1 text-gray-500">Testing: index.modular.html (live site remains index.html)</p>
+                <p class="text-xs mt-1 text-gray-500">Modular shell — live UI (index.html redirects here)</p>
             </div>
         </footer>
     </div>
@@ -309,6 +334,7 @@
 
     <!-- utils (pure helpers) -->
     <script src="utils/keys.js?v=9"></script>
+    <script src="utils/auth.js?v=2"></script>
     <script src="utils/queryRender.js?v=9"></script>
     <script src="utils/selection.js?v=9"></script>
     <script src="utils/pocSummary.js?v=9"></script>
@@ -316,24 +342,26 @@
     <script src="utils/ruleResolver.js?v=9"></script>
 
     <!-- modules (API + domain) -->
-    <script src="modules/api.js?v=9"></script>
-    <script src="modules/database.js?v=17"></script>
-    <script src="modules/analysis.js?v=11"></script>
-    <script src="modules/tools.js?v=11"></script>
-    <script src="modules/closure.js?v=9"></script>
-    <script src="modules/codeReview.js?v=9"></script>
+    <script src="modules/api.js?v=13"></script>
+    <script src="modules/database.js?v=20"></script>
+    <script src="modules/analysis.js?v=20"></script>
+    <script src="modules/tools.js?v=12"></script>
+    <script src="modules/closure.js?v=10"></script>
+    <script src="modules/codeReview.js?v=10"></script>
 
     <!-- components (UI) -->
-    <script src="components/HeaderNav.js?v=9"></script>
-    <script src="components/ToolsTab.js?v=11"></script>
-    <script src="components/DatabaseTab.js?v=26"></script>
-    <script src="components/AnalysisTab.js?v=10"></script>
-    <script src="components/ClosureTab.js?v=9"></script>
-    <script src="components/JobsTab.js?v=15"></script>
+    <script src="components/HeaderNav.js?v=10"></script>
+    <script src="components/LoginModal.js?v=1"></script>
+    <script src="components/SplunkBoundaryWidget.js?v=2"></script>
+    <script src="components/ToolsTab.js?v=12"></script>
+    <script src="components/DatabaseTab.js?v=28"></script>
+    <script src="components/AnalysisTab.js?v=20"></script>
+    <script src="components/ClosureTab.js?v=10"></script>
+    <script src="components/JobsTab.js?v=16"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=13"></script>
+    <script src="app.modular.js?v=21"></script>
 </body>
 </html>

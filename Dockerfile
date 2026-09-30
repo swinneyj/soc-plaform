@@ -1,5 +1,5 @@
 # Multi-stage build: builder stage to install dependencies, runtime stage minimal
-FROM python:3.11-slim as builder
+FROM python:3.14-slim as builder
 
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -11,7 +11,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 # Runtime stage
-FROM python:3.11-slim
+FROM python:3.14-slim
 
 WORKDIR /app
 

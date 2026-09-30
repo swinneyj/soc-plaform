@@ -1,6 +1,6 @@
 window.HeaderNav = {
-    props: ['currentTab', 'ollamaHealth', 'apiHealthy'],
-    emits: ['change-tab'],
+    props: ['currentTab', 'ollamaHealth', 'apiHealthy', 'auth'],
+    emits: ['change-tab', 'open-login', 'logout'],
     template: `
         <header class="bg-gray-800 border-b border-gray-700 sticky top-0 z-50">
             <div class="max-w-7xl mx-auto px-4 py-4">
@@ -31,6 +31,16 @@ window.HeaderNav = {
                             Ollama:
                             <span :class="ollamaHealth.available ? 'text-green-400' : 'text-red-400'" class="font-semibold">●</span>
                         </span>
+                        <template v-if="auth && auth.mode === 'session'">
+                            <span v-if="auth.user" class="flex items-center space-x-2 text-sm text-gray-300">
+                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold"
+                                      :class="auth.role === 'admin' ? 'bg-purple-600 text-white' : 'bg-blue-600 text-white'">{{ auth.role }}</span>
+                                <span>{{ auth.user }}</span>
+                                <button @click="$emit('logout')" class="text-gray-400 hover:text-white text-xs underline">Logout</button>
+                            </span>
+                            <button v-else @click="$emit('open-login')"
+                                    class="text-sm bg-blue-600 hover:bg-blue-700 px-3 py-1.5 rounded font-semibold">Sign in</button>
+                        </template>
                     </div>
                 </div>
 

@@ -105,7 +105,7 @@ To add a new tool:
 
 ### Key Features
 - Real-time job polling (`/api/jobs/{id}`)
-- Model selector (qwen3.5:2b, qwen3.5:9b, qwen2.5:14b, llama3.1:8b)
+- Model selector (auto-resolves best installed `llama3.1` tag; pin via `OLLAMA_MODEL`)
 - CSV export for cases/events
 - Dark theme
 

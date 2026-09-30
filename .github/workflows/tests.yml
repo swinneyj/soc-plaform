@@ -1,0 +1,43 @@
+name: Tests
+
+# Run the pytest suite on every push and PR to any branch.
+# The suite is hermetic: API tests repoint db.models at an in-memory SQLite
+# database and stub Ollama, so no Postgres/Ollama services are needed in CI.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  pytest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        # Dual-runtime matrix: 3.14 is the pinned dev/production runtime
+        # (.python-version, Dockerfile), 3.9 is the legacy venv still
+        # supported by the test suite. Keep both green until 3.9 retires
+        # (security tracker item #9).
+        python-version: ["3.14", "3.9"]
+    steps:
+      - name: Checkout Project Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -r requirements-dev.txt
+
+      - name: Import lint (undefined names)
+        # Fails any F821 before pytest runs — 3.14's lazy annotations mask
+        # missing typing imports locally (see scripts/check_undefined_names.sh).
+        run: bash scripts/check_undefined_names.sh
+
+      - name: Run pytest
+        run: python -m pytest

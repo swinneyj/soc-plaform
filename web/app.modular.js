@@ -16,13 +16,15 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
 
     components: {
         'header-nav': window.HeaderNav,
+        'splunk-boundary-widget': window.SplunkBoundaryWidget,
         'tools-tab': window.ToolsTab,
         'database-tab': window.DatabaseTab,
         'analysis-tab': window.AnalysisTab,
         'closure-tab': window.ClosureTab,
         'jobs-tab': window.JobsTab,
         'reports-tab': window.ReportsTab,
-        'code-review-tab': window.CodeReviewTab
+        'code-review-tab': window.CodeReviewTab,
+        'login-modal': window.LoginModal
     },
             data() {
                 return {
@@ -62,6 +64,14 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     notablePromotingId: null,
                     selectedNotableIds: [],
                     bulkPromoteNotablesRunning: false,
+                    bulkPromoteProgress: null,
+                    bulkPromoteOutcome: {},
+                    bulkPromoteSummary: '',
+                    evidenceLedgerCaseId: '',
+                    evidenceLedgerItems: [],
+                    evidenceLedgerLoading: false,
+                    evidenceLedgerError: '',
+                    evidenceLedgerBusyId: null,
                     
                     // Analysis
                     ollamaHealth: { available: false, models: [] },
@@ -69,6 +79,14 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     analysisCaseSearch: '',
                     analysisCaseId: '',
                     analysisModel: '',
+                    // C3: per-stage model overrides for the analysis wizard
+                    // (Stage 3 initial / Stage 4 follow_up / Stage 5 closure).
+                    stageModels: { initial: '', follow_up: '', closure: '' },
+                    // Session auth (SESSION_AUTH_PLAN.md Piece C): bootstrap
+                    // from GET /api/auth/session; mode 'session' shows the
+                    // login modal and binds role-aware controls. Flag-off the
+                    // endpoint answers mode:'api-key' so nothing changes.
+                    auth: { user: '', role: '', csrf: '', mode: '', showLogin: false },
                     analysisContext: '',
                     analysisRunning: false,
                     analysisRequestId: 0,
@@ -98,17 +116,18 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     followUpPhase: 2,
                     analysisSourceNotable: null,
                     investigationState: null,
-                    enrichmentManualResults: {},
-                    enrichmentFindingTypes: {},
                     placeholderAliases: {},
-                    supportiveManualResults: {},
-                    supportiveFindingTypes: {},
+                    runAllBusy: false,
+                    runAllSummary: '',
+                    supportiveSaveBusy: false,
                     phase2EditedQueries: {},
-                    phase2ManualResults: {},
-                    phase2FindingTypes: {},
-                    phase2ResolutionTypes: {},
-                    phase2CoverageNotes: {},
-                    phase2ResolutionQuestions: {},
+                    // Unified per-card state (S7): one keyed cell per analysis
+                    // card — resultText, findingType, editedSpl, coverage,
+                    // status, runStatus — so no field can drift keyings.
+                    // Keys are the existing query keys ('id:7', 'phase2:foo');
+                    // run-status chips read '<kind>:' + key style composition
+                    // via AnalysisTab's runStatusFor helper.
+                    phase2CardState: {},
                     supportivePlaybookAvailable: null,
                     supportiveDraftBusy: false,
                     supportiveDraftError: '',
@@ -145,6 +164,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     },
                     closureResult: null,
                     closureGenerating: false,
+                    closureReadiness: null,
                     selectedToolForExecution: null,
 
                     // Code Review
@@ -399,7 +419,40 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     return countHeadings;
                 }
             },
+            computed: {
+                // Admin controls stay enabled in every mode except a
+                // non-admin session (flag-off = pre-C1B behavior).
+                isAdmin() {
+                    return this.auth.mode !== 'session' || this.auth.role === 'admin';
+                }
+            },
             methods: {
+                async bootstrapAuth() {
+                    try {
+                        const info = await API.sessionInfo();
+                        this.applyAuthInfo(info);
+                    } catch (err) {
+                        // Unreachable backend behaves like flag-off: keep
+                        // controls enabled rather than bricking the UI.
+                        this.applyAuthInfo({ mode: 'api-key', role: 'admin' });
+                    }
+                },
+                applyAuthInfo(info) {
+                    this.auth.mode = (info && info.mode) || '';
+                    this.auth.user = (info && info.user) || '';
+                    this.auth.role = (info && info.role) || '';
+                    this.auth.csrf = (info && info.csrf_token) || '';
+                    window.__SOC_CSRF__ = this.auth.csrf || '';
+                    this.auth.showLogin = this.auth.mode === 'session' && !this.auth.user;
+                },
+                openLogin() {
+                    this.auth.showLogin = true;
+                },
+                async logout() {
+                    try { await API.sessionLogout(); } catch (err) { /* cookie may already be gone */ }
+                    window.__SOC_CSRF__ = '';
+                    await this.bootstrapAuth();
+                },
                 ...(window.DatabaseMethods || {}),
                 ...(window.AnalysisMethods || {}),
                 ...(window.ToolsMethods || {}),
@@ -430,7 +483,11 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 this.loadPlaceholderAliases();
                 this.checkOllama();
                 this.checkHealth();
-                
+                this.bootstrapAuth();
+                // api.js transport notifies here on any 401 so one place
+                // reopens the login modal for every call in the app.
+                window.__SOC_ON_SESSION_EXPIRED__ = () => { this.auth.showLogin = true; };
+
                 // Poll for updates
                 setInterval(() => this.loadJobs(), 5000);
                 setInterval(() => this.loadReports(), 10000);

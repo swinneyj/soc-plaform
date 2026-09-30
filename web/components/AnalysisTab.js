@@ -12,6 +12,7 @@ window.AnalysisTab = {
         'analysisCases',
         'filteredAnalysisCases',
         'analysisModel',
+        'stageModels',
         'analysisContext',
         'analysisRunning',
         'analysisStatus',
@@ -25,15 +26,10 @@ window.AnalysisTab = {
         'phase2Result',
         'investigationState',
         'evidenceFindingOptions',
-        'supportiveManualResults',
-        'supportiveFindingTypes',
-        'enrichmentManualResults',
-        'enrichmentFindingTypes',
-        'phase2ManualResults',
-        'phase2FindingTypes',
-        'phase2ResolutionTypes',
-        'phase2CoverageNotes',
-        'phase2ResolutionQuestions',
+        'supportiveSaveBusy',
+        'phase2CardState',
+        'runAllBusy',
+        'runAllSummary',
         'phase2EditedQueries',
         'supportivePlaybookAvailable',
         'supportiveDraftBusy',
@@ -61,6 +57,7 @@ window.AnalysisTab = {
         'getEnrichmentKeyFn',
         'getPhase2KeyFn',
         'getPhase2TemplateFn',
+        'buildLoopTimelineFn',
         'formatLoopStatusFn',
         'formatDispositionLabelFn',
         'formatFindingLabelFn'
@@ -69,6 +66,7 @@ window.AnalysisTab = {
         'update:analysis-case-search',
         'update:analysis-case-id',
         'update:analysis-model',
+        'update:stage-models',
         'update:analysis-context',
         'update:phase2-model',
         'update:show-phase1-analysis',
@@ -98,6 +96,8 @@ window.AnalysisTab = {
         'copy-supportive-spl',
         'copy-enrichment-spl',
         'copy-phase2-spl',
+        'run-splunk-search',
+        'run-all-supportive',
         'promote-phase2-query',
         'on-phase2-template-input',
         'update-supportive-manual',
@@ -105,6 +105,7 @@ window.AnalysisTab = {
         'update-enrichment-manual',
         'update-enrichment-finding',
         'update-phase2-manual',
+        'update-card-status',
         'update-phase2-finding',
         'update-phase2-coverage',
         'delete-evidence',
@@ -115,7 +116,6 @@ window.AnalysisTab = {
         return {
             selectedEvidenceKeys: [],
             currentStage: 1,
-            evidenceResultStatuses: {},
             showResolvedFollowUp: false,
             supportiveImportText: '',
             supportiveImportFilename: ''
@@ -166,6 +166,12 @@ window.AnalysisTab = {
             return Boolean(this.analysisCaseId);
         },
         stage2Complete() {
+            // No active case → no stage can be complete. Without this guard,
+            // the "no playbook" fallback below marked Evidence Collection ✓
+            // as soon as the page loaded, before any case was selected.
+            if (!this.analysisCaseId) {
+                return false;
+            }
             const evidenceSummary = this.investigationState && this.investigationState.evidence_summary;
             const hasEvidence = Boolean(
                 evidenceSummary &&
@@ -287,10 +293,7 @@ window.AnalysisTab = {
         startNextFollowUpPhase() {
             const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
             this.$emit('update:follow-up-phase', nextPhase);
-            this.phase2ManualResults = {};
-            this.phase2FindingTypes = {};
-            this.phase2ResolutionTypes = {};
-            this.phase2EditedQueries = {};
+            this.$emit('update-card-state', {});
             this.currentStage = 4;
             this.$emit('run-phase2-analysis');
         },
@@ -421,6 +424,34 @@ window.AnalysisTab = {
         },
         emitPhase2Finding(q, value) {
             this.$emit('update-phase2-finding', { key: this.getPhase2Key(q), value });
+        },
+        // Inline run chip for a card (null when never run). Reads the S7
+        // unified card state; root composes status keys as '<kind>:' + key.
+        runStatusFor(key) {
+            const card = (this.phase2CardState || {})[key];
+            return (card && card.runStatus) || null;
+        },
+        // S12: chronological loop timeline rows from the persisted state.
+        loopTimeline() {
+            if (typeof this.buildLoopTimelineFn === 'function') {
+                return this.buildLoopTimelineFn(this.investigationState);
+            }
+            return [];
+        },
+        loopTimelineClass(row) {
+            if (row.findingType === 'supports') return 'border-l-red-500';
+            if (row.findingType === 'refutes') return 'border-l-emerald-500';
+            return 'border-l-gray-600';
+        },
+        loopTimelineDeltaLabel(row) {
+            if (row.deltaHint === 'increase') return '▲ confidence up';
+            if (row.deltaHint === 'decrease') return '▼ confidence down';
+            return '';
+        },
+        loopTimelineDeltaClass(row) {
+            if (row.deltaHint === 'increase') return 'text-emerald-400';
+            if (row.deltaHint === 'decrease') return 'text-amber-400';
+            return 'text-gray-600';
         },
         evidenceItemKey(item) {
             if (!item) return '';
@@ -857,6 +888,15 @@ window.AnalysisTab = {
             <div class="flex items-center gap-2">
                 <button
                     type="button"
+                    class="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 rounded text-xs font-bold text-white transition shadow"
+                    :disabled="runAllBusy || supportiveSaveBusy || !analysisRule || !(analysisRule.supportive_queries || []).length"
+                    title="Run every supportive query through the configured search backend, one at a time; busy cards are skipped"
+                    @click="$emit('run-all-supportive')"
+                >
+                    {{ runAllBusy ? 'Running All (' + ((analysisRule.supportive_queries || []).length) + ')…' : 'Run All' }}
+                </button>
+                <button
+                    type="button"
                     class="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-bold text-white transition shadow"
                     :disabled="supportiveSaveBusy"
                     @click="$emit('save-supportive-evidence-and-continue')"
@@ -881,6 +921,14 @@ window.AnalysisTab = {
             </div>
         </div>
 
+        <p
+            v-if="runAllSummary"
+            class="text-xs px-3 py-2 rounded border"
+            :class="runAllSummary.includes(' failed') && !runAllSummary.includes(' 0 failed')
+                ? 'bg-amber-950/40 border-amber-700/70 text-amber-200'
+                : 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'"
+        >{{ runAllSummary }}</p>
+
         <!-- Supportive Queries Cards -->
         <div v-if="analysisRule && analysisRule.supportive_queries && analysisRule.supportive_queries.length" class="space-y-4">
             <div
@@ -893,6 +941,25 @@ window.AnalysisTab = {
                         <p class="text-xs font-bold text-blue-300">{{ q.title }}</p>
                         <p class="text-xs text-gray-400 mt-0.5" v-if="q.description">{{ q.description }}</p>
                     </div>
+                    <span
+                        v-if="runStatusFor(getSupportiveKey(q))"
+                        class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
+                        :class="runStatusFor(getSupportiveKey(q)).state === 'error'
+                            ? 'bg-red-950 text-red-300 border border-red-700'
+                            : runStatusFor(getSupportiveKey(q)).state === 'running'
+                                ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
+                                : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
+                        :title="runStatusFor(getSupportiveKey(q)).message"
+                    >{{ runStatusFor(getSupportiveKey(q)).short }}</span>
+                    <button
+                        type="button"
+                        class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200 flex-shrink-0"
+                        :disabled="runStatusFor(getSupportiveKey(q)) !== null && runStatusFor(getSupportiveKey(q)).state === 'running'"
+                        title="Run this query through the configured search backend and save the result as splunk_auto evidence"
+                        @click="$emit('run-splunk-search', { q, kind: 'supportive' })"
+                    >
+                        Run in Splunk
+                    </button>
                     <button
                         type="button"
                         class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200 flex-shrink-0"
@@ -906,7 +973,7 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Observation Notes</label>
                     <textarea
-                        :value="supportiveManualResults[getSupportiveKey(q)] || ''"
+                        :value="(phase2CardState[getSupportiveKey(q)] || {}).resultText || ''"
                         @input="emitSupportiveManual(q, $event.target.value)"
                         rows="3"
                         class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
@@ -917,7 +984,8 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
                     <select
-                        v-model="evidenceResultStatuses[getSupportiveKey(q)]"
+                        :value="(phase2CardState[getSupportiveKey(q)] || {}).status || 'success'"
+                        @change="$emit('update-card-status', { key: getSupportiveKey(q), value: $event.target.value })"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                     >
                         <option value="success">Success (Events Found)</option>
@@ -985,6 +1053,16 @@ window.AnalysisTab = {
                                             }"
                                         >{{ formatFindingLabel(item.finding_type) }}</span>
                                         <span
+                                            v-if="item.ai_verdict_source === 'per_card'"
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold bg-indigo-950 text-indigo-200 border-indigo-800"
+                                            :title="item.ai_verdict_rationale || 'Model-assessed verdict for this entry'"
+                                        >AI ASSESSMENT</span>
+                                        <span
+                                            v-if="item.ai_verdict_source === 'evidence_json'"
+                                            class="text-[10px] px-1.5 py-0.2 rounded border font-semibold bg-violet-950 text-violet-200 border-violet-600"
+                                            :title="item.ai_verdict_rationale || 'Structured verdict from the model PHASE2_EVIDENCE_JSON block'"
+                                        >EVIDENCE JSON</span>
+                                        <span
                                             v-if="item.result_status"
                                             class="text-[10px] px-1.5 py-0.2 rounded border font-semibold"
                                             :class="{
@@ -1006,6 +1084,9 @@ window.AnalysisTab = {
                                 </button>
                             </div>
                             <p v-if="item.summary" class="text-xs text-gray-300 mt-2 font-mono whitespace-pre-wrap">{{ item.summary }}</p>
+                            <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 mt-1 italic">AI: {{ item.ai_verdict_rationale }}</p>
+                            <p v-if="item.ai_verdict_source === 'evidence_json' && item.ai_verdict_rationale" class="text-xs text-violet-300 mt-1 italic">AI (JSON): {{ item.ai_verdict_rationale }}</p>
+                            <p v-if="item.confidence_delta_hint && item.confidence_delta_hint !== 'none'" class="text-[11px] font-semibold mt-1" :class="item.confidence_delta_hint === 'increase' ? 'text-red-300' : 'text-emerald-300'">Confidence hint: {{ item.confidence_delta_hint }}</p>
                         </div>
                     </div>
                 </div>
@@ -1113,6 +1194,25 @@ window.AnalysisTab = {
                         </div>
                     <div class="flex items-center gap-2">
                         <span v-if="phase2SavedTitles.has((q.title || '').toString().trim().toLowerCase())" class="px-2 py-1 rounded bg-emerald-950 border border-emerald-700 text-[10px] uppercase font-bold text-emerald-300">Already saved</span>
+                        <span
+                            v-if="runStatusFor(getPhase2Key(q))"
+                            class="px-2 py-0.5 rounded text-[10px] font-semibold flex-shrink-0"
+                            :class="runStatusFor(getPhase2Key(q)).state === 'error'
+                                ? 'bg-red-950 text-red-300 border border-red-700'
+                                : runStatusFor(getPhase2Key(q)).state === 'running'
+                                    ? 'bg-blue-950 text-blue-300 border border-blue-700 animate-pulse'
+                                    : 'bg-emerald-950 text-emerald-300 border border-emerald-700'"
+                            :title="runStatusFor(getPhase2Key(q)).message"
+                        >{{ runStatusFor(getPhase2Key(q)).short }}</span>
+                        <button
+                            type="button"
+                            :disabled="runStatusFor(getPhase2Key(q)) !== null && runStatusFor(getPhase2Key(q)).state === 'running'"
+                            class="px-2.5 py-1 bg-blue-900/70 hover:bg-blue-800 border border-blue-700 rounded text-[11px] font-semibold text-blue-200"
+                            title="Run this query through the configured search backend and save the result as splunk_auto evidence"
+                            @click="$emit('run-splunk-search', { q, kind: 'phase2' })"
+                        >
+                            Run in Splunk
+                        </button>
                         <button
                             type="button"
                             class="px-2.5 py-1 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded text-[11px] font-semibold text-gray-200"
@@ -1138,7 +1238,7 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Results / Notes for this Follow-Up Check</label>
                     <textarea
-                        :value="phase2ManualResults[getPhase2Key(q)] || ''"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).resultText || ''"
                         @input="emitPhase2Manual(q, $event.target.value)"
                         rows="3"
                         class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400 font-mono"
@@ -1149,7 +1249,8 @@ window.AnalysisTab = {
                 <div>
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Collection Status</label>
                     <select
-                        v-model="evidenceResultStatuses[getPhase2Key(q)]"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).status || 'success'"
+                        @change="$emit('update-card-status', { key: getPhase2Key(q), value: $event.target.value })"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 focus:outline-none focus:border-blue-400"
                     >
                         <option value="success">Success (Events Found)</option>
@@ -1162,7 +1263,7 @@ window.AnalysisTab = {
                     <label class="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">Coverage Note (optional)</label>
                     <input
                         type="text"
-                        :value="phase2CoverageNotes[getPhase2Key(q)] || ''"
+                        :value="(phase2CardState[getPhase2Key(q)] || {}).coverage || ''"
                         @input="$emit('update-phase2-coverage', {key: getPhase2Key(q), value: $event.target.value})"
                         class="w-full mt-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:outline-none focus:border-blue-400"
                         placeholder="What time window / scope did this query cover? (The AI decides whether it resolves the inquiry.)"
@@ -1185,11 +1286,24 @@ window.AnalysisTab = {
                         <p class="text-xs font-semibold text-gray-100">{{ item.title }}</p>
                         <span class="text-[10px] uppercase text-gray-400">{{ item.result_status || 'success' }}</span>
                     </div>
-                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span></p>
+                    <p class="text-xs text-gray-400">Finding: <span class="capitalize" :class="item.finding_type === 'supports' ? 'text-red-300' : item.finding_type === 'refutes' ? 'text-emerald-300' : 'text-gray-300'">{{ item.finding_type || 'neutral' }}</span> <span v-if="item.ai_verdict_source === 'per_card'" class="ml-1 text-[10px] px-1 rounded bg-indigo-950 text-indigo-200 border border-indigo-800" :title="item.ai_verdict_rationale || 'Model-assessed'">AI</span><span v-if="item.ai_verdict_source === 'evidence_json'" class="ml-1 text-[10px] px-1 rounded bg-violet-950 text-violet-200 border border-violet-600 font-semibold" :title="item.ai_verdict_rationale || 'Structured PHASE2_EVIDENCE_JSON verdict'">AI·JSON</span></p>
+                    <p v-if="item.ai_verdict_source === 'per_card' && item.ai_verdict_rationale" class="text-xs text-indigo-300 italic">AI: {{ item.ai_verdict_rationale }}</p>
+                    <p v-if="item.ai_verdict_source === 'evidence_json' && item.ai_verdict_rationale" class="text-xs text-violet-300 italic">AI (JSON): {{ item.ai_verdict_rationale }}</p>
                     <p class="text-xs text-gray-300 whitespace-pre-wrap">{{ item.summary || 'Saved result; no observation summary recorded.' }}</p>
                 </div>
             </div>
 
+            <div class="flex items-center gap-3 pt-2">
+                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">Stage {{ followUpPhase }} Model Override</label>
+                <select
+                    :value="(stageModels && stageModels.follow_up) || ''"
+                    @input="$emit('update:stage-models', { ...(stageModels || {}), follow_up: $event.target.value })"
+                    class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
+                    <option value="">Default model</option>
+                    <option v-for="model in ollamaHealth.models" :key="model" :value="model">{{ model }}</option>
+                </select>
+            </div>
             <div class="flex items-center justify-end gap-3 pt-2">
                 <button
                     type="button"
@@ -1268,6 +1382,18 @@ window.AnalysisTab = {
             <p class="text-xs text-gray-400 mt-1">Review investigation loop confidence, verify active blockers, and transition to structured closure note compilation.</p>
         </div>
 
+        <div class="mt-4 flex items-center gap-3">
+            <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap">Closure Model Override</label>
+            <select
+                :value="(stageModels && stageModels.closure) || ''"
+                @input="$emit('update:stage-models', { ...(stageModels || {}), closure: $event.target.value })"
+                class="px-3 py-2 bg-gray-700 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+            >
+                <option value="">Default model</option>
+                <option v-for="model in ollamaHealth.models" :key="model" :value="model">{{ model }}</option>
+            </select>
+        </div>
+
         <!-- Investigation Loop State Dashboard -->
         <div v-if="investigationState" class="bg-gray-900 border border-gray-700 rounded-lg p-5 space-y-4">
             <div class="flex items-center justify-between">
@@ -1317,6 +1443,34 @@ window.AnalysisTab = {
                         <span class="text-gray-200">Unresolved Open Questions: {{ investigationState.unresolved_questions?.length || 0 }}</span>
                     </div>
                 </div>
+            </div>
+
+            <!-- S12: Loop Timeline - chronological evidence rail -->
+            <div v-if="loopTimeline().length" class="p-4 bg-gray-800/80 rounded border border-gray-700 space-y-2">
+                <div class="flex items-center justify-between">
+                    <p class="text-[11px] font-bold uppercase tracking-wider text-gray-400">Loop Timeline ({{ loopTimeline().length }} evidence items, chronological)</p>
+                </div>
+                <div class="space-y-1.5 max-h-72 overflow-y-auto">
+                    <div
+                        v-for="row in loopTimeline()"
+                        :key="row.key"
+                        class="flex items-start gap-2 border-l-2 pl-3 py-1"
+                        :class="loopTimelineClass(row)"
+                    >
+                        <div class="min-w-0 flex-1">
+                            <div class="flex flex-wrap items-center gap-2">
+                                <span class="text-xs font-semibold text-gray-100">{{ row.title }}</span>
+                                <span class="text-[10px] font-mono text-gray-500">{{ row.sourceSystem }}</span>
+                                <span class="text-[10px] uppercase text-gray-500">{{ row.resultStatus }}</span>
+                                <span class="text-[10px] font-semibold capitalize" :class="row.findingType === 'supports' ? 'text-red-300' : row.findingType === 'refutes' ? 'text-emerald-300' : 'text-gray-400'">{{ row.findingType }}</span>
+                                <span v-if="loopTimelineDeltaLabel(row)" class="text-[10px] font-semibold" :class="loopTimelineDeltaClass(row)">{{ loopTimelineDeltaLabel(row) }}</span>
+                            </div>
+                            <p class="text-[11px] text-gray-400 mt-0.5 whitespace-pre-wrap">{{ row.summary }}</p>
+                            <p v-if="row.rationale" class="text-[11px] text-indigo-300 italic mt-0.5">AI: {{ row.rationale }}</p>
+                        </div>
+                    </div>
+                </div>
+                <p class="text-[10px] text-gray-500">Red rail = supports hypothesis, green = refutes, gray = neutral. Oldest first — read the investigation top to bottom.</p>
             </div>
 
             <!-- Active Blockers if any -->

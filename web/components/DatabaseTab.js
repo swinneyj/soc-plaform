@@ -10,6 +10,10 @@ window.DatabaseTab = {
         'notablePasteResult',
         'showOpenNotablesOnly',
         'filteredRecentNotables',
+        'bulkPromoteNotablesRunning',
+        'bulkPromoteProgress',
+        'bulkPromoteOutcome',
+        'bulkPromoteSummary',
         'historicalNotablesVisible',
         'historicalNotables',
         'filteredTriageData',
@@ -19,7 +23,12 @@ window.DatabaseTab = {
         'deleteAnalysisWithCase',
         'selectedNotableIds',
         'selectedTriageCaseIds',
-        'triageNotableDetails'
+        'triageNotableDetails',
+        'evidenceLedgerCaseId',
+        'evidenceLedgerItems',
+        'evidenceLedgerLoading',
+        'evidenceLedgerError',
+        'evidenceLedgerBusyId'
     ],
     emits: [
         'change-tab',
@@ -45,6 +54,9 @@ window.DatabaseTab = {
         'load-db-stats',
         'delete-triage-case',
         'delete-selected-triage-cases',
+        'update:evidence-ledger-case-id',
+        'load-case-evidence-ledger',
+        'delete-evidence-ledger-item',
         'load-triage-notable-details',
         'copy-triage-notable-fields',
         'analyze-case',
@@ -156,6 +168,20 @@ window.DatabaseTab = {
         },
         toggleAllTriageFromButton() {
             this.toggleSelectAllTriage({ target: { checked: !this.allTriageSelected } });
+        },
+        // Compact result preview for a ledger row: the raw_result's result_text
+        // when present, else a bounded JSON dump.
+        ledgerResultPreview(item) {
+            const raw = (item && item.raw_result) || {};
+            const text = raw.result_text || (typeof raw === 'string' ? raw : '');
+            if (text) {
+                return String(text).slice(0, 400);
+            }
+            const keys = Object.keys(raw);
+            if (!keys.length) {
+                return '(no result text recorded)';
+            }
+            return keys.slice(0, 6).map((k) => k + ': ' + String(raw[k]).slice(0, 80)).join('\n');
         }
     },
     template: `
@@ -319,15 +345,83 @@ window.DatabaseTab = {
                             </button>
                             <button
                                 @click="$emit('promote-all-open-pasted-notables')"
-                                class="px-3 py-2 bg-purple-700 hover:bg-purple-800 rounded text-xs font-semibold transition">
-                                Promote all open to triage
+                                :disabled="bulkPromoteNotablesRunning"
+                                class="px-3 py-2 bg-purple-700 hover:bg-purple-800 disabled:bg-gray-700 disabled:text-gray-400 disabled:cursor-not-allowed rounded text-xs font-semibold transition">
+                                {{ bulkPromoteNotablesRunning
+                                    ? 'Promoting…'
+                                    : 'Promote all open to triage' }}
                             </button>
+                        </div>
+                    </div>
+
+                    <!-- S11: case-level evidence ledger -->
+                    <div class="bg-gray-900 border border-gray-700 rounded p-4 space-y-3">
+                        <div class="flex flex-wrap items-end gap-3">
+                            <div class="flex-1 min-w-[220px]">
+                                <label class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Evidence Ledger for Case</label>
+                                <select
+                                    :value="evidenceLedgerCaseId"
+                                    @change="$emit('update:evidence-ledger-case-id', $event.target.value)"
+                                    class="w-full mt-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-xs text-gray-100"
+                                >
+                                    <option value="">-- Choose a case --</option>
+                                    <option v-for="case_ in filteredTriageData" :key="case_.case_id" :value="case_.case_id">
+                                        {{ case_.case_id }} - {{ case_.rule_name }}
+                                    </option>
+                                </select>
+                            </div>
+                            <button
+                                @click="$emit('load-case-evidence-ledger')"
+                                :disabled="evidenceLedgerLoading || !evidenceLedgerCaseId"
+                                class="px-3 py-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-700 disabled:text-gray-400 rounded text-xs font-semibold transition"
+                            >{{ evidenceLedgerLoading ? 'Loading…' : 'Load Ledger' }}</button>
+                        </div>
+                        <p v-if="evidenceLedgerError" class="text-xs text-red-300">{{ evidenceLedgerError }}</p>
+                        <p v-if="!evidenceLedgerLoading && evidenceLedgerCaseId && evidenceLedgerItems && !evidenceLedgerItems.length && !evidenceLedgerError" class="text-xs text-gray-500">
+                            No saved evidence for this case yet.
+                        </p>
+                        <div v-if="evidenceLedgerItems && evidenceLedgerItems.length" class="space-y-2 max-h-80 overflow-y-auto">
+                            <div
+                                v-for="item in evidenceLedgerItems"
+                                :key="'ledger-' + item.id"
+                                class="bg-gray-800 border border-gray-700 rounded p-3 text-xs"
+                            >
+                                <div class="flex items-start justify-between gap-2">
+                                    <div class="min-w-0">
+                                        <p class="font-semibold text-gray-100">{{ item.query_title || 'Untitled evidence' }}</p>
+                                        <p class="text-gray-500 mt-0.5">
+                                            <span class="font-mono">{{ item.source_system }}</span>
+                                            • id {{ item.id }}
+                                            • {{ item.created_at || 'unknown time' }}
+                                        </p>
+                                    </div>
+                                    <button
+                                        @click="$emit('delete-evidence-ledger-item', item)"
+                                        :disabled="evidenceLedgerBusyId === item.id"
+                                        class="flex-shrink-0 px-2 py-1 bg-red-900 hover:bg-red-800 disabled:bg-gray-700 rounded text-[11px] font-semibold text-red-100"
+                                        title="Delete this evidence item permanently"
+                                    >{{ evidenceLedgerBusyId === item.id ? '…' : 'Delete' }}</button>
+                                </div>
+                                <pre class="mt-2 whitespace-pre-wrap bg-black/40 rounded p-2 max-h-24 overflow-y-auto text-gray-300 font-mono">{{ ledgerResultPreview(item) }}</pre>
+                            </div>
                         </div>
                     </div>
 
                     <div v-if="!filteredRecentNotables || filteredRecentNotables.length === 0" class="text-gray-400 text-sm text-center py-8">
                         No pasted notables saved yet.
                     </div>
+
+                    <p
+                        v-if="bulkPromoteSummary"
+                        class="text-xs rounded px-3 py-2 border"
+                        :class="bulkPromoteSummary.includes(' failed')
+                            ? 'bg-amber-950/40 border-amber-700/70 text-amber-200'
+            : 'bg-emerald-950/40 border-emerald-700/70 text-emerald-200'"
+                    >{{ bulkPromoteSummary }}</p>
+                    <p
+                        v-if="bulkPromoteProgress"
+                        class="text-xs text-gray-300"
+                    >Promoting… {{ bulkPromoteProgress.done }} / {{ bulkPromoteProgress.total }}</p>
 
                     <div v-for="notable in filteredRecentNotables" :key="notable.id" class="bg-gray-900 border border-gray-700 rounded p-4 space-y-2">
                         <div class="flex items-start justify-between gap-4">
@@ -356,6 +450,13 @@ window.DatabaseTab = {
                             </div>
                         </div>
                         <p v-if="notable.promoted_case_id" class="text-xs text-green-400">Promoted to triage as {{ notable.promoted_case_id }}</p>
+                        <p
+                            v-if="bulkPromoteOutcome && bulkPromoteOutcome[notable.id]"
+                            class="text-xs"
+                            :class="bulkPromoteOutcome[notable.id].state === 'failed' ? 'text-red-300' : 'text-emerald-300'"
+                        >{{ bulkPromoteOutcome[notable.id].state === 'failed'
+                            ? ('Promote failed: ' + (bulkPromoteOutcome[notable.id].detail || 'unknown error'))
+                            : 'Promoted ✓' }}</p>
                         <div class="flex flex-wrap gap-2 text-xs text-gray-300">
                             <span v-if="notable.historical" class="bg-gray-800 px-2 py-1 rounded border border-amber-500 text-amber-300">Historical (closed)</span>
                             <span v-if="notable.disposition" class="bg-gray-800 px-2 py-1 rounded">Disposition: {{ notable.disposition }}</span>
@@ -368,7 +469,10 @@ window.DatabaseTab = {
                             <button
                                 v-if="notable.historical"
                                 class="px-3 py-2 bg-gray-700 rounded text-xs font-semibold text-gray-300 cursor-default"
-                                disabled
+                                :disabled="true"
+                                :title="notable.promoted_case_id
+                                    ? 'Already promoted to triage as ' + notable.promoted_case_id
+                                    : 'Historical notables are closed records and cannot be promoted to triage'"
                             >
                                 {{ notable.promoted_case_id ? 'Already in Triage' : 'Saved to Database' }}
                             </button>

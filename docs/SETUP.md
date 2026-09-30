@@ -38,7 +38,7 @@ Reason:
 Before running any scripts, each analyst should have:
 
 - Docker Desktop installed and running (containers must be able to start).
-- Ollama installed and running (`ollama serve`), with at least `llama3.1:8b` pulled.
+- Ollama installed and running (`ollama serve`), with at least `llama3.1:latest` pulled. The platform auto-resolves the model at request time — set `OLLAMA_MODEL` in `.env` to pin a specific tag.
 - Reachable shared PostgreSQL dump at
 	`Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql`.
 - A local `.env` file in the repo root (copy `.env.example` to `.env`) with:
@@ -170,3 +170,12 @@ To keep preview DBs aligned with the current shared snapshot, the hook calls [sc
 - Starts the branch API service via Docker Compose (`docker compose -p soc-<branch> up -d --build --force-recreate api-service`).
 
 Result: each push from a feature branch both rebuilds and reseeds its sandbox from the shared handoff dump, while keeping its data isolated from the main/staging runtime.
+
+## Deployment stories (support matrix)
+
+| Story | Status | Entry point | Notes |
+|-------|--------|-------------|-------|
+| Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
+| Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
+| Vercel (hosted API + preview) | In progress | `.github/workflows/deploy.yml` | Env handoff pending (see `docs/VERCEL_HANDOFF.md`); routing config lives in the Vercel dashboard (no `vercel.json` in-repo) — determines whether the SOC_CONFIG injection applies. |
+| launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |

@@ -5,17 +5,24 @@ import json
 
 from fastapi import APIRouter
 
+
+def _utcnow() -> datetime.datetime:
+    """Naive UTC now (platform convention) without the deprecated
+    datetime.utcnow()."""
+    return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+
+
 router = APIRouter()
 
 
 @router.get("/health", tags=["System"])
 def health():
-    return {"status": "healthy", "timestamp": datetime.datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": _utcnow().isoformat()}
 
 
 @router.get("/api/health", tags=["System"])
 def api_health():
-    return {"status": "healthy", "timestamp": datetime.datetime.utcnow().isoformat()}
+    return {"status": "healthy", "timestamp": _utcnow().isoformat()}
 
 
 @router.get("/api/", tags=["System"])
@@ -85,11 +92,11 @@ def db_stats():
 def operations_dashboard():
     """Return operational case, closure, evidence, and tool-run metrics."""
     try:
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         from db.models import ClosureNote, InvestigationState, SessionLocal, SupportiveQueryResult, TriageResult, ToolRun
         db = SessionLocal()
         try:
-            now = datetime.utcnow()
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
             cases = db.query(TriageResult).all()
             states = {row.case_id: row for row in db.query(InvestigationState).all()}
             closed_states = {"closed", "closure_ready", "ready_for_closure", "resolved"}

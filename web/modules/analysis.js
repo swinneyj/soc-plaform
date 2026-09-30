@@ -5,25 +5,53 @@
  * run analysis / phase2, evidence save/load, keys, renderers, copies.
  *
  * Spread into Vue: ...(window.AnalysisMethods || {})
- * Depends on: this.apiUrl, axios, Analysis data properties.
+ * Depends on: API (modules/api.js) for all HTTP, Analysis data properties.
  * Pure key/render helpers also available via utils/keys.js and utils/queryRender.js.
  */
 (function (global) {
     'use strict';
 
+    /**
+     * One per-card analysis state cell (the S7 unified schema).
+     * @typedef {Object} CardCell
+     * @property {string}  [resultText]  Analyst-pasted / auto-run results shown in the card textarea.
+     * @property {string}  [findingType] Advisory finding label ('neutral'|'supports'|'refutes'|...).
+     * @property {string}  [editedSpl]   Analyst-edited SPL template (Phase 2 cards).
+     * @property {string}  [coverage]    Coverage note (time window / scope).
+     * @property {string}  [status]      Collection status ('success'|'no_results'|'data_source_unavailable'|'query_failed').
+     * @property {{state: string, message: string, short: string}} [runStatus] Inline Splunk run chip state.
+     */
+    /**
+     * All per-card state, keyed by the query key ('id:7', 'title:foo',
+     * 'phase2:foo', 'enrichment:foo') — one keying scheme for every kind.
+     * @typedef {Object.<string, CardCell>} CardStateMap
+     */
+
+    // Lowercase-trim + collapse-whitespace + truncate (64). The one slug rule
+    // behind every query key (supportive / phase2 / enrichment), kept local so
+    // this module has no load-order dependency on utils/keys.js.
+    function _slug64(title) {
+        const n = (title || '').toString().toLowerCase().trim();
+        if (!n) {
+            return null;
+        }
+        return n.replace(/\s+/g, '_').slice(0, 64);
+    }
+
     const AnalysisMethods = {
         onAnalysisCaseChanged() {
+            // A pending draft save must never land under the new case's key.
+            if (this._draftSaveTimer) {
+                clearTimeout(this._draftSaveTimer);
+                this._draftSaveTimer = null;
+            }
             this.analysisResult = null;
             this.investigationState = null;
-            this.enrichmentManualResults = {};
-            this.enrichmentFindingTypes = {};
-            this.supportiveManualResults = {};
-            this.supportiveFindingTypes = {};
+            // S7 + cardState fold: every per-card field (supportive,
+            // enrichment, phase2+) lives in phase2CardState under one
+            // keying scheme. The legacy per-kind maps are gone.
             this.phase2EditedQueries = {};
-            this.phase2ManualResults = {};
-            this.phase2FindingTypes = {};
-            this.phase2ResolutionTypes = {};
-            this.phase2ResolutionQuestions = {};
+            this.phase2CardState = {};
             this.followUpPhase = 2;
             this.analysisSourceNotable = null;
             this.supportivePlaybookAvailable = null;
@@ -44,20 +72,18 @@
             // durable evidence/state from the API.
             this.loadAnalysisState(caseId);
 
-            axios
-                .get(this.apiUrl + '/db/supportive-queries/status/' + encodeURIComponent(caseId))
-                .then(res => {
-                    this.supportivePlaybookAvailable = res.data && res.data.playbook_available === true;
+            API.supportiveQueriesStatus(caseId)
+                .then(data => {
+                    this.supportivePlaybookAvailable = data && data.playbook_available === true;
                 })
                 .catch(err => {
                     console.warn('Failed to load supportive playbook status:', err);
                     this.supportivePlaybookAvailable = null;
                 });
 
-            axios
-                .get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable')
-                .then(res => {
-                    this.analysisSourceNotable = res.data;
+            API.triageNotable(caseId)
+                .then(data => {
+                    this.analysisSourceNotable = data;
                 })
                 .catch(err => {
                     console.error('Failed to load source notable for analysis case:', err);
@@ -72,8 +98,7 @@
 
         async loadRules() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/rules');
-                this.availableRules = res.data;
+                this.availableRules = await API.rules();
             } catch (err) {
                 console.error('Failed to load rules:', err);
                 this.availableRules = [];
@@ -91,11 +116,10 @@
             this.supportiveEditorQueries = [];
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/supportive-queries', {
-                    params: { rule_id: this.supportiveEditorRuleId }
-                });
                 // Clone the array so edits don't mutate the live rule copy
-                this.supportiveEditorQueries = (res.data || []).map(q => ({
+                this.supportiveEditorQueries = ((await API.supportiveQueries({
+                    rule_id: this.supportiveEditorRuleId
+                })) || []).map(q => ({
                     id: q.id,
                     rule_id: q.rule_id,
                     title: q.title,
@@ -160,8 +184,7 @@
         async loadPlaceholderAliasList() {
             this.placeholderAliasEditorBusy = true;
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
-                this.placeholderAliasList = res.data || [];
+                this.placeholderAliasList = (await API.placeholderAliases()) || [];
             } catch (err) {
                 console.error('Failed to load placeholder aliases:', err);
                 this.placeholderAliasEditorError = 'Failed to load aliases from server.';
@@ -186,9 +209,9 @@
 
             try {
                 if (this.editingAliasId) {
-                    await axios.put(`${this.apiUrl}/db/placeholder-aliases/${this.editingAliasId}`, payload);
+                    await API.updatePlaceholderAlias(this.editingAliasId, payload);
                 } else {
-                    await axios.post(this.apiUrl + '/db/placeholder-aliases', payload);
+                    await API.createPlaceholderAlias(payload);
                 }
                 await this.loadPlaceholderAliasList();
                 // Reset form
@@ -219,10 +242,8 @@
             this.placeholderAliasSuggestionsBusy = true;
             this.placeholderAliasEditorError = '';
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases/suggestions', {
-                    params: { limit_events: 50 }
-                });
-                this.placeholderAliasSuggestions = (res.data && res.data.candidates) || [];
+                const data = await API.placeholderAliasSuggestions({ limit_events: 50 });
+                this.placeholderAliasSuggestions = (data && data.candidates) || [];
             } catch (err) {
                 console.error('Failed to load alias field suggestions:', err);
                 this.placeholderAliasEditorError = 'Failed to load field suggestions from recent notables.';
@@ -257,7 +278,7 @@
             }
             this.placeholderAliasEditorBusy = true;
             try {
-                await axios.delete(`${this.apiUrl}/db/placeholder-aliases/${id}`);
+                await API.deletePlaceholderAlias(id);
                 await this.loadPlaceholderAliasList();
                 if (this.editingAliasId === id) {
                     this.editingAliasId = null;
@@ -307,7 +328,7 @@
             this.supportiveEditorBusy = true;
             this.supportiveEditorError = '';
             try {
-                await axios.delete(this.apiUrl + '/db/supportive-queries/' + row.id);
+                await API.deleteSupportiveQuery(row.id);
                 this.supportiveEditorQueries.splice(index, 1);
                 // Refresh rules so Analysis/Closure tabs reflect the change
                 await this.loadRules();
@@ -351,10 +372,10 @@
                     };
 
                     if (q.id) {
-                        await axios.put(this.apiUrl + '/db/supportive-queries/' + q.id, payload);
+                        await API.updateSupportiveQuery(q.id, payload);
                     } else {
-                        const res = await axios.post(this.apiUrl + '/db/supportive-queries', payload);
-                        q.id = res.data.id;
+                        const data = await API.createSupportiveQuery(payload);
+                        q.id = data.id;
                     }
                 }
 
@@ -379,8 +400,7 @@
 
         async checkOllama() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/ollama/health');
-                this.ollamaHealth = res.data;
+                this.ollamaHealth = await API.ollamaHealth();
                 if (this.ollamaHealth.models.length > 0) {
                     const preferred = 'llama3.1:latest';
                     const fallbacks = ['llama3.1:latest', 'llama3.1:8b', 'llama3.1'];
@@ -409,9 +429,9 @@
 
         async loadPlaceholderAliases() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/placeholder-aliases');
+                const items = await API.placeholderAliases();
                 const map = {};
-                for (const item of res.data || []) {
+                for (const item of items || []) {
                     map[item.alias.toLowerCase()] = item.fields || [];
                 }
                 this.placeholderAliases = map;
@@ -462,10 +482,12 @@
             // If the API is down or returns nothing useful, fall back to an empty
             // shell and hydrate the timeline from GET /evidence.
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/investigation-state');
-                this.investigationState = res.data || this._emptyInvestigationState(caseId);
-                if (res.data && res.data.draft_state) {
-                    this._applyAnalysisDraft(res.data.draft_state);
+                const data = await API.triageInvestigationState(caseId);
+                this.investigationState = data || this._emptyInvestigationState(caseId);
+                // Autosave drafts (ported from main): resume unfinished UI
+                // work when the shared state carries a draft snapshot.
+                if (data && data.draft_state) {
+                    this._applyAnalysisDraft(data.draft_state);
                 }
             } catch (err) {
                 console.error('Failed to load investigation state:', err);
@@ -488,10 +510,8 @@
 
             let rows = [];
             try {
-                const res = await axios.get(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
-                );
-                rows = Array.isArray(res.data) ? res.data : [];
+                const data = await API.triageEvidence(caseId);
+                rows = Array.isArray(data) ? data : [];
             } catch (err) {
                 console.warn('Could not load evidence ledger for timeline:', err);
                 return;
@@ -593,10 +613,8 @@
             }
             // Final attempt: match live evidence list by title
             try {
-                const res = await axios.get(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence'
-                );
-                const rows = Array.isArray(res.data) ? res.data : [];
+                const data = await API.triageEvidence(this.analysisCaseId);
+                const rows = Array.isArray(data) ? data : [];
                 const title = String(item.title || '').trim().toLowerCase();
                 const source = String(item.source_system || '').trim().toLowerCase();
                 let match = rows.find((r) =>
@@ -658,10 +676,8 @@
          */
         async _deleteEvidenceViaRewrite(idsToRemove, deleteAll) {
             const caseId = this.analysisCaseId;
-            const listRes = await axios.get(
-                this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence'
-            );
-            const rows = Array.isArray(listRes.data) ? listRes.data : [];
+            const listData = await API.triageEvidence(caseId);
+            const rows = Array.isArray(listData) ? listData : [];
             const removeSet = new Set((idsToRemove || []).map((id) => Number(id)));
 
             const remaining = deleteAll
@@ -686,16 +702,13 @@
 
             let lastState = null;
             for (const sourceSystem of Object.keys(bySource)) {
-                const res = await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence',
-                    {
-                        source_system: sourceSystem,
-                        replace_existing: true,
-                        entries: bySource[sourceSystem]
-                    }
-                );
-                if (res.data && res.data.investigation_state) {
-                    lastState = res.data.investigation_state;
+                const data = await API.saveEvidence(caseId, {
+                    source_system: sourceSystem,
+                    replace_existing: true,
+                    entries: bySource[sourceSystem]
+                });
+                if (data && data.investigation_state) {
+                    lastState = data.investigation_state;
                 }
             }
             return lastState;
@@ -707,10 +720,7 @@
                 throw new Error('No evidence ids to delete');
             }
             try {
-                return await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/batch-delete',
-                    { ids: uniqueIds }
-                );
+                return { data: await API.deleteEvidenceBatch(this.analysisCaseId, uniqueIds) };
             } catch (err) {
                 const status = err.response && err.response.status;
                 if (status === 404 || status === 405) {
@@ -724,9 +734,7 @@
 
         async _postDeleteAll() {
             try {
-                return await axios.post(
-                    this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence/delete-all'
-                );
+                return { data: await API.deleteAllEvidence(this.analysisCaseId) };
             } catch (err) {
                 const status = err.response && err.response.status;
                 if (status === 404 || status === 405) {
@@ -930,16 +938,16 @@
                 // remains responsible for using the complete evidence ledger.
                 const priorAnalysisText = (this.analysisResult && this.analysisResult.analysis || '').toString().trim();
 
-                const res = await axios.post(this.apiUrl + '/db/analyze', {
+                const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: this.analysisModel,
+                    stage_models: this.stageModels || {},
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: 'initial'
                 }, { signal: this.analysisAbortController.signal });
                 // Ignore stale responses if a newer analysis has been started or cancelled.
                 if (requestId === this.analysisRequestId) {
-                    const newResult = res.data;
                     // If the new response lacks phase2_queries but we previously had
                     // them, preserve the existing list so phase 2 cards do not vanish.
                     if (
@@ -957,7 +965,7 @@
                     this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
-                    const metrics = res.data && res.data.ollama_metrics;
+                    const metrics = newResult && newResult.ollama_metrics;
                     const detail = metrics && metrics.total_duration_seconds
                         ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
                         : '';
@@ -980,24 +988,25 @@
         },
 
         getPhase2Key(q) {
-            const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
-            if (!title) {
-                return 'phase2:title:unknown';
-            }
-            return 'phase2:' + title.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(q && q.title);
+            return s ? 'phase2:' + s : 'phase2:title:unknown';
         },
 
         getPhase2KeyFromTitle(title) {
-            const normalized = (title || '').toString().toLowerCase().trim();
-            if (!normalized) {
-                return 'phase2:title:unknown';
-            }
-            return 'phase2:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(title);
+            return s ? 'phase2:' + s : 'phase2:title:unknown';
+        },
+
+        // Read one CardCell (or {} when the card has no state yet).
+        // @param {string} key @returns {CardCell}
+        _phase2Card(key) {
+            const cards = this.phase2CardState || {};
+            return cards[key] || {};
         },
 
         getPhase2Template(q) {
             const key = this.getPhase2Key(q);
-            const existing = this.phase2EditedQueries[key];
+            const existing = this._phase2Card(key).editedSpl;
             if (existing !== undefined && existing !== null && existing !== '') {
                 return existing;
             }
@@ -1006,18 +1015,18 @@
             // value (e.g., src_ip) for this case. Subsequent edits operate on
             // the hard-coded version, matching the initial supportive queries.
             const resolved = this.renderPhase2Query(raw);
-            this.phase2EditedQueries[key] = resolved;
+            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), editedSpl: resolved } };
             return resolved;
         },
 
         onPhase2TemplateInput(q, value) {
             const key = this.getPhase2Key(q);
-            this.phase2EditedQueries[key] = value;
+            this._updateCardField('phase2CardState', key, 'editedSpl', value);
         },
 
         copyPhase2SPL(q) {
             const key = this.getPhase2Key(q);
-            const template = (this.phase2EditedQueries[key] || q.spl || '').toString();
+            const template = (this._phase2Card(key).editedSpl || q.spl || '').toString();
             const text = this.renderPhase2Query(template);
             if (!text) {
                 alert('No SPL query text available to copy');
@@ -1068,16 +1077,16 @@
                     ''
                 ).toString().trim();
 
-                const res = await axios.post(this.apiUrl + '/db/analyze', {
+                const newResult = await API.analyze({
                     case_id: this.analysisCaseId,
                     model: effectiveModel,
+                    stage_models: this.stageModels || {},
                     context: combinedContext,
                     prior_analysis: priorAnalysisText,
                     analysis_stage: priorAnalysisText ? 'follow_up' : 'initial',
                     analysis_phase: phaseNumber
                 }, { signal: this.analysisAbortController.signal });
                 if (requestId === this.analysisRequestId) {
-                    const newResult = res.data;
                     if (
                         (!newResult.phase2_queries || !newResult.phase2_queries.length) &&
                         this.analysisResult &&
@@ -1093,7 +1102,7 @@
                     this._storeAnalysisStateSnapshot();
                 }
                 if (requestId === this.analysisRequestId) {
-                    const metrics = res.data && res.data.ollama_metrics;
+                    const metrics = newResult && newResult.ollama_metrics;
                     const detail = metrics && metrics.total_duration_seconds
                         ? ` Ollama generated ${metrics.eval_tokens || 0} tokens in ${metrics.total_duration_seconds}s.`
                         : '';
@@ -1124,10 +1133,7 @@
             this.supportiveDraftBusy = true;
             this.supportiveDraftError = '';
             try {
-                const res = await axios.post(this.apiUrl + '/db/supportive-queries/draft', {
-                    case_id: this.analysisCaseId,
-                });
-                const data = res.data || {};
+                const data = (await API.draftSupportiveQueries({ case_id: this.analysisCaseId })) || {};
                 if (!data.draft_queries || !data.draft_queries.length) {
                     this.supportiveDraftError = data.playbook_available
                         ? 'A supportive playbook already exists for this rule.'
@@ -1156,12 +1162,11 @@
             this.supportiveImportBusy = true;
             this.supportiveImportError = '';
             try {
-                const res = await axios.post(this.apiUrl + '/db/supportive-queries/import-results', {
+                const data = (await API.importSupportiveResults({
                     case_id: this.analysisCaseId,
                     filename: payload.filename || null,
                     content: payload.content,
-                });
-                const data = res.data || {};
+                })) || {};
                 this.supportiveEditorRuleId = data.rule_id || '';
                 this.supportiveEditorQueries = (data.draft_queries || []).map((q, index) => ({
                     ...q,
@@ -1187,9 +1192,10 @@
             const entries = [];
             for (const q of phase2Queries) {
                 const key = this.getPhase2Key(q);
-                const resultText = (this.phase2ManualResults[key] || '').trim();
-                const queryText = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
-                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                const card = this._phase2Card(key);
+                const resultText = (card.resultText || '').trim();
+                const queryText = (card.editedSpl || q.spl || '').toString().trim();
+                const resultStatus = card.status || 'success';
                 // Do not turn untouched generated cards into durable pending
                 // evidence. They create false closure blockers and are not
                 // useful to later phases. Explicit no-results/failure states
@@ -1198,14 +1204,14 @@
                     continue;
                 }
 
-                const coverageNote = (this.phase2CoverageNotes && this.phase2CoverageNotes[key] || '').trim();
+                const coverageNote = (card.coverage || '').trim();
                 entries.push({
                     query_title: q.title || 'Unnamed phase 2 query',
                     query_text: queryText,
                     result_text: resultText,
                     analyst_summary: coverageNote ? 'Coverage: ' + coverageNote : '',
                     finding_type: 'neutral',
-                    question_resolution: 'not_resolved',
+                    question_resolution: 'not_resolved', // advisory label; state engine derives resolution from evidence
                     target_questions: q.target_questions || [],
                     result_status: resultStatus,
                 });
@@ -1215,14 +1221,14 @@
                 return;
             }
 
-            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            const data = await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'phase' + (this.followUpPhase || 2) + '_manual',
                 replace_existing: true,
                 entries,
             });
 
-            if (res.data && res.data.investigation_state) {
-                this.investigationState = res.data.investigation_state;
+            if (data && data.investigation_state) {
+                this.investigationState = data.investigation_state;
             }
 
             if (!options.silent) {
@@ -1237,32 +1243,29 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'phase' + (this.followUpPhase || 2) + '_manual' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'phase' + (this.followUpPhase || 2) + '_manual' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getPhase2KeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.phase2FindingTypes[key] = (raw.finding_type || 'neutral').toString();
-                    this.phase2ResolutionTypes[key] = (raw.question_resolution || 'not_resolved').toString();
-                    if (raw.target_questions && raw.target_questions.length) {
-                        this.phase2ResolutionQuestions[key] = raw.target_questions[0].toString();
-                    }
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                     if (raw.query_text) {
-                        this.phase2EditedQueries[key] = raw.query_text.toString();
+                        saved[key].editedSpl = raw.query_text.toString();
                     }
                 }
-                this.phase2ManualResults = saved;
+                this.phase2CardState = saved;
             } catch (err) {
                 console.error('Failed to load saved phase 2 evidence:', err);
             }
         },
 
         async saveSupportiveEvidenceAndContinue() {
-            const hadEntries = this.supportiveManualResults && Object.keys(this.supportiveManualResults).some(
-                key => (this.supportiveManualResults[key] || '').trim()
+            const cards = this.phase2CardState || {};
+            const hadEntries = Object.keys(cards).some(
+                key => String(cards[key].resultText || '').trim()
             );
             await this.saveSupportiveEvidence({ silent: true });
             // Navigate even when nothing was newly typed — the analyst may
@@ -1281,15 +1284,21 @@
         },
 
         async saveSupportiveEvidence(options = {}) {
+            if (this.supportiveSaveBusy) {
+                return;
+            }
             if (!this.analysisCaseId || !this.analysisRule || !this.analysisRule.supportive_queries) {
                 return;
             }
+            this.supportiveSaveBusy = true;
+            try {
 
             const entries = [];
             for (const q of this.analysisRule.supportive_queries) {
                 const key = this.getSupportiveKey(q);
-                const resultText = (this.supportiveManualResults[key] || '').trim();
-                const resultStatus = (this.evidenceResultStatuses && this.evidenceResultStatuses[key]) || 'success';
+                const card = this._phase2Card(key);
+                const resultText = String(card.resultText || '').trim();
+                const resultStatus = card.status || 'success';
                 // Save legitimate zero-result / failure executions even with
                 // an empty result body — a 0-event query is real evidence.
                 // Only a blank, untouched 'success' entry is skipped.
@@ -1311,19 +1320,22 @@
                 return;
             }
 
-            const res = await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            const data = await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'supportive_manual',
                 replace_existing: true,
                 entries,
             });
 
-            if (res.data && res.data.investigation_state) {
-                this.investigationState = res.data.investigation_state;
+            if (data && data.investigation_state) {
+                this.investigationState = data.investigation_state;
             }
 
             if (!options.silent) {
                 alert('Supportive evidence saved for case ' + this.analysisCaseId);
                 await this.loadInvestigationState(this.analysisCaseId);
+            }
+            } finally {
+                this.supportiveSaveBusy = false;
             }
         },
 
@@ -1335,7 +1347,7 @@
             const entries = [];
             for (const q of this.analysisSourceNotable.parse_assessment.generic_queries) {
                 const key = this.getEnrichmentKey(q);
-                const resultText = (this.enrichmentManualResults[key] || '').trim();
+                const resultText = String(this._phase2Card(key).resultText || '').trim();
                 if (!resultText) {
                     continue;
                 }
@@ -1353,7 +1365,7 @@
                 return;
             }
 
-            await axios.post(this.apiUrl + '/db/triage/' + encodeURIComponent(this.analysisCaseId) + '/evidence', {
+            await API.saveEvidence(this.analysisCaseId, {
                 source_system: 'generic_enrichment',
                 replace_existing: true,
                 entries,
@@ -1371,17 +1383,17 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'supportive_manual' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'supportive_manual' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getSupportiveKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.supportiveFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                 }
-                this.supportiveManualResults = saved;
+                this.phase2CardState = { ...(this.phase2CardState || {}), ...saved };
             } catch (err) {
                 console.error('Failed to load saved supportive evidence:', err);
             }
@@ -1393,17 +1405,17 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/evidence', {
-                    params: { source_system: 'generic_enrichment' }
-                });
+                const items = await API.triageEvidence(caseId, { source_system: 'generic_enrichment' });
                 const saved = {};
-                for (const item of (res.data || [])) {
+                for (const item of (items || [])) {
                     const key = this.getEnrichmentKeyFromTitle(item.query_title || '');
                     const raw = item.raw_result || {};
-                    saved[key] = (raw.result_text || '').toString();
-                    this.enrichmentFindingTypes[key] = (raw.finding_type || 'neutral').toString();
+                    saved[key] = {
+                        resultText: (raw.result_text || '').toString(),
+                        findingType: (raw.finding_type || 'neutral').toString(),
+                    };
                 }
-                this.enrichmentManualResults = saved;
+                this.phase2CardState = { ...(this.phase2CardState || {}), ...saved };
             } catch (err) {
                 console.error('Failed to load saved enrichment evidence:', err);
             }
@@ -1429,6 +1441,44 @@
                 });
         },
 
+        // Merge one patch into a card cell (the S7 one-keying scheme).
+        // @param {string} key @param {Partial<CardCell>} patch
+        _mergeCard(key, patch) {
+            this.phase2CardState = { ...(this.phase2CardState || {}), [key]: { ...this._phase2Card(key), ...patch } };
+        },
+
+        // S10 debounced draft auto-save: every analyst keystroke in a card
+        // field funnels through _updateCardField, which updates state and
+        // schedules a single trailing-edge snapshot write (localStorage) ~1.2s
+        // later. A refresh or crash now loses at most the last 1.2s of
+        // typing instead of everything since the last explicit save.
+        _updateCardField(mapName, key, field, value) {
+            this._mergeCard(key, { [field]: value });
+            this._scheduleDraftSave();
+        },
+
+        updateSupportiveResult(key, value) {
+            this._mergeCard(key, { resultText: value });
+            this._scheduleDraftSave();
+        },
+
+        _scheduleDraftSave() {
+            if (!this.analysisCaseId) {
+                return;
+            }
+            if (this._draftSaveTimer) {
+                clearTimeout(this._draftSaveTimer);
+            }
+            this._draftSaveTimer = setTimeout(() => {
+                this._draftSaveTimer = null;
+                try {
+                    this._storeAnalysisStateSnapshot();
+                } catch (err) {
+                    console.warn('Draft auto-save failed:', err);
+                }
+            }, 1200);
+        },
+
         _storeAnalysisStateSnapshot() {
             if (!this.analysisCaseId) {
                 return;
@@ -1440,15 +1490,9 @@
                 analysisModel: this.analysisModel,
                 phase2Model: this.phase2Model,
                 followUpPhase: this.followUpPhase,
-                supportiveManualResults: this.supportiveManualResults,
-                supportiveFindingTypes: this.supportiveFindingTypes,
-                enrichmentManualResults: this.enrichmentManualResults,
-                enrichmentFindingTypes: this.enrichmentFindingTypes,
+                phase2CardState: this.phase2CardState,
                 phase2EditedQueries: this.phase2EditedQueries,
-                phase2ManualResults: this.phase2ManualResults,
-                phase2FindingTypes: this.phase2FindingTypes,
-                phase2ResolutionTypes: this.phase2ResolutionTypes,
-                phase2ResolutionQuestions: this.phase2ResolutionQuestions,
+                phase2CardState: this.phase2CardState,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,
@@ -1537,32 +1581,33 @@
                 if (snapshot.followUpPhase) {
                     this.followUpPhase = snapshot.followUpPhase;
                 }
-                if (snapshot.supportiveManualResults) {
-                    this.supportiveManualResults = snapshot.supportiveManualResults;
+                if (snapshot.phase2CardState) {
+                    this.phase2CardState = snapshot.phase2CardState;
                 }
-                if (snapshot.supportiveFindingTypes) {
-                    this.supportiveFindingTypes = snapshot.supportiveFindingTypes;
-                }
-                if (snapshot.enrichmentManualResults) {
-                    this.enrichmentManualResults = snapshot.enrichmentManualResults;
-                }
-                if (snapshot.enrichmentFindingTypes) {
-                    this.enrichmentFindingTypes = snapshot.enrichmentFindingTypes;
+                // Pre-fold snapshots stored supportive/enrichment drafts in
+                // four parallel per-kind maps; translate them into cardState
+                // cells so old drafts survive the schema change. (Phase 2
+                // cards were already folded in S7, so both shapes can coexist
+                // in one snapshot.)
+                const folded = {};
+                const foldMap = (map, fieldName) => {
+                    for (const [k, v] of Object.entries(snapshot[map] || {})) {
+                        if (typeof v === 'object' && v !== null) {
+                            folded[k] = { ...(folded[k] || {}), ...v };
+                        } else {
+                            folded[k] = { ...(folded[k] || {}), [fieldName]: v };
+                        }
+                    }
+                };
+                foldMap('supportiveManualResults', 'resultText');
+                foldMap('supportiveFindingTypes', 'findingType');
+                foldMap('enrichmentManualResults', 'resultText');
+                foldMap('enrichmentFindingTypes', 'findingType');
+                if (Object.keys(folded).length) {
+                    this.phase2CardState = { ...(this.phase2CardState || {}), ...folded };
                 }
                 if (snapshot.phase2EditedQueries) {
                     this.phase2EditedQueries = snapshot.phase2EditedQueries;
-                }
-                if (snapshot.phase2ManualResults) {
-                    this.phase2ManualResults = snapshot.phase2ManualResults;
-                }
-                if (snapshot.phase2FindingTypes) {
-                    this.phase2FindingTypes = snapshot.phase2FindingTypes;
-                }
-                if (snapshot.phase2ResolutionTypes) {
-                    this.phase2ResolutionTypes = snapshot.phase2ResolutionTypes;
-                }
-                if (snapshot.phase2ResolutionQuestions) {
-                    this.phase2ResolutionQuestions = snapshot.phase2ResolutionQuestions;
                 }
                 if (snapshot.analysisResult) {
                     this.analysisResult = snapshot.analysisResult;
@@ -1576,6 +1621,25 @@
             } catch (err) {
                 console.error('Failed to load analysis state:', err);
             }
+        },
+
+        // S12: map the persisted evidence timeline into display rows for the
+        // loop timeline panel. Input arrives chronological (ascending
+        // created_at, sorted by the backend); rows carry only what the UI
+        // needs, with defensive fallbacks for legacy rows.
+        buildLoopTimeline(state) {
+            const entries = (state && state.evidence_summary && state.evidence_summary.timeline) || [];
+            return entries.map((entry, i) => ({
+                key: 'tl:' + (entry.id != null ? entry.id : 'r' + i) + ':' + String(entry.title || '').slice(0, 24),
+                title: entry.title || 'Untitled evidence',
+                sourceSystem: entry.source_system || 'unknown',
+                resultStatus: entry.result_status || 'success',
+                findingType: entry.finding_type || 'neutral',
+                deltaHint: entry.confidence_delta_hint || 'none',
+                rationale: entry.ai_verdict_rationale || '',
+                summary: entry.summary || '',
+                createdAt: entry.created_at || '',
+            }));
         },
 
         formatLoopStatus(value) {
@@ -1617,11 +1681,8 @@
             if (q && q.id != null) {
                 return `id:${q.id}`;
             }
-            const title = (q && q.title ? q.title : '').toString().toLowerCase().trim();
-            if (!title) {
-                return 'title:unknown';
-            }
-            return 'title:' + title.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(q && q.title);
+            return s ? 'title:' + s : 'title:unknown';
         },
 
         getEnrichmentKey(q) {
@@ -1633,11 +1694,8 @@
         },
 
         getSupportiveKeyFromTitle(title) {
-            const normalized = (title || '').toString().toLowerCase().trim();
-            if (!normalized) {
-                return 'title:unknown';
-            }
-            return 'title:' + normalized.replace(/\s+/g, '_').slice(0, 64);
+            const s = _slug64(title);
+            return s ? 'title:' + s : 'title:unknown';
         },
 
         getEnrichmentKeyFromTitle(title) {
@@ -1695,6 +1753,127 @@
                 });
         },
 
+        _setSplunkRunStatus(statusKey, state, message) {
+            // Inline per-card status instead of blocking alert() dialogs:
+            // modal alerts can wedge embedded webviews and steal focus from
+            // the analyst mid-loop. state: 'running' | 'complete' | 'error'.
+            const short = state === 'running' ? 'Running…' : state === 'error' ? 'Run failed' : 'Saved ✓';
+            const [kind, ...keyParts] = String(statusKey || '').split(':');
+            const key = keyParts.join(':');
+            if (key) {
+                this.phase2CardState = {
+                    ...(this.phase2CardState || {}),
+                    [key]: { ...this._phase2Card(key), runStatus: { state, message, short } },
+                };
+            }
+        },
+
+        async runSplunkSearch({ q, kind }) {
+            const isPhase2 = kind === 'phase2';
+            const key = isPhase2 ? this.getPhase2Key(q) : this.getSupportiveKey(q);
+            const statusKey = (isPhase2 ? 'phase2:' : 'supportive:') + key;
+            if (!this.analysisCaseId) {
+                this._setSplunkRunStatus(statusKey, 'error', 'Select a triage case first');
+                return;
+            }
+            const title = ((q && q.title) || '').toString().trim() || 'Unnamed query';
+            const template = isPhase2
+                ? (this._phase2Card(key).editedSpl || (q && q.spl) || '').toString()
+                : ((q && q.spl_query) || '').toString();
+            if (!template.trim()) {
+                this._setSplunkRunStatus(statusKey, 'error', 'No SPL query text available to run');
+                return;
+            }
+
+            this._setSplunkRunStatus(statusKey, 'running', 'Running SPL via the configured search backend…');
+            try {
+                const data = (await API.splunkSearchOne({
+                    case_id: this.analysisCaseId,
+                    query_title: title,
+                    spl: template,
+                    target_questions: (q && q.target_questions) || [],
+                })) || {};
+                const summary = this.formatSplunkAutoSummary(data);
+                this._mergeCard(key, { resultText: summary });
+                if (data.investigation_state) {
+                    this.investigationState = data.investigation_state;
+                }
+                this._setSplunkRunStatus(
+                    statusKey,
+                    'complete',
+                    'Run complete (' + (data.result_status || 'success') + ', ' + (data.row_count || 0) + ' rows). Saved to the evidence ledger as splunk_auto evidence.'
+                );
+            } catch (err) {
+                console.error('Splunk search-one run failed:', err);
+                const detail = err.response && err.response.data ? err.response.data.detail : null;
+                let msg = err.message;
+                if (typeof detail === 'string') {
+                    msg = detail;
+                } else if (detail && detail.message) {
+                    msg = detail.message + ((detail.unresolved_tokens || []).length ? ' Missing: ' + detail.unresolved_tokens.join(', ') : '');
+                }
+                this._setSplunkRunStatus(statusKey, 'error', 'Run failed: ' + msg);
+            }
+        },
+
+        async runAllSupportiveSplunk() {
+            // Sequential, not parallel: a real Splunk backend rate-limits and
+            // the per-card status chips stay honest one card at a time. Cards
+            // already in the 'running' state are skipped, not re-run.
+            if (!this.analysisCaseId) {
+                this.runAllSummary = 'Select a triage case before running all queries.';
+                return;
+            }
+            const queries = ((this.analysisRule && this.analysisRule.supportive_queries) || []);
+            if (!queries.length) {
+                this.runAllSummary = 'No supportive queries configured for this rule.';
+                return;
+            }
+            this.runAllBusy = true;
+            this.runAllSummary = '';
+            const summary = { ok: 0, failed: 0, skipped: 0 };
+            try {
+                for (const q of queries) {
+                    const current = this._phase2Card(this.getSupportiveKey(q)).runStatus;
+                    if (current && current.state === 'running') {
+                        summary.skipped += 1;
+                        continue;
+                    }
+                    try {
+                        await this.runSplunkSearch({ q, kind: 'supportive' });
+                        const after = this._phase2Card(this.getSupportiveKey(q)).runStatus;
+                        if (after && after.state === 'error') {
+                            summary.failed += 1;
+                        } else {
+                            summary.ok += 1;
+                        }
+                    } catch (err) {
+                        summary.failed += 1;
+                        console.error('Run All: card failed unexpectedly:', err);
+                    }
+                }
+            } finally {
+                this.runAllBusy = false;
+            }
+            this.runAllSummary = 'Run All finished: ' + summary.ok + ' saved, ' + summary.failed + ' failed'
+                + (summary.skipped ? ', ' + summary.skipped + ' skipped (already running)' : '') + '.';
+        },
+
+        formatSplunkAutoSummary(data) {
+            const rows = (data && data.rows) || [];
+            const lines = ['[auto-run via /api/splunk/search-one — ' + (data.result_status || '') + ' — ' + (data.row_count || 0) + ' rows — saved as splunk_auto evidence]'];
+            if (data.spl) {
+                lines.push(data.spl);
+            }
+            for (const row of rows.slice(0, 10)) {
+                lines.push(row.raw || Object.keys(row).map(k => k + '=' + row[k]).join(' '));
+            }
+            if ((data.row_count || 0) > 10) {
+                lines.push('... ' + (data.row_count - 10) + ' more row(s) in the saved evidence.');
+            }
+            return lines.join('\n');
+        },
+
         renderPhase2Query(template) {
             const synthetic = { spl_query: template };
             return this.renderSupportiveQuery(synthetic);
@@ -1708,7 +1887,7 @@
             }
 
             const key = this.getPhase2Key(q);
-            const template = (this.phase2EditedQueries[key] || q.spl || '').toString().trim();
+            const template = (this._phase2Card(key).editedSpl || q.spl || '').toString().trim();
             if (!template) {
                 alert('Cannot save: SPL query is empty');
                 return;
@@ -1718,7 +1897,7 @@
             const description = (q.description || '').toString().trim();
 
             try {
-                await axios.post(this.apiUrl + '/db/supportive-queries', {
+                await API.createSupportiveQuery({
                     rule_id: rule.rule_id,
                     title,
                     description,

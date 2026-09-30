@@ -1,4 +1,4 @@
-﻿.venv/
+.venv/
 venv/
 __pycache__/
 *.pyc
@@ -25,10 +25,22 @@ splunk-es-backup-toolkit.old/
 .DS_Store
 
 # Modularization archives (kept locally, not committed)
-web/Old_archive/
+scripts/attic/web-Old_archive/
 scripts/_archive_oneoffs/
 web/Old/app.js-pre-modular-monolith.bak
 
 # Freebuff local state (never commit)
 .freebuff/
+
+# Backup / scratch files (Justin's snapshot habit — never commit these)
+*.bak
+*.bak*
+* - Copy*
+* - copy*
+*.orig
+*~
 .vercel
+.venv314/
+
+# Test/tool caches (never commit)
+.pytest_cache/

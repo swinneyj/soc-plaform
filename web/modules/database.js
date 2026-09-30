@@ -141,8 +141,7 @@
 
         async loadHistoricalNotables() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/notables/historical', { params: { limit: 20 } });
-                this.historicalNotables = res.data || [];
+                this.historicalNotables = (await API.historicalNotables({ limit: 20 })) || [];
             } catch (err) {
                 console.error('Failed to load historical pasted notables:', err);
                 this.historicalNotables = [];
@@ -165,8 +164,8 @@
             this.triageNotableDetails[id] = { loading: true, error: null, data: null };
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/notables/' + id);
-                this.triageNotableDetails[id] = { loading: false, error: null, data: res.data };
+                const data = await API.notable(id);
+                this.triageNotableDetails[id] = { loading: false, error: null, data };
             } catch (err) {
                 console.error('Failed to load closed notable details:', err);
                 const detail = (err.response && err.response.data && err.response.data.detail) || err.message;
@@ -185,7 +184,7 @@
 
             const id = notableSummary.id;
             try {
-                await axios.post(this.apiUrl + '/db/notables/' + id + '/delete');
+                await API.deleteNotable(id);
                 // Drop any cached details for this id so the details panel closes cleanly
                 if (this.triageNotableDetails && this.triageNotableDetails[id]) {
                     delete this.triageNotableDetails[id];
@@ -201,7 +200,7 @@
             const eventIds = Array.isArray(ids) ? ids : [];
             if (!eventIds.length || !confirm('Permanently delete ' + eventIds.length + ' selected closed notable(s)?')) return;
             try {
-                await axios.post(this.apiUrl + '/db/notables/batch-delete', { event_ids: eventIds });
+                await API.batchDeleteNotables({ event_ids: eventIds });
                 await this.loadHistoricalNotables();
                 await this.loadDbStats();
             } catch (err) {
@@ -219,8 +218,7 @@
                     params.verdict = this.dbVerdictFilter;
                 }
 
-                const res = await axios.get(this.apiUrl + '/db/triage', { params });
-                this.triageData = res.data;
+                this.triageData = await API.triage(params);
             } catch (err) {
                 console.error('Failed to load triage data:', err);
                 this.triageData = [];
@@ -229,10 +227,7 @@
 
         async loadAnalysisCases() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage', {
-                    params: { limit: 1000 }
-                });
-                this.analysisCases = res.data;
+                this.analysisCases = await API.triage({ limit: 1000 });
             } catch (err) {
                 console.error('Failed to load analysis cases:', err);
                 this.analysisCases = [];
@@ -241,14 +236,12 @@
 
         async loadDbStats() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/stats');
-                this.dbStats = res.data;
+                this.dbStats = await API.triageStats();
             } catch (err) {
                 console.error('Failed to load DB stats:', err);
             }
             try {
-                const res = await axios.get(this.apiUrl + '/db/operations');
-                this.operationsStats = res.data;
+                this.operationsStats = await API.operations();
             } catch (err) {
                 console.error('Failed to load operations dashboard:', err);
             }
@@ -256,8 +249,7 @@
 
         async loadRecentNotables() {
             try {
-                const res = await axios.get(this.apiUrl + '/db/notables', { params: { limit: 20 } });
-                this.recentNotables = res.data;
+                this.recentNotables = await API.notables({ limit: 20 });
             } catch (err) {
                 console.error('Failed to load recent pasted notables:', err);
                 this.recentNotables = [];
@@ -275,8 +267,8 @@
             this.triageNotableDetails[caseId] = { loading: true, error: null, data: null };
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage/' + encodeURIComponent(caseId) + '/notable');
-                this.triageNotableDetails[caseId] = { loading: false, error: null, data: res.data };
+                const data = await API.triageNotable(caseId);
+                this.triageNotableDetails[caseId] = { loading: false, error: null, data };
             } catch (err) {
                 this.triageNotableDetails[caseId] = {
                     loading: false,
@@ -298,12 +290,11 @@
 
             this.notablePasteSaving = true;
             try {
-                const res = await axios.post(this.apiUrl + '/db/notables/paste', {
+                this.notablePasteResult = await API.pasteNotable({
                     raw_text: this.notablePasteText,
                     redaction_enabled: this.notableRedactionEnabled,
                     historical: this.notableHistorical
                 });
-                this.notablePasteResult = res.data;
                 this.notablePasteText = '';
                 this.loadRecentNotables();
                 this.loadDbStats();
@@ -320,10 +311,7 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/notables', {
-                    params: { delete_event_id: notable.id }
-                });
-                this.recentNotables = res.data;
+                this.recentNotables = await API.notables({ delete_event_id: notable.id });
                 await this.loadDbStats();
             } catch (err) {
                 alert('Error: ' + (err.response?.data?.detail || err.message));
@@ -340,7 +328,7 @@
             }
 
             try {
-                await axios.post(this.apiUrl + '/db/notables/batch-delete', {
+                await API.batchDeleteNotables({
                     event_ids: this.selectedNotableIds,
                 });
                 this.selectedNotableIds = [];
@@ -358,7 +346,7 @@
             }
             this.notablePromotingId = notable.id;
             try {
-                await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                await API.promoteNotable(notable.id);
                 await this.loadRecentNotables();
                 await this.loadTriageData();
                 await this.loadAnalysisCases();
@@ -376,19 +364,43 @@
             }
 
             const candidates = this.filteredRecentNotables.filter(n => !n.historical && !n.promoted_case_id);
+            const skipped = (this.filteredRecentNotables || []).length - candidates.length;
             if (!candidates.length) {
+                // Feedback instead of a silent no-op: the analyst clicked the
+                // button and deserves to know why nothing happened.
+                this.bulkPromoteSummary = 'No open pasted notables to promote.'
+                    + (skipped > 0 ? ' (' + skipped + ' skipped: historical or already promoted)' : '');
                 return;
             }
 
             this.bulkPromoteNotablesRunning = true;
+            this.bulkPromoteSummary = '';
+            this.bulkPromoteOutcome = {};
+            this.bulkPromoteProgress = { done: 0, total: candidates.length };
+            const outcome = {};
             try {
                 for (const notable of candidates) {
                     try {
-                        await axios.post(this.apiUrl + '/db/notables/' + notable.id + '/promote');
+                        await API.promoteNotable(notable.id);
+                        outcome[notable.id] = { state: 'promoted' };
                     } catch (err) {
-                        console.error('Failed to promote notable', notable.id, ':', err.response?.data?.detail || err.message);
+                        const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'promote failed';
+                        outcome[notable.id] = { state: 'failed', detail };
+                        console.error('Failed to promote notable', notable.id, ':', detail);
                     }
+                    // Publish per-item results as they happen so the rows light
+                    // up one by one instead of all at once at the end.
+                    this.bulkPromoteOutcome = { ...outcome };
+                    this.bulkPromoteProgress = {
+                        done: this.bulkPromoteProgress.done + 1,
+                        total: candidates.length,
+                    };
                 }
+
+                const ok = candidates.filter(n => outcome[n.id] && outcome[n.id].state === 'promoted').length;
+                const failed = candidates.length - ok;
+                this.bulkPromoteSummary = 'Bulk promote finished: ' + ok + ' promoted, ' + failed + ' failed'
+                    + (skipped ? ', ' + skipped + ' skipped (historical or already promoted)' : '') + '.';
 
                 await this.loadRecentNotables();
                 await this.loadTriageData();
@@ -396,6 +408,48 @@
                 await this.loadDbStats();
             } finally {
                 this.bulkPromoteNotablesRunning = false;
+                this.bulkPromoteProgress = null;
+            }
+        },
+
+        // S11: case-level evidence ledger. Read-only panel over the durable
+        // supportive_query_results ledger with per-item delete via the same
+        // batch-delete POST route the Analysis tab uses.
+        async loadCaseEvidenceLedger() {
+            const caseId = (this.evidenceLedgerCaseId || '').trim();
+            if (!caseId) {
+                this.evidenceLedgerError = 'Select a case to view its evidence ledger.';
+                return;
+            }
+            this.evidenceLedgerLoading = true;
+            try {
+                this.evidenceLedgerItems = (await API.triageEvidence(caseId)) || [];
+                this.evidenceLedgerError = '';
+            } catch (err) {
+                const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'load failed';
+                this.evidenceLedgerError = 'Failed to load evidence ledger: ' + detail;
+                this.evidenceLedgerItems = [];
+                console.error('Failed to load case evidence ledger:', detail);
+            } finally {
+                this.evidenceLedgerLoading = false;
+            }
+        },
+
+        async deleteEvidenceLedgerItem(item) {
+            const caseId = (this.evidenceLedgerCaseId || '').trim();
+            if (!caseId || !item || item.id == null) {
+                return;
+            }
+            this.evidenceLedgerBusyId = item.id;
+            try {
+                await API.deleteEvidenceBatch(caseId, [Number(item.id)]);
+                this.evidenceLedgerItems = (this.evidenceLedgerItems || []).filter((x) => x.id !== item.id);
+            } catch (err) {
+                const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'delete failed';
+                this.evidenceLedgerError = 'Failed to delete evidence item: ' + detail;
+                console.error('Failed to delete evidence ledger item:', detail);
+            } finally {
+                this.evidenceLedgerBusyId = null;
             }
         },
 
@@ -405,13 +459,8 @@
             }
 
             try {
-                const res = await axios.get(this.apiUrl + '/db/triage', {
-                    params: {
-                        delete_case_id: case_.case_id,
-                        delete_analysis: this.deleteAnalysisWithCase
-                    }
-                });
-                this.triageData = res.data;
+                await API.deleteCase(case_.case_id, this.deleteAnalysisWithCase);
+                this.triageData = await API.triage();
                 await this.loadAnalysisCases();
                 await this.loadDbStats();
             } catch (err) {
@@ -431,7 +480,7 @@
             }
 
             try {
-                await axios.post(this.apiUrl + '/db/triage/batch-delete', {
+                await API.batchDeleteTriage({
                     case_ids: this.selectedTriageCaseIds,
                     delete_analysis: this.deleteAnalysisWithCase,
                 });

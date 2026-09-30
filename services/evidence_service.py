@@ -364,9 +364,16 @@ def build_parse_assessment(fields: Dict[str, str], raw_text: str = "", history: 
 
 
 def synthesize_source_notable_from_case(case) -> Dict[str, Any]:
-    """Generate a structured, realistic notable fallback when no SplunkEvent row exists."""
+    """Generate a structured, realistic notable fallback when no SplunkEvent row exists.
+
+    Reads the case's stored verdict only to make the synthesized notable
+    *look like the referral the platform originally received* (urgency,
+    severity, ES disposition strings) — presentation, not evidence. The
+    investigation loop derives its own verdict from the ledger and never
+    reads this disposition back.
+    """
     now_iso = getattr(case, "triaged_at", None)
-    now_str = now_iso.isoformat() if hasattr(now_iso, "isoformat") else datetime.datetime.utcnow().isoformat()
+    now_str = now_iso.isoformat() if hasattr(now_iso, "isoformat") else datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None).isoformat()
 
     summary = (getattr(case, "analysis_summary", "") or "").strip()
     rule_name = (getattr(case, "rule_name", "") or "Security Detection").strip()

@@ -22,7 +22,7 @@ The Database tab is a local operational view of data received from Splunk ES, no
 
 Source references:
 
-- [ingest_notables.py](ingest_notables.py)
+- [scripts/attic/ingest_notables.py](scripts/attic/ingest_notables.py) (archived one-shot ingest; live ingestion is the Splunk-boundary + paste flow)
 - [data_source_catalog.json](data_source_catalog.json)
 - [Database and API map](docs/API_DB_VISUAL_MAP.md)
 
@@ -46,6 +46,11 @@ ollama pull llama3.1:latest
 ./scripts/start_platform.sh
 ~~~
 
+**Model note:** the platform auto-resolves an installed model at request time —
+an explicit request wins, then `OLLAMA_MODEL` from `.env`, then a best-match
+preference (`llama3.1:latest` preferred). Any pulled `llama3.1*` tag works;
+set `OLLAMA_MODEL` in `.env` to pin a specific one.
+
 Open http://127.0.0.1:8000/index.modular.html and verify:
 
 ~~~bash
@@ -60,6 +65,16 @@ For native API testing:
 export DATABASE_URL='postgresql+psycopg://<db-user>:<db-password>@localhost:5432/soc_platform'
 ./scripts/restart_api.sh
 ~~~
+
+## Running the tests
+
+The regression suite (280+ tests and growing, no database or Ollama required) guards the evidence ledger, closure gate, model resolution, and Phase 3+ query generation:
+
+~~~bash
+.venv/bin/python -m pytest
+~~~
+
+**Before adopting any external snapshot or history rewrite, run this first** — it fails in under a second if the regression fixes have been overwritten.
 
 ## Investigation workflow
 
@@ -82,7 +97,7 @@ Each follow-up phase has targeted queries, a phase-specific evidence source, inq
 - docs/ — operator and architecture references
 - Data/Reports/ — generated reports
 
-Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [multi-user-workflow.md](multi-user-workflow.md).
+Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [docs/multi-user-workflow.md](docs/multi-user-workflow.md).
 
 ## Security
 

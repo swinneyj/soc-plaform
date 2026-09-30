@@ -110,7 +110,7 @@ In the Analysis tab, when `phase2_queries` are present:
   - Responses only update `analysisResult` if their `requestId` matches the current `analysisRequestId`.
   - `cancelAnalysis()` increments `analysisRequestId` and clears the running flag, causing any late responses to be ignored.
 - This allows analysts to:
-  - Stop waiting on a hung or slow model (e.g., `llama3.1:8b`).
+  - Stop waiting on a hung or slow model. Model selection auto-resolves: an explicitly requested tag is used only if installed, otherwise the best available `llama3.1` tag is picked (override with `OLLAMA_MODEL`).
   - Switch to a different model and rerun analysis without losing pasted supportive or Phase 2 results.
 
 ## Recommended Analyst Workflow

@@ -14,7 +14,9 @@ import pytest
 PLATFORM_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PLATFORM_ROOT))
 
+from services import closure_service as csvc  # noqa: E402
 from services import investigation_state as isvc  # noqa: E402
+from api.routes import closure as closure_routes  # noqa: E402
 
 
 class FakeCase:
@@ -34,9 +36,14 @@ def build_state(analysis_text, items, case_verdict="", previous_state=None,
     )
 
 
+_EVIDENCE_ID_COUNTER = {"next": 1}
+
+
 def evidence(title="Q", status="success", result_text="Substantive observed rows here"):
+    item_id = _EVIDENCE_ID_COUNTER["next"]
+    _EVIDENCE_ID_COUNTER["next"] += 1
     return {
-        "id": 1,
+        "id": item_id,
         "query_title": title,
         "source_system": "supportive_manual",
         "raw_result": {
@@ -215,6 +222,230 @@ class TestLoopStatusTransitions:
         state = build_state(MALICIOUS_ANALYSIS, items, previous_state=prior)
         assert q not in state["unresolved_questions"]
         assert q in state["evidence_summary"]["resolved_questions"]
+
+
+class TestPerCardVerdicts:
+    """Phase 2: the model's Per-Evidence Assessment judges each evidence
+    entry individually. Per-card verdicts override the global text heuristic;
+    the heuristic remains the fallback for entries the model didn't cover."""
+
+    def _assessed_analysis(self, lines):
+        assessment = "\n".join(lines)
+        return (
+            "### Initial Thoughts\nCertutil outbound transfer supports the hypothesis "
+            "of unauthorized tool staging.\n\n"
+            "### Investigative Analysis\nThe evidence indicates malicious activity "
+            "consistent with compromise.\n\n"
+            "### Per-Evidence Assessment\n" + assessment + "\n\n"
+            "### Triage Verdict\nMalicious — true positive.\n"
+        )
+
+    def test_parser_extracts_direction_and_rationale(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=supports — Outbound certutil transfer to a raw IP indicates malicious staging.",
+            "[2] direction=refutes — Rows show only approved change tickets.",
+            "[3] direction=neutral — No signal either way in these rows.",
+        ])
+        parsed = isvc._parse_per_evidence_assessments(analysis)
+        assert parsed[1] == {
+            "direction": "supports",
+            "rationale": "Outbound certutil transfer to a raw IP indicates malicious staging.",
+        }
+        assert parsed[2]["direction"] == "refutes"
+        assert parsed[3]["direction"] == "neutral"
+
+    def test_parser_ignores_malformed_lines(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=banana — nonsense",
+            "not a verdict line at all",
+            "[2] direction=refutes — clean line",
+        ])
+        parsed = isvc._parse_per_evidence_assessments(analysis)
+        assert set(parsed) == {2}
+        assert parsed[2]["direction"] == "refutes"
+
+    def test_per_card_verdict_overrides_global_heuristic(self):
+        # Global heuristic reads "malicious activity" → supports. The per-card
+        # verdict says entry 1 refutes. Scoring must use the per-card value.
+        analysis = self._assessed_analysis([
+            "[1] direction=refutes — Rows show only approved change activity.",
+        ])
+        items = [evidence("Q1")]
+        state = build_state(analysis, items)
+        timeline = state["evidence_summary"]["timeline"]
+        assert len(timeline) == 1
+        assert timeline[0]["finding_type"] == "refutes"
+        assert timeline[0]["ai_verdict_source"] == "per_card"
+        assert timeline[0]["ai_verdict_rationale"].startswith("Rows show")
+
+    def test_fallback_to_text_heuristic_without_per_card_section(self):
+        state = build_state(MALICIOUS_ANALYSIS, [evidence("Q1"), evidence("Q2")])
+        timeline = state["evidence_summary"]["timeline"]
+        assert all(entry["ai_verdict_source"] == "analysis_text" for entry in timeline)
+        assert all(entry["ai_verdict_rationale"] == "" for entry in timeline)
+        assert state["evidence_summary"]["per_card_verdicts_applied"] == 0
+
+    def test_mixed_coverage_applies_only_assessed_entries(self):
+        # Model assessed entry 1 only; entry 2 falls back to the heuristic.
+        analysis = self._assessed_analysis([
+            "[1] direction=neutral — Inconclusive rows.",
+        ])
+        items = [evidence("Q1"), evidence("Q2")]
+        state = build_state(analysis, items)
+        timeline = state["evidence_summary"]["timeline"]
+        id1, id2 = items[0]["id"], items[1]["id"]
+        sources = {entry["id"]: entry["ai_verdict_source"] for entry in timeline}
+        findings = {entry["id"]: entry["finding_type"] for entry in timeline}
+        assert sources[id1] == "per_card"
+        assert findings[id1] == "neutral"
+        assert sources[id2] == "analysis_text"
+        assert findings[id2] == "supports"  # heuristic: malicious-activity language
+        assert state["evidence_summary"]["per_card_verdicts_applied"] == 1
+
+    def test_conflicting_per_card_verdicts_block_closure(self):
+        analysis = self._assessed_analysis([
+            "[1] direction=supports — Outbound transfer to raw IP.",
+            "[2] direction=refutes — Approved change tickets only.",
+        ])
+        items = [evidence("Q1"), evidence("Q2")]
+        state = build_state(analysis, items)
+        assert state["provisional_disposition"] == "suspicious"
+        assert any("Conflicting evidence" in b for b in state["closure_blockers"])
+        assert state["loop_status"] != "ready_for_closure"
+
+    def test_stored_per_card_verdict_survives_state_rebuild(self):
+        """Rows persist ai_finding_type from a prior /db/analyze run. A
+        rebuild with no analysis text (e.g. after an evidence save) must keep
+        those AI-derived directions instead of degrading to neutral."""
+        item = evidence("Q1")
+        item["raw_result"]["ai_finding_type"] = "supports"
+        item["raw_result"]["ai_verdict_source"] = "per_card"
+        item["raw_result"]["ai_verdict_rationale"] = "Outbound certutil transfer observed."
+        state = build_state("", [item])
+        timeline = state["evidence_summary"]["timeline"]
+        assert timeline[0]["finding_type"] == "supports"
+        assert timeline[0]["ai_verdict_source"] == "per_card"
+        assert timeline[0]["ai_verdict_rationale"] == "Outbound certutil transfer observed."
+        assert state["evidence_summary"]["by_finding"]["supports"] == 1
+        assert not any("neutral only" in b for b in state["closure_blockers"])
+
+    def test_per_card_refutes_flips_no_results_to_refuting_evidence(self):
+        # A no_results entry is only substantive when the verdict direction
+        # is refutes; a per-card refutes verdict must trigger that path.
+        analysis = self._assessed_analysis([
+            "[1] direction=refutes — No matching rows means the activity never ran.",
+        ])
+        items = [evidence("Q1", status="no_results", result_text="")]
+        state = build_state(analysis, items)
+        assert state["evidence_summary"]["by_finding"]["refutes"] == 1
+        assert state["evidence_summary"]["substantive_items"] == 1
+
+
+class TestDerivedClosureDisposition:
+    """Phase 4 judgment-flow lockdown: the closure disposition is derived
+    from the evidence-backed investigation state, never operator-supplied.
+    These pure rules must not drift toward trusting caller input."""
+
+    def test_malicious_derives_true_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "malicious"}) == "true_positive"
+
+    def test_benign_derives_benign_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "benign"}) == "benign_positive"
+
+    def test_false_positive_derives_false_positive(self):
+        assert csvc.derive_closure_disposition({"provisional_disposition": "false_positive"}) == "false_positive"
+
+    def test_tentative_states_derive_undetermined(self):
+        for state in (
+            {"provisional_disposition": "suspicious"},
+            {"provisional_disposition": "undetermined"},
+            {"provisional_disposition": ""},
+            {},
+            None,
+        ):
+            assert csvc.derive_closure_disposition(state) == "undetermined"
+
+    def test_state_derivation_never_reads_an_operator_field(self):
+        """A disposition smuggled into the state payload under any operator-
+        supplied key must not be used — only provisional_disposition."""
+        state = {"provisional_disposition": "benign", "operator_disposition": "malicious"}
+        assert csvc.derive_closure_disposition(state) == "benign_positive"
+
+    def test_operator_labels_normalize_into_derived_key_space(self):
+        assert csvc._normalize_disposition_key("True Positive") == "true_positive"
+        assert csvc._normalize_disposition_key("malicious") == "true_positive"
+        assert csvc._normalize_disposition_key("Benign Positive") == "benign_positive"
+        assert csvc._normalize_disposition_key("garbage input") == "undetermined"
+        assert csvc._normalize_disposition_key(None) == "undetermined"
+
+
+class TestBlockerActionRouting:
+    """S9: every closure blocker deep-links to the analysis stage that
+    resolves it. The routing table lives next to the readiness endpoint so
+    the UI punch list can jump the analyst straight to the right work."""
+
+    def test_evidence_and_state_blockers_route_to_stage_1(self):
+        actions = closure_routes.classify_blocker_actions([
+            "No saved investigative evidence exists yet for this case.",
+            "No persisted investigation state yet. Run analysis to initialize the loop.",
+        ])
+        assert actions == [
+            {"stage": 1, "label": "Run initial analysis"},
+            {"stage": 1, "label": "Run initial analysis"},
+        ]
+
+    def test_execution_and_data_gap_blockers_route_to_stage_2(self):
+        actions = closure_routes.classify_blocker_actions([
+            "Query execution failed on 'Failed logins' (supportive_manual) - rerun or resolve syntax.",
+            "Required telemetry unavailable for 'Zero results' (phase2_manual) - data gap exists.",
+        ])
+        assert [a["stage"] for a in actions] == [2, 2]
+        assert {a["label"] for a in actions} == {"Fix failed queries", "Address data gaps"}
+
+    def test_assessment_blockers_route_to_stage_4(self):
+        actions = closure_routes.classify_blocker_actions([
+            "2 investigative question(s) remain unresolved.",
+            "Saved evidence is marked neutral only; no supporting or refuting direction established.",
+            "Conflicting evidence: detection exhibits both supporting and refuting findings.",
+            "Disposition is tentative ('suspicious' or 'undetermined') and requires conclusive findings.",
+        ])
+        assert [a["stage"] for a in actions] == [4, 4, 4, 4]
+
+    def test_unclassified_blocker_falls_back_to_stage_4(self):
+        actions = closure_routes.classify_blocker_actions(["Something entirely novel"])
+        assert actions == [{"stage": 4, "label": "Continue investigation"}]
+
+    def test_readiness_endpoint_annotates_blocker_actions(self, monkeypatch):
+        import api.main as api_main
+        from fastapi.testclient import TestClient
+
+        # Hermetic DB: no investigation-state row for the probe case.
+        class _FakeQuery:
+            def filter(self, *a, **k):
+                return self
+
+            def first(self):
+                return None
+
+        class _FakeDB:
+            def query(self, *a, **k):
+                return _FakeQuery()
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr("db.models.SessionLocal", lambda: _FakeDB())
+        client = TestClient(api_main.app)
+        # Empty/unknown case: readiness carries the no-state blocker plus its
+        # routing action, not a 500.
+        res = client.get("/api/db/triage/NO-SUCH-CASE/closure-readiness")
+        assert res.status_code == 200
+        payload = res.json()
+        assert isinstance(payload.get("blockers"), list)
+        assert len(payload["blocker_actions"]) == len(payload["blockers"])
+        for action in payload["blocker_actions"]:
+            assert action["stage"] in (1, 2, 4)
+            assert isinstance(action["label"], str) and action["label"]
 
 
 if __name__ == "__main__":

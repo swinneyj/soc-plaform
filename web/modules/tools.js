@@ -8,23 +8,22 @@
     const ToolsMethods = {
         async loadTools() {
             try {
-                const res = await axios.get(this.apiUrl + '/tools');
-                this.tools = res.data;
+                this.tools = await API.tools();
             } catch (err) {
                 console.error('Failed to load tools:', err);
             }
         },
         async loadJobs() {
             try {
-                const res = await axios.get(this.apiUrl + '/jobs');
-                this.jobs = res.data.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+                const jobs = await API.jobs();
+                this.jobs = jobs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             } catch (err) {
                 console.error('Failed to load jobs:', err);
             }
         },
         async deleteJob(jobId) {
             try {
-                await axios.delete(this.apiUrl + '/jobs/' + encodeURIComponent(jobId));
+                await API.deleteJob(jobId);
                 this.selectedJobIds = (this.selectedJobIds || []).filter(id => id !== jobId);
                 await this.loadJobs();
             } catch (err) {
@@ -35,7 +34,7 @@
             const ids = this.selectedJobIds || [];
             if (!ids.length || !confirm(`Delete ${ids.length} selected job(s)?`)) return;
             try {
-                await Promise.all(ids.map(id => axios.delete(this.apiUrl + '/jobs/' + encodeURIComponent(id))));
+                await Promise.all(ids.map(id => API.deleteJob(id)));
                 this.selectedJobIds = [];
                 await this.loadJobs();
             } catch (err) {
@@ -45,7 +44,7 @@
         async clearJobs() {
             if (!this.jobs.length || !confirm('Clear all tool job history? This cannot be undone.')) return;
             try {
-                await axios.delete(this.apiUrl + '/jobs');
+                await API.clearAllJobs();
                 this.selectedJobIds = [];
                 await this.loadJobs();
             } catch (err) {
@@ -54,8 +53,7 @@
         },
         async loadReports() {
             try {
-                const res = await axios.get(this.apiUrl + '/reports');
-                this.reports = res.data;
+                this.reports = await API.reports();
             } catch (err) {
                 console.error('Failed to load reports:', err);
             }
@@ -63,8 +61,7 @@
         async runToolRegression() {
             this.regressionRunning = true;
             try {
-                const res = await axios.post(this.apiUrl + '/tools/regression');
-                this.regressionResult = res.data;
+                this.regressionResult = await API.runToolRegression();
             } catch (err) {
                 this.regressionResult = { error: err.response?.data?.detail || err.message };
             } finally {
@@ -83,14 +80,14 @@
             }
 
             try {
-                const res = await axios.post(this.apiUrl + '/execute', {
+                const data = await API.executeTool({
                     tool_name: tool.name,
                     arguments: args,
                     silent: false
                 });
                 this.currentTab = 'jobs';
                 this.loadJobs();
-                alert('Tool execution queued: ' + res.data.job_id.slice(0, 8));
+                alert('Tool execution queued: ' + data.job_id.slice(0, 8));
             } catch (err) {
                 alert('Error: ' + err.response?.data?.detail || err.message);
             }
@@ -107,7 +104,7 @@
         },
 
         checkHealth() {
-            axios.get(this.apiUrl + '/health')
+            API.health()
                 .then(() => {
                     this.apiHealthy = true;
                     const el = document.getElementById('status');

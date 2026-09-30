@@ -1,11 +1,26 @@
-requests
-sqlalchemy
-psycopg[binary]
-redis
-pydantic
-fastapi
-uvicorn
-python-dotenv
-python-multipart
-python-pptx
-cryptography
+# Dual-runtime pins (CI matrix: 3.9 + 3.14). Each python_version branch
+# mirrors a locally verified venv exactly; pip selects the right branch.
+#
+# Security note: the starlette fixes (PYSEC-2026-248/2281/2280 -> >=1.1.0)
+# and the pytest fix (PYSEC-2026-1845 -> >=9.0.3) all require Python >=3.10.
+# The 3.9 branch therefore stays on the last 3.9-supporting (vulnerable)
+# versions as recorded accepted risk until 3.9 retires from the CI matrix
+# (security tracker item #9). The 3.14/production branch is clean.
+requests==2.34.2; python_version >= "3.10"
+requests==2.32.5; python_version < "3.10"
+sqlalchemy==2.0.54; python_version >= "3.10"
+sqlalchemy==2.0.52; python_version < "3.10"
+psycopg[binary]==3.3.5; python_version >= "3.10"
+psycopg[binary]==3.2.13; python_version < "3.10"
+pydantic==2.13.5
+fastapi==0.141.1; python_version >= "3.10"
+fastapi==0.128.8; python_version < "3.10"
+starlette==1.6.0; python_version >= "3.10"
+starlette==0.49.3; python_version < "3.10"
+uvicorn==0.53.0; python_version >= "3.10"
+uvicorn==0.39.0; python_version < "3.10"
+python-dotenv==1.2.3; python_version >= "3.10"
+python-dotenv==1.2.1; python_version < "3.10"
+python-multipart==0.0.32; python_version >= "3.10"
+python-multipart==0.0.20; python_version < "3.10"
+cryptography==50.0.1

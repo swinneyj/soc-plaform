@@ -17,6 +17,26 @@ jobs:
       - name: Checkout Project Code
         uses: actions/checkout@v4
 
+      - name: Baseline check (repo-state guard)
+        run: |
+          # Fast pre-deploy sanity: the repo layout the platform depends on.
+          # Machine-side checks (tailscale, postgres, SMB, API) are physical
+          # and belong to scripts/baseline on the dev Mac, not CI.
+          FAIL=0
+          for f in scripts/dev scripts/pull-secrets scripts/baseline SETUP.md AGENTS.md .baseline.json; do
+            [ -e "$f" ] || { echo "::error::missing platform artifact: $f"; FAIL=1; }
+          done
+          [ -x scripts/dev ] || { echo "::error::scripts/dev is not executable"; FAIL=1; }
+          python3 -c "import json; json.load(open('.baseline.json'))" 2>/dev/null \
+            || { echo "::error::.baseline.json is missing or invalid JSON"; FAIL=1; }
+          TESTS=$(ls tests/test_*.py 2>/dev/null | wc -l)
+          [ "$TESTS" -ge 1 ] || { echo "::error::no test files found"; FAIL=1; }
+          if [ "$FAIL" = "1" ]; then
+            echo "::error::Baseline repo-state guard failed — fix before deploying"
+            exit 1
+          fi
+          echo "Baseline repo-state guard passed."
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -30,11 +50,35 @@ jobs:
         run: vercel build --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy Project to Vercel
-        run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }}
+        run: vercel deploy --prebuilt --prod --scope=swinneyjs-projects --token=${{ secrets.VERCEL_TOKEN }} | tee deploy_url.txt
 
-      - name: Smoke test production alias
+      - name: Smoke test deployment
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
         run: |
-          TARGET_URL="https://soc-plaform-livid.vercel.app"
+          # 1) Prefer a stable public domain if vercel printed one (e.g. an
+          #    "Aliased" line). Ephemeral per-deployment URLs are excluded.
+          TARGET_URL=$(grep -oE 'https://[a-zA-Z0-9.-]+\.vercel\.app' deploy_url.txt | grep -v 'swinneyjs-projects' | tail -1)
+
+          # 2) Otherwise query the Vercel API for the project's public
+          #    production domains. Unique deployment URLs are SSO-protected
+          #    (Deployment Protection), so they cannot be health-checked here.
+          if [ -z "$TARGET_URL" ]; then
+            echo "No stable domain in deploy output; querying Vercel API for project domains..."
+            TARGET_URL=$(curl -s --max-time 20 \
+              -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v9/projects/$VERCEL_PROJECT_ID/domains?teamId=$VERCEL_ORG_ID" \
+              | python3 -c "import json,sys; d=json.load(sys.stdin); ds=[x['name'] for x in d.get('domains',[]) if x.get('verified')]; print('https://'+ds[0] if ds else '')" 2>/dev/null || true)
+          fi
+
+          if [ -z "$TARGET_URL" ]; then
+            echo "::error::Could not determine a public deployment URL (deploy output had no stable domain and the Vercel API returned no verified project domains)"
+            cat deploy_url.txt || true
+            exit 1
+          fi
+
           echo "Smoke testing $TARGET_URL/api/health"
           STATUS=000
           for i in $(seq 1 10); do

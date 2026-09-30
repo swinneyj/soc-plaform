@@ -2,6 +2,15 @@
 
 Provides rule-based investigation state tracking, evidence scoring, confidence
 guardrails, closure gating, and model output parsing.
+
+Judgment-flow contract (Phase 4, plan §6): analyst-supplied labels —
+``finding_type`` and ``question_resolution`` on evidence rows — are advisory
+audit-trail values only. Evidence direction comes from the model's per-card
+assessments (with the text heuristic as fallback), inquiry resolution comes
+from substantive evidence executed against targeted inquiries, and the
+disposition is derived from the ledger plus the model's verdict section —
+never from the case row's pre-loop verdict. Analysts and operators enter
+execution facts and observations; every conclusion is derived.
 """
 
 from __future__ import annotations
@@ -41,6 +50,11 @@ CANONICAL_HEADINGS = {
     "findings": "investigative analysis",
     "evidence evaluation": "investigative analysis",
     "investigation": "investigative analysis",
+    # 4. Per-Evidence Assessment (one verdict line per numbered ledger entry)
+    "per-evidence assessment": "per-evidence assessment",
+    "per evidence assessment": "per-evidence assessment",
+    "evidence assessment": "per-evidence assessment",
+    "per-card assessment": "per-evidence assessment",
     # 4. Supportive Query Recommendations (Phase 2 SPL)
     "supportive query recommendations (phase 2 spl)": "supportive query recommendations (phase 2 spl)",
     "supportive query recommendations": "supportive query recommendations (phase 2 spl)",
@@ -97,10 +111,12 @@ def _normalize_heading_candidate(line: str) -> str:
     cleaned = (line or "").strip()
     # Remove markdown header prefixes like ### or ##
     cleaned = re.sub(r"^#+\s*", "", cleaned)
+    # Remove markdown bold/italic formatting FIRST, so numbered bold
+    # headings like "**4. Per-Evidence Assessment**" lose their asterisks
+    # before the numbering pass runs.
+    cleaned = re.sub(r"^[\*_]+|[\*_]+$", "", cleaned)
     # Remove numbering like 1., 2), [1], etc.
     cleaned = re.sub(r"^(?:\[\d+\]|\d+[\.\)]|\([0-9]+\))\s*", "", cleaned)
-    # Remove markdown bold/italic formatting
-    cleaned = re.sub(r"^[\*_]+|[\*_]+$", "", cleaned)
     # Strip trailing punctuation, colons, hyphens
     cleaned = cleaned.strip(" 	:.-_")
     return cleaned.lower()
@@ -213,6 +229,14 @@ def _is_substantive_evidence_value(value: str) -> bool:
 
 MAX_EVIDENCE_SUMMARY_CHARS = 2000
 
+# Phase 2 structured verdicts (PHASE2_EVIDENCE_JSON) may carry a
+# confidence_delta_hint ("increase" | "decrease"). Each hint nudges the
+# disposition confidence by a small fixed amount, capped in aggregate so
+# hints refine the score without ever outweighing the substantive evidence
+# ledger or breaching the disposition guardrails.
+CONFIDENCE_HINT_DELTA = 0.02
+CONFIDENCE_HINT_MAX_IMPACT = 0.06
+
 
 def _infer_direction_from_analysis(analysis_text: str) -> str:
     """Derive the evidence direction (supports/refutes/neutral) from the AI
@@ -252,6 +276,99 @@ def _infer_direction_from_analysis(analysis_text: str) -> str:
     return "neutral"
 
 
+def _parse_per_evidence_assessments(analysis_text: str, expected_titles: Optional[List[str]] = None) -> Dict[int, Dict[str, str]]:
+    """Parse the Per-Evidence Assessment section into per-card verdicts.
+
+    The prompt asks the model to quote each entry's bracketed index AND
+    title. Small local models often renumber their own list, so lines are
+    mapped to entries by title match first (index used only as a fallback
+    when the title is absent). Returns a mapping of entry index (1-based,
+    ledger order) -> {direction, rationale}. Unmatched lines are dropped;
+    unmatched entries fall back to the global text heuristic.
+    """
+    sections = _extract_analysis_sections(analysis_text or "")
+    section_text = sections.get("per-evidence assessment", "")
+    if not section_text:
+        return {}
+
+    titles = [str(t or "").strip() for t in (expected_titles or [])]
+    norm_titles = {
+        re.sub(r"\s+", " ", t.lower()).strip(): idx
+        for idx, t in enumerate(titles, 1)
+        if t
+    }
+
+    def _norm(value: str) -> str:
+        return re.sub(r"\s+", " ", value).strip().lower()
+
+    assessments: Dict[int, Dict[str, str]] = {}
+    # Two acceptable line shapes:
+    #   A) "[2] direction=supports — rationale..."  (index + keyword + text)
+    #   B) "[2] Title — direction=supports — rationale..." or any line whose
+    #      direction keyword appears after a title/lead-in.
+    # Tolerant of "2.", "2)", "Entry 2:", "=", ":", dashes/em-dashes.
+    line_pattern = re.compile(
+        r"^(?:entry\s*)?\[?(\d{1,3})\]?[).:]?\s*"
+        r"(?:direction\s*[=:]\s*(supports?|refutes?|neutral)\b[\s\-—:]*(.*)"
+        r"|(.*))$",
+        re.IGNORECASE | re.DOTALL,
+    )
+    direction_word_pattern = re.compile(
+        r"direction\s*[=:]\s*(supports?|refutes?|neutral)\b",
+        re.IGNORECASE,
+    )
+
+    def _canonical(word: str) -> str:
+        word = word.strip().lower()
+        if word.startswith("support"):
+            return "supports"
+        if word.startswith("refut"):
+            return "refutes"
+        return "neutral"
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = line_pattern.match(stripped)
+        if not match:
+            continue
+
+        stated_index = int(match.group(1))
+        rationale = ""
+        if match.group(2):
+            direction = _canonical(match.group(2))
+            rationale = (match.group(3) or "").strip()
+        else:
+            # Direction keyword appears after a lead-in (e.g. the title);
+            # rationale is whatever follows the keyword.
+            rest = match.group(4) or ""
+            dir_match = direction_word_pattern.search(rest)
+            if not dir_match:
+                continue
+            direction = _canonical(dir_match.group(1))
+            rationale = rest[dir_match.end():].lstrip(" —-:").strip()
+
+        # Resolve the target entry: title match wins; stated index only as
+        # a fallback when no title in the line matches any ledger entry.
+        idx = None
+        for t_norm, t_idx in norm_titles.items():
+            if t_norm and t_norm in _norm(stripped):
+                idx = t_idx
+                break
+        if idx is None:
+            if titles:
+                if 1 <= stated_index <= len(titles):
+                    idx = stated_index
+            elif 1 <= stated_index <= 99:
+                # No titles available to validate against: trust the index.
+                idx = stated_index
+
+        if idx is not None:
+            assessments[idx] = {"direction": direction, "rationale": rationale[:400]}
+    return assessments
+
+
 def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
     """Extract a clean observation summary from raw result payload.
 
@@ -285,6 +402,8 @@ def _summarize_evidence_observation(raw_result: Dict[str, Any]) -> str:
 def _serialize_investigation_state_record(record) -> Dict[str, Any]:
     if not record:
         return {}
+    summary = _parse_json_object(record.evidence_summary)
+    timeline_entries = summary.get("timeline") or []
     return {
         "case_id": record.case_id,
         "rule_id": record.rule_id,
@@ -296,7 +415,17 @@ def _serialize_investigation_state_record(record) -> Dict[str, Any]:
         "unresolved_questions": _parse_json_list(record.unresolved_questions),
         "closure_blockers": _parse_json_list(record.closure_blockers),
         "recommended_next_actions": _parse_json_list(record.recommended_next_actions),
-        "evidence_summary": _parse_json_object(record.evidence_summary),
+        "evidence_summary": summary,
+        "confidence_hints": {
+            "increase": sum(
+                1 for entry in timeline_entries
+                if entry.get("confidence_delta_hint") == "increase"
+            ),
+            "decrease": sum(
+                1 for entry in timeline_entries
+                if entry.get("confidence_delta_hint") == "decrease"
+            ),
+        },
         "last_analysis_stage": record.last_analysis_stage or "initial",
         "updated_at": record.updated_at.isoformat() if getattr(record, "updated_at", None) else None,
     }
@@ -345,8 +474,15 @@ def _build_investigation_state(
     supportive_results: List[Dict[str, Any]],
     analysis_stage: str,
     previous_state: Optional[Dict[str, Any]] = None,
+    evidence_verdicts: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
-    """Calculate the complete investigation loop state with strict guardrails."""
+    """Calculate the complete investigation loop state with strict guardrails.
+
+    evidence_verdicts: optional structured per-card verdicts from the model's
+    PHASE2_EVIDENCE_JSON block ([{title, direction, rationale, ...}]). When
+    present, these take precedence over the Per-Evidence Assessment text
+    parser for matched titles (which itself precedes the global heuristic).
+    """
     previous_state = previous_state or {}
     sections = _extract_analysis_sections(analysis_text)
     initial_thoughts = sections.get("initial thoughts", "").strip()
@@ -359,7 +495,31 @@ def _build_investigation_state(
     explicitly_resolved_questions = set()
 
     current_hypothesis = initial_thoughts or (case.analysis_summary or "").strip()
-    provisional_disposition = _infer_disposition_label(verdict_text, case.verdict)
+    # The model's Triage Verdict section is this iteration's derived
+    # conclusion. The case row's stored verdict (set at promote/seed time
+    # from pre-loop facts) is never a fallback: verdicts are earned from the
+    # evidence ledger, not inherited.
+    provisional_disposition = _infer_disposition_label(verdict_text)
+
+    # Per-card AI verdicts: the model judges each numbered evidence entry in
+    # its Per-Evidence Assessment section. Lines are mapped to entries by
+    # title (models renumber freely); entries without a per-card verdict
+    # fall back to the global text-derived direction.
+    per_card_assessments = _parse_per_evidence_assessments(
+        analysis_text,
+        expected_titles=[
+            (item.get("query_title") if isinstance(item, dict) else "") or ""
+            for item in supportive_results
+        ],
+    )
+
+    # Phase 2: structured PHASE2_EVIDENCE_JSON verdicts take precedence over
+    # the text-section parser. Match verdicts to entries by normalized title.
+    structured_verdicts_by_title: Dict[str, Dict[str, Any]] = {}
+    for verdict in evidence_verdicts or []:
+        title = str(verdict.get("title") or "").strip()
+        if title:
+            structured_verdicts_by_title[re.sub(r"\s+", " ", title.lower()).strip()] = verdict
 
     evidence_by_finding = {"supports": 0, "refutes": 0, "neutral": 0}
     evidence_by_status = {
@@ -384,6 +544,7 @@ def _build_investigation_state(
     evidence_by_source: Dict[str, int] = {}
     evidence_timeline = []
     titles_with_saved_results = set()
+    per_card_verdicts_applied = 0
 
     substantive_evidence_count = 0
     pending_evidence_count = 0
@@ -410,18 +571,66 @@ def _build_investigation_state(
         evidence_by_status[result_status] = evidence_by_status.get(result_status, 0) + 1
 
         # Legacy analyst-entered finding_type is kept in raw_result for audit
-        # only; scoring always uses the AI-derived direction.
-        finding_type = ai_evidence_direction
+        # only; scoring always uses an AI-derived direction: the per-card
+        # verdict from the model's Per-Evidence Assessment when available,
+        # then any per-card verdict persisted by a prior analysis run, and
+        # otherwise the global analysis-text heuristic.
+        item_index = None
+        for pos, entry in enumerate(supportive_results, 1):
+            if entry is item:
+                item_index = pos
+                break
+        if item_index is None:
+            item_id = item.get("id")
+            if item_id is not None:
+                for pos, entry in enumerate(supportive_results, 1):
+                    if entry.get("id") == item_id:
+                        item_index = pos
+                        break
+        per_card = per_card_assessments.get(item_index) if item_index else None
+        item_title = (item.get("query_title") if isinstance(item, dict) else "") or ""
+        structured = structured_verdicts_by_title.get(
+            re.sub(r"\s+", " ", str(item_title).strip().lower())
+        )
+        confidence_delta_hint = "none"
+        if structured:
+            finding_type = structured["direction"]
+            per_card_verdicts_applied += 1
+            per_card_rationale = structured.get("rationale") or ""
+            ai_verdict_source = "evidence_json"
+            confidence_delta_hint = structured.get("confidence_delta_hint") or "none"
+        elif per_card:
+            finding_type = per_card["direction"]
+            per_card_verdicts_applied += 1
+            per_card_rationale = per_card["rationale"]
+            ai_verdict_source = "per_card"
+        else:
+            # Durable per-card verdicts persisted by a prior /db/analyze run
+            # (ai_finding_type in raw_result) take precedence over the global
+            # text heuristic so AI-assessed directions survive state rebuilds
+            # (e.g. after evidence saves) instead of degrading to neutral.
+            stored_direction = (raw_result.get("ai_finding_type") or "").strip().lower()
+            if stored_direction in ("supports", "refutes", "neutral"):
+                finding_type = stored_direction
+                per_card_rationale = raw_result.get("ai_verdict_rationale") or ""
+                ai_verdict_source = raw_result.get("ai_verdict_source") or "per_card"
+            else:
+                finding_type = ai_evidence_direction
+                per_card_rationale = ""
+                ai_verdict_source = "analysis_text"
 
+        # ``question_resolution`` is an analyst label, stored and echoed for
+        # the audit trail but never load-bearing: whether an inquiry is
+        # resolved is derived from the evidence itself (a substantive row
+        # executed against specific inquiries resolves them — see the
+        # has_substantive block below), and the model re-raises anything it
+        # still doubts in the next phase's Key Questions (self-correcting
+        # loop). The label is deliberately read here so legacy rows keep
+        # round-tripping through _serialize, but it can no longer resolve
+        # anything on its own.
         question_resolution = (raw_result.get("question_resolution") or "not_resolved").strip().lower()
         if question_resolution not in VALID_QUESTION_RESOLUTIONS:
             question_resolution = "not_resolved"
-        if question_resolution == "resolved":
-            explicitly_resolved_questions.update(
-                str(question).strip()
-                for question in (raw_result.get("target_questions") or [])
-                if str(question).strip()
-            )
 
         source_system = (item.get("source_system") or raw_result.get("source_system") or "splunk").strip() or "splunk"
         title = (item.get("query_title") or raw_result.get("query_title") or "").strip()
@@ -469,6 +678,18 @@ def _build_investigation_state(
             else:
                 pending_evidence_count += 1
 
+        # Evidence-targeted resolution: a substantive row that was executed to
+        # answer specific inquiries (target_questions) addresses those
+        # inquiries. The analyst records execution facts only — resolution is
+        # derived from the evidence itself, and the model re-raises anything it
+        # still doubts in the next phase's Key Questions (self-correcting loop).
+        if has_substantive:
+            explicitly_resolved_questions.update(
+                str(question).strip()
+                for question in (raw_result.get("target_questions") or [])
+                if str(question).strip()
+            )
+
         if title:
             evidence_timeline.append({
                 "id": item.get("id"),
@@ -476,6 +697,9 @@ def _build_investigation_state(
                 "source_system": source_system,
                 "result_status": result_status,
                 "finding_type": finding_type,
+                "ai_verdict_source": ai_verdict_source,
+                "ai_verdict_rationale": per_card_rationale,
+                "confidence_delta_hint": confidence_delta_hint,
                 "summary": observation_summary or "Pending analyst observation",
                 "has_substantive_observation": has_substantive,
                 "created_at": item.get("created_at"),
@@ -525,19 +749,14 @@ def _build_investigation_state(
         if question.strip().lower() not in resolved_normalized
     ][:6]
 
-    # Strengthen evidence-to-verdict logic.
-    # Only upgrade the disposition when the case is not already tracked as
-    # benign; supporting findings on a benign-tracked case indicate the
-    # analyst flagged corroborating context, not that the case is malicious.
-    benign_tracked = (case.verdict or "").strip().lower() == "benign"
+    # Strengthen evidence-to-verdict logic. The case row's stored verdict is
+    # not consulted here: verdicts are derived conclusions, and pre-loop
+    # values (a referring analyst's ES disposition, a seeded placeholder) are
+    # execution facts at best — never evidence. The ledger decides.
     if support_strength >= 2 and refute_strength == 0:
-        if not benign_tracked:
-            provisional_disposition = "malicious"
+        provisional_disposition = "malicious"
     elif refute_strength >= 2 and support_strength == 0:
-        if case.verdict == "benign":
-            provisional_disposition = "benign"
-        else:
-            provisional_disposition = "false_positive"
+        provisional_disposition = "false_positive"
     elif support_strength > 0 and refute_strength > 0:
         # Conflicting evidence!
         provisional_disposition = "suspicious"
@@ -615,6 +834,25 @@ def _build_investigation_state(
     if pending_evidence_count > 0:
         confidence -= min(0.08, pending_evidence_count * 0.02)
 
+    # Phase 2: bounded nudges from the model's per-card confidence hints.
+    # Only structured evidence_json verdicts carry hints (per-card text and
+    # the global heuristic default to "none"). Applied before the disposition
+    # caps and final clamp so the guardrails stay authoritative.
+    increase_hints = sum(
+        1 for entry in evidence_timeline
+        if entry.get("confidence_delta_hint") == "increase"
+    )
+    decrease_hints = sum(
+        1 for entry in evidence_timeline
+        if entry.get("confidence_delta_hint") == "decrease"
+    )
+    if increase_hints or decrease_hints:
+        hint_delta = (
+            min(increase_hints * CONFIDENCE_HINT_DELTA, CONFIDENCE_HINT_MAX_IMPACT)
+            - min(decrease_hints * CONFIDENCE_HINT_DELTA, CONFIDENCE_HINT_MAX_IMPACT)
+        )
+        confidence += hint_delta
+
     # Disposition caps
     if provisional_disposition in {"suspicious", "undetermined"}:
         confidence = min(confidence, 0.72)
@@ -653,6 +891,7 @@ def _build_investigation_state(
         "by_finding": evidence_by_finding,
         "by_status": evidence_by_status,
         "by_source_system": evidence_by_source,
+        "per_card_verdicts_applied": per_card_verdicts_applied,
         "resolved_questions": sorted(explicitly_resolved_questions),
         "recent_titles": evidence_timeline[-5:],
         "timeline": evidence_timeline,

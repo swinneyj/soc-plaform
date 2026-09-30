@@ -57,7 +57,10 @@ Before using the platform, confirm that:
 
 - PostgreSQL is running and the platform database is available.
 - Ollama is running locally.
-- The required model is installed, normally `llama3.1:latest`.
+- The required model is installed, normally `llama3.1:latest`. Any pulled
+  `llama3.1*` tag works — the platform auto-resolves an installed model at
+  request time (explicit request > `OLLAMA_MODEL` in `.env` > best-match
+  preference). Pin a specific tag with `OLLAMA_MODEL`.
 - The API is healthy.
 - You are working from the correct project checkout and branch.
 
@@ -85,7 +88,7 @@ source .env
 set +a
 
 ollama serve
-ollama pull llama3.1:latest
+ollama pull llama3.1:latest   # or any llama3.1* tag — auto-resolved at request time
 ./scripts/start_platform.sh
 ```
 
@@ -455,7 +458,7 @@ For maintainers, the primary locations are:
 
 | Need | Location |
 |---|---|
-| Browser UI | `web/index.html` and `web/app.js` |
+| Browser UI | `web/index.html` (redirect) → `web/index.modular.html` + `web/app.modular.js` |
 | API routes | `api/main.py` |
 | Database models | `db/models.py` |
 | Ollama integration | `services/ollama_service.py` |

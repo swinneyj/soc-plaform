@@ -1,9 +1,10 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import sys
 
 from db.models import SessionLocal, SplunkEvent, TriageResult
+from services.judgment_normalization import PHASE4_INTAKE_CONFIDENCE, PHASE4_INTAKE_VERDICT
 
 
 TEST_CASES = [
@@ -11,8 +12,6 @@ TEST_CASES = [
         "case_id": "TEST-POWERSHELL-1",
         "rule_id": "powershell_in_memory",
         "rule_name": "PowerShell In-Memory Execution",
-        "verdict": "malicious",
-        "confidence_score": 0.95,
         "analysis_summary": "Simulated in-memory PowerShell run by admin user executing suspicious encoded payload.",
         "remediation_steps": "Confirm script block hashes, isolate host, and reset credentials.",
         "fields": {
@@ -40,8 +39,6 @@ TEST_CASES = [
         "case_id": "TEST-POWERSHELL-2",
         "rule_id": "powershell_in_memory",
         "rule_name": "PowerShell In-Memory Execution",
-        "verdict": "benign",
-        "confidence_score": 0.7,
         "analysis_summary": "Legitimate in-memory PowerShell usage by deployment automation account.",
         "remediation_steps": "Document exception and ensure monitoring baseline covers this pattern.",
         "fields": {
@@ -69,8 +66,6 @@ TEST_CASES = [
         "case_id": "TEST-NGROK-1",
         "rule_id": "linux_ngrok",
         "rule_name": "Linux Ngrok Reverse Proxy Usage",
-        "verdict": "suspicious",
-        "confidence_score": 0.88,
         "analysis_summary": "Ngrok client observed on Linux bastion host with outbound tunnels.",
         "remediation_steps": "Review outbound ngrok connections, confirm business justification, and block if unauthorized.",
         "fields": {
@@ -99,8 +94,6 @@ TEST_CASES = [
         "case_id": "TEST-GIT-CHILD-1",
         "rule_id": "git_child_process",
         "rule_name": "Git Unexpected Child Process",
-        "verdict": "suspicious",
-        "confidence_score": 0.82,
         "analysis_summary": "Git spawning uncommon child process associated with archive extraction utility.",
         "remediation_steps": "Correlate with developer workflow; if unexpected, investigate user workstation for malware.",
         "fields": {
@@ -127,8 +120,6 @@ TEST_CASES = [
         "case_id": "TEST-SERVICE-ACCT-1",
         "rule_id": "interactive_logon_service_accounts",
         "rule_name": "Interactive Logon to Service Accounts",
-        "verdict": "malicious",
-        "confidence_score": 0.9,
         "analysis_summary": "Service account used for interactive logon from non-standard workstation.",
         "remediation_steps": "Disable account, rotate credentials, and review other logon activity.",
         "fields": {
@@ -156,8 +147,6 @@ TEST_CASES = [
         "case_id": "TEST-BUCKET-1",
         "rule_id": "public_bucket_exposure",
         "rule_name": "Public Bucket / Storage Exposure",
-        "verdict": "malicious",
-        "confidence_score": 0.93,
         "analysis_summary": "Publicly exposed storage bucket accessed from foreign IPs.",
         "remediation_steps": "Restrict bucket ACLs, rotate affected keys, and review access logs.",
         "fields": {
@@ -187,8 +176,6 @@ TEST_CASES = [
         "case_id": "TEST-PINGFED-1",
         "rule_id": "sso_brute_force_pingfederate",
         "rule_name": "SSO Brute Force Success - PingFederate",
-        "verdict": "malicious",
-        "confidence_score": 0.97,
         "analysis_summary": "PingFederate logs show password spraying followed by successful authentication.",
         "remediation_steps": "Force password reset, review MFA posture, and block attacking IP ranges.",
         "fields": {
@@ -225,7 +212,7 @@ def seed_test_cases():
     try:
         cases_created = 0
         events_created = 0
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         for idx, case_def in enumerate(TEST_CASES):
             case_id = case_def["case_id"]
@@ -239,8 +226,10 @@ def seed_test_cases():
                     case_id=case_id,
                     rule_name=case_def["rule_name"],
                     rule_id=case_def["rule_id"],
-                    verdict=case_def["verdict"],
-                    confidence_score=case_def["confidence_score"],
+                    # Phase 4 intake contract: the verdict field carries no
+                    # analyst judgment (services/judgment_normalization).
+                    verdict=PHASE4_INTAKE_VERDICT,
+                    confidence_score=PHASE4_INTAKE_CONFIDENCE,
                     analysis_summary=case_def["analysis_summary"],
                     remediation_steps=case_def["remediation_steps"],
                     triaged_at=timestamp,
@@ -251,8 +240,8 @@ def seed_test_cases():
                 # Update fields if needed
                 triage.rule_name = case_def["rule_name"]
                 triage.rule_id = case_def["rule_id"]
-                triage.verdict = case_def["verdict"]
-                triage.confidence_score = case_def["confidence_score"]
+                triage.verdict = PHASE4_INTAKE_VERDICT
+                triage.confidence_score = PHASE4_INTAKE_CONFIDENCE
 
             # 2. Check / Create matching SplunkEvent (source pasted notable)
             fields = dict(case_def["fields"])
