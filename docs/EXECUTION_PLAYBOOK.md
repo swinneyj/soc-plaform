@@ -4,6 +4,10 @@
 session**. Each step is atomic: it names exact files, exact edits, and a `Verify:` line that
 MUST pass before you continue. If a verify fails, **STOP** and report — do not improvise.
 
+**Fidelity tiers** (tagged on every stage header): `[mechanical]` = run cold, every edit is
+specified. `[mechanical after sign-off]` = run only after the named human gate.
+`[informational]` = record only, nothing to execute.
+
 ---
 
 ## 0. Standing rules (read once per session)
@@ -68,7 +72,7 @@ sleep 8; RUN_ID=$(gh run list --repo swinneyj/soc-plaform --workflow=Tests --lim
 
 ---
 
-## Stage A1 — Close the GET-mutation holes (P0 · security)
+## Stage A1 — Close the GET-mutation holes (P0 · security) `[mechanical]`
 
 **Objective:** every destructive action requires the armed API key. Today three GET surfaces
 mutate while the method-based gate (POST/PUT/PATCH/DELETE only) waves them through:
@@ -209,7 +213,7 @@ The UI's `deleteTriageCase` currently uses the third one.
 
 ---
 
-## Stage A2 — Supply chain (P0)
+## Stage A2 — Supply chain (P0) `[mechanical]`
 
 **A2.1 — Prove the unused deps.** Run:
 ```bash
@@ -258,7 +262,7 @@ Settings → Code security (tracker checkbox).
 
 ---
 
-## Stage A3 — Doc-status sync (P0)
+## Stage A3 — Doc-status sync (P0) `[mechanical]`
 
 **A3.1 — `docs/security-remediation-tracker.md`:**
 - Line ~167: `- [ ] Wire \`SOC_CONFIG.apiKey\` into the served pages (Vercel deploy-time injection) — unlocks \`restricted\` mode + full-gate activation`
@@ -273,7 +277,7 @@ Settings → Code security (tracker checkbox).
 
 ---
 
-## Stage B1 — Root triage (P1)
+## Stage B1 — Root triage (P1) `[mechanical]`
 
 **B1.1 — Attic the zero-ref one-shots** (all confirmed unreferenced except where noted):
 ```bash
@@ -289,7 +293,7 @@ git mv add_code_review.py inspect_db.py ingest_notables.py wipe_db.py \
 
 ---
 
-## Stage B2 — Debris sweep (P1)
+## Stage B2 — Debris sweep (P1) `[mechanical]`
 
 Facts verified: `sample_rules.json` and `updated_rules.json` are **byte-identical**
 (sha1 `dc83bcc64cda6d2c9005e0242cc60d26112372a4`).
@@ -321,7 +325,7 @@ change to `README.md` (the survivor) and, where the line described README.txt's 
 
 ---
 
-## Stage B3 — Tools staging copy (P1)
+## Stage B3 — Tools staging copy (P1) `[mechanical]`
 
 **B3.1 — Verify dead:** `grep -rln "staging_copy\|chat_language_models_2_" Tools/ api/ services/ scripts/ tests/ docs/` → only the directory itself + the dev-plan mention.
 **B3.2 —** `git mv "Tools/chat_language_models_2_-_staging_copy" scripts/attic/tools-chat_language_models_2-staging_copy`
@@ -329,7 +333,7 @@ change to `README.md` (the survivor) and, where the line described README.txt's 
 
 ---
 
-## Stage B4 — Deployment-story matrix (P1)
+## Stage B4 — Deployment-story matrix (P1) `[mechanical]`
 
 **B4.1 —** Append to `docs/SETUP.md` (before any final appendix):
 ```markdown
@@ -346,7 +350,7 @@ change to `README.md` (the survivor) and, where the line described README.txt's 
 
 ---
 
-## Stage B5 — .gitignore BOM (P1)
+## Stage B5 — .gitignore BOM (P1) `[mechanical]`
 
 **B5.1 —** Strip the UTF-8 BOM (`.gitignore` currently starts with `﻿`):
 ```bash
@@ -362,73 +366,393 @@ commit `chore: strip .gitignore BOM`, push, CI green.
 
 ---
 
-## Stage C1 — Session auth + roles: write the plan first (P2)
+## Stage C1 — Session auth + roles: PLAN ✅ DONE (`docs/SESSION_AUTH_PLAN.md`)
 
-**C1.1 — Create `docs/SESSION_AUTH_PLAN.md`** with exactly these sections (fill each with a
-concrete design; keep the modularization-plan tone: steps, risk controls, size target):
-1. **Problem & non-goals** — API-key alone can't distinguish analysts from admins and can't
-   be revoked per-user; non-localhost exposure is blocked on this (security tracker).
-2. **Design** — session cookie (HttpOnly, SameSite=Lax, Secure) + CSRF token for the UI;
-   `X-API-Key` path stays for API clients; `api/auth.py` remains the single seam.
-3. **Roles** — `analyst` (investigation flow) vs `admin` (tools/registry, jobs delete,
-   boundary admit/release, retention apply, backups). Map each existing route family to a
-   role in a table (use the `docs/API_ENDPOINTS.md` families).
-4. **Storage** — `users` + `sessions` tables in `db/models.py`; password hashing via
-   `hashlib.scrypt` (stdlib only — no new deps).
-5. **Step plan** — Piece A models+migrations-free create_all, Piece B login/logout routes
-   + middleware, Piece C UI login gate + role-aware buttons, Piece D tests (auth matrix).
-6. **Risk controls & rollback** — gate stays until sessions exist; feature-flag via env.
-7. **Size target & exit criteria** — tests for: login, logout, CSRF reject, role gate,
-   API-key still works.
-**C1.2 —** Gates (docs-only), commit `docs: session auth + roles plan (C1)`, push, CI green.
+The plan (Pieces A–D, roles matrix, storage, exit criteria) is written and committed
+(`7281fe8`). **Human sign-off on that plan is the gate before C1B. Do not start C1B
+without it.**
+
+### Stage C1B — Session auth build (P2 · 4 commits) `[mechanical after sign-off]`
+
+Design reference: `docs/SESSION_AUTH_PLAN.md`. Flag: `AUTH_MODE` — everything lands inert
+until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror the existing
+`_API_KEY` monkeypatch pattern in `tests/test_api_key_gate.py`).
+
+**C1B.1 — Piece A: models + scrypt + user CLI.** (commit 1)
+- `db/models.py` — append (match the file's existing Column/import style):
+
+  ```python
+  class User(Base):
+      __tablename__ = "users"
+      id = Column(Integer, primary_key=True)
+      username = Column(String(64), unique=True, nullable=False, index=True)
+      password_hash = Column(String(256), nullable=False)
+      role = Column(String(16), nullable=False, default="analyst")  # analyst|admin
+      is_active = Column(Boolean, nullable=False, default=True)
+      created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+
+  class AuthSession(Base):
+      __tablename__ = "auth_sessions"
+      id = Column(Integer, primary_key=True)
+      token_hash = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex
+      csrf_token = Column(String(64), nullable=False)
+      user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+      created_at = Column(DateTime, nullable=False, default=utcnow_naive)
+      expires_at = Column(DateTime, nullable=False)
+  ```
+
+- `api/auth.py` — append the scrypt helpers exactly as specced in SESSION_AUTH_PLAN §4
+  (`hash_password` / `verify_password`, format `scrypt$n$r$p$salthex$hashhex`, n=2**14,
+  r=8, p=1, dklen=32, `hmac.compare_digest`) plus `import hashlib, hmac, secrets` at top.
+- `scripts/manage_users.py` — new CLI (stdlib + `api.auth.hash_password`): subcommands
+  `create <name> --role analyst|admin`, `list`, `set-role <name> <role>`,
+  `set-password <name>`, `deactivate <name>`. Password via `getpass` prompt or
+  `--password-env VARNAME` (env var NAME, never the secret in argv).
+- Tests in `tests/test_api_key_gate.py`: `test_scrypt_roundtrip`,
+  `test_scrypt_wrong_password_fails`, `test_password_never_stored_plaintext`.
+- Verify (isolated DB, never the real DATABASE_URL):
+  `DATABASE_URL=sqlite:////tmp/auth_smoke.db .venv314/bin/python scripts/manage_users.py create smoke --role admin --password-env SMOKE_PW`
+  with `SMOKE_PW=dummy123` exported → prints created; then `rm /tmp/auth_smoke.db`.
+- Commit `feat: users + sessions models, scrypt helpers, manage_users CLI (C1B.1)`.
+
+**C1B.2 — Piece B: auth routes + gates.** (commit 2)
+- `api/routes/auth.py` — new router:
+
+  ```python
+  """Session auth routes (SESSION_AUTH_PLAN.md Piece B)."""
+  import secrets
+
+  from fastapi import APIRouter, HTTPException, Request, Response
+  from pydantic import BaseModel
+
+  from api import auth
+
+  router = APIRouter()
+
+  class LoginRequest(BaseModel):
+      username: str
+      password: str
+
+  def _issue_session(response: Response, user) -> dict:
+      from db.models import AuthSession, SessionLocal
+      token = secrets.token_urlsafe(32)
+      csrf = secrets.token_urlsafe(32)
+      db = SessionLocal()
+      try:
+          row = AuthSession(
+              token_hash=auth.hash_token(token),
+              csrf_token=csrf,
+              user_id=user.id,
+              expires_at=auth.session_expiry(),
+          )
+          db.add(row); db.commit()
+      finally:
+          db.close()
+      response.set_cookie(
+          "soc_session", token,
+          httponly=True, samesite="lax", secure=auth.secure_cookies(),
+          max_age=12 * 3600,
+      )
+      return {"user": user.username, "role": user.role, "csrf_token": csrf}
+
+  @router.post("/api/auth/login")
+  def login(payload: LoginRequest, response: Response):
+      from db.models import SessionLocal, User
+      db = SessionLocal()
+      try:
+          user = db.query(User).filter(User.username == payload.username).first()
+          if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
+              raise HTTPException(status_code=401, detail="Invalid credentials")
+          return _issue_session(response, user)
+      finally:
+          db.close()
+
+  @router.post("/api/auth/logout")
+  def logout(request: Request, response: Response):
+      auth.destroy_session(request)
+      response.delete_cookie("soc_session")
+      return {"ok": True}
+
+  @router.get("/api/auth/session")
+  def session_info(request: Request):
+      actor = auth.resolve_actor(request)
+      if actor.kind != "session":
+          raise HTTPException(status_code=401, detail="Not signed in")
+      return {"user": actor.user.username, "role": actor.role, "csrf_token": actor.csrf_token}
+  ```
+
+- `api/auth.py` — append `hash_token` (sha256 hex), `session_expiry()` (now + 12h,
+  naive UTC via `db.util.utcnow_naive`), `secure_cookies()` (env `SESSION_SECURE`),
+  `session_mode()` (reads module `_SESSION_MODE` set from `AUTH_MODE` at import),
+  `destroy_session(request)`, `resolve_actor(request) -> Actor` (Actor =
+  `namedtuple("Actor", "kind role user csrf_ok csrf_token")`; kind: `session` when the
+  cookie hashes to a live `AuthSession` row, `api-key` when `request_has_api_key`, else
+  `anonymous`; session `csrf_ok` compares `X-CSRF-Token` header to `csrf_token` with
+  `hmac.compare_digest`). Also `EXEMPT_PATHS = ("/health", "/api/health", "/api/auth/login", "/api/auth/session")`
+  and `def require_role(role)` returning a FastAPI dependency raising 401 (anonymous) /
+  403 (role below required).
+- `api/main.py` — register `from api.routes.auth import router as auth_router;
+  app.include_router(auth_router)` **before** the static mount block, and replace the
+  `_api_key_mutation_gate` middleware body with:
+
+  ```python
+      path = request.url.path
+      if auth.session_mode():
+          actor = auth.resolve_actor(request)
+          is_api = path.startswith("/api/")
+          if is_api and path not in auth.EXEMPT_PATHS and actor.kind == "anonymous":
+              return JSONResponse({"detail": "Authentication required"}, status_code=401)
+          if auth.mutation_gate_rejects(request):
+              if actor.kind == "anonymous":
+                  return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+              if actor.kind == "session" and not actor.csrf_ok:
+                  return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
+      elif auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
+          return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+      return await call_next(request)
+  ```
+
+  (`mutation_gate_rejects` keeps its A1 path-aware form but must gate mutations in session
+  mode even when `_API_KEY` is empty — restructure it to
+  `bool(path.startswith("/api/") and (method mutating or destructive_suffix))` and let the
+  middleware branch decide key-vs-session semantics.)
+- Admin dependency on the §3 admin routes (10 decorators, add
+  `dependencies=[Depends(require_role("admin"))]`): `GET /api/registry`,
+  `POST /api/registry/reload`, `GET /api/tools`, `GET /api/tools/{tool_name}`,
+  `POST /api/execute`, `POST /api/tools/regression`, `DELETE /api/jobs`,
+  `DELETE /api/jobs/{job_id}`, `POST /api/splunk-boundary/admit`,
+  `DELETE /api/splunk-boundary/batches/{batch_id}`.
+- **Doc-drift guard:** add literal `docs/API_ENDPOINTS.md` rows for
+  `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/session` or
+  `TestCanonicalRestPaths` fails.
+- Tests in `tests/test_api_key_gate.py` (a `with_session` helper that inserts a User +
+  AuthSession via `api_client.test_session()`-style session and sets the cookie on the
+  client): `test_login_ok_sets_cookie`, `test_login_bad_password_401`,
+  `test_logout_invalidates`, `test_csrf_missing_403`, `test_session_read_gate_401`.
+- Verify: those 5 pass with `_SESSION_MODE` monkeypatched on; the full suite passes with
+  it off (flag-off byte-compat).
+- Commit `feat: session login/logout + CSRF + role dependency (C1B.2)`.
+
+**C1B.3 — Piece C: UI login gate + role-aware controls.** (commit 3)
+- `web/utils/auth.js` — after the existing X-API-Key block, add CSRF stamping (same IIFE):
+
+  ```js
+    if (global.axios) {
+        global.axios.interceptors.request.use(function (config) {
+            config.headers = config.headers || {};
+            if (global.__SOC_CSRF__) config.headers['X-CSRF-Token'] = global.__SOC_CSRF__;
+            return config;
+        });
+    }
+  ```
+
+- Root state (`web/app.modular.js` near `analysisModel: ''`): add
+  `auth: { user: '', role: '', csrf: '' },`; on startup fetch `GET /api/auth/session` —
+  200 → store user/role and `window.__SOC_CSRF__ = csrf_token`; 401 → show login modal.
+- `web/components/HeaderNav.js` — user chip + Logout button + login modal
+  (username/password → `POST /api/auth/login` via `API.sessionLogin(payload)`; add
+  `sessionLogin`/`sessionLogout`/`sessionInfo` methods to `web/modules/api.js`).
+- Role-aware controls (hide + tooltip for non-admin, same pattern as the disabled
+  historical-promote tooltip): ToolsTab execute/regression/registry-reload buttons,
+  JobsTab delete/clear buttons, SplunkBoundaryWidget admit/release buttons. Pass `role`
+  down as a prop — never `axios` in components (design rule #2).
+- 401-on-mutation → reopen login modal (handle it in the `web/modules/api.js` transport
+  error path so one place covers every call).
+- Bump cache-busters for every touched file (`auth.js?v=1`, `HeaderNav.js?v=9`,
+  `api.js` (v11→v12), `app.modular.js` (v19→v20), plus any tab component touched).
+- Verify: `node --check` clean; all 23 harness scenarios green (they run with auth inert);
+  live smoke with `AUTH_MODE=session` and a created user: login → Run All works →
+  analyst account sees no admin buttons.
+- Commit `feat: UI login gate + role-aware admin controls (C1B.3)`.
+
+**C1B.4 — Piece D: auth matrix + doc status.** (commit 4)
+- Remaining tests in `tests/test_api_key_gate.py`: `test_role_gate_analyst_403` (analyst
+  session DELETEs `/api/jobs/x` → 403), `test_api_key_still_admin_in_session_mode`
+  (X-API-Key passes without CSRF), `test_expired_session_401` (backdate `expires_at`).
+- Update `docs/SESSION_AUTH_PLAN.md` Status line → built; run the suite with the flag ON
+  and OFF.
+- Commit `test: session auth matrix + flag-off compat (C1B.4)`.
 
 ---
 
-## Stage C2 — Service hardening (P2 · do C2.0 scoping as its own commit first)
+## Stage C2 — Service hardening (P2) `[mechanical after sign-off]`
 
-**C2.0 — Scoping doc:** append a `## Hardening limits` section to `docs/DEVELOPMENT_PLAN.md`
-§11-C2 area listing proposed limits (each with default + where enforced):
-analyze wall-clock timeout (e.g. 300s, `api/routes/analyze.py`), job queue cap
-(`api/routes/tools.py` `_JOBS`), artifact size cap (`services/artifact_guard.py`),
-paste payload limit (`api/routes/notables.py` paste route), and a simple in-memory rate
-limit for Ollama-backed POSTs (middleware in `api/main.py`). Commit as `docs: hardening limits scoping`.
-**C2.1 — Implement each limit** one commit each: constant at top of the named file,
-enforcement at the named site, one test in `tests/test_investigation_fixes.py` per bound
-(exceed → 413/429/504 as appropriate). Follow §0 gates per commit.
+**Human gate:** confirm or edit the five defaults in C2.0 before C2.1.
+
+**C2.0 — Commit the limits doc.** Append to `docs/DEVELOPMENT_PLAN.md` §11 (verbatim,
+numbers are the PROPOSED DEFAULTS the human signs off):
+
+```markdown
+### Hardening limits (proposed defaults — signed off <DATE>)
+| Limit | Default | Enforced at | Over-limit |
+|---|---|---|---|
+| Analyze wall-clock | 300 s | `api/routes/analyze.py` ollama call (worker thread + join(timeout)) | 504, nothing persisted |
+| Tool job queue | 100 queued | `api/routes/tools.py` job admission | 429 |
+| Artifact size | 50 MiB (= `SPLUNK_BOUNDARY_MAX_BYTES`) | `services/artifact_guard.py` | 413 |
+| Paste payload | 5 MiB raw text | `api/routes/notables.py` `paste_notable` entry | 413 |
+| Ollama-backed POSTs | 30/min per client IP | rate-limit middleware in `api/main.py` | 429 |
+```
+
+Commit `docs: hardening limits scoping`.
+
+**C2.1.x — one commit per limit** (5 commits). Each: constant at the named site,
+enforcement, one test in `tests/test_investigation_fixes.py`, §0 gates.
+- C2.1.1 timeout — run the ollama call via `concurrent.futures.ThreadPoolExecutor` and
+  `future.result(timeout=ANALYZE_TIMEOUT_S)`; on `TimeoutError` raise `HTTPException(504)`
+  BEFORE any persist. Test `test_analyze_timeout_504` (stub ollama sleeps > timeout —
+  monkeypatch the timeout constant to 0.1s so the test stays fast).
+- C2.1.2 job cap — before enqueueing in the `POST /api/execute` handler, count queued jobs;
+  `len(queued) >= JOB_QUEUE_MAX` → `HTTPException(429)`. Test `test_job_queue_cap_429`.
+- C2.1.3 artifact cap — in `services/artifact_guard.py` validation add size check against
+  `SPLUNK_BOUNDARY_MAX_BYTES` → returns rejected report (fail-closed contract preserved).
+  Test `test_artifact_size_cap`.
+- C2.1.4 paste cap — first lines of `paste_notable`:
+  `if len(request.raw_text or "") > PASTE_MAX_BYTES: raise HTTPException(413)`.
+  Test `test_paste_payload_cap_413`.
+- C2.1.5 rate limit — middleware in `api/main.py` before the auth gate:
+
+  ```python
+  _RATE_HITS: dict = {}  # ip -> [timestamps]
+  RATE_LIMIT_PER_MIN = 30
+  _RATE_PATHS = ("/api/db/analyze", "/api/analyses", "/api/splunk/search-one",
+                 "/api/db/supportive-queries/draft", "/api/code-review")
+
+  @app.middleware("http")
+  async def _ollama_rate_limit(request, call_next):
+      if request.method == "POST" and any(request.url.path.startswith(p) for p in _RATE_PATHS):
+          ip = request.client.host if request.client else "?"
+          now = time.time()
+          hits = [t for t in _RATE_HITS.get(ip, []) if now - t < 60.0]
+          if len(hits) >= RATE_LIMIT_PER_MIN:
+              _RATE_HITS[ip] = hits
+              return JSONResponse({"detail": "Too many requests"}, status_code=429)
+          hits.append(now)
+          _RATE_HITS[ip] = hits
+      return await call_next(request)
+  ```
+
+  Test `test_rate_limit_429` (monkeypatch `RATE_LIMIT_PER_MIN` to 2, hit analyze thrice,
+  third → 429; clear `_RATE_HITS` in the fixture).
 
 ---
 
-## Stage C3 — Multi-model per-stage choice (P2)
+## Stage C3 — Multi-model per-stage choice (P2) `[mechanical]`
 
-**C3.1 — API:** `api/schemas.py` `AnalyzeRequest`: add optional
-`stage_models: dict[str, str]` (keys `initial`, `phase2`, `final`; falls back to `model`).
-`api/routes/analyze.py`: resolve the model per phase via
-`stage_models.get(<phase>, request.model)`.
-**C3.2 — UI:** `web/components/AnalysisTab.js` — Stage 3/4/5 headers each get a model
-`<select>` bound to `stageModels.{initial,phase2,final}` (options from
-`ollamaHealth.models`, default = current `analysisModel`); `web/modules/analysis.js` sends
-`stage_models` in the analyze payload; `web/app.modular.js` holds the `stageModels` map.
-Bump cache-busters for every changed web file.
-**C3.3 — Tests:** `tests/test_api_analyze_flow.py` — one test asserting per-stage override
-reaches the Ollama stub's `model` field and one asserting fallback to `model`.
-Harness: extend `evidence_promote_load.mjs` `loop_timeline_panel`-adjacent scenario asserts
-`stage_models` presence in the analyze POST body.
-**C3.4 —** §0 gates (incl. 23 scenarios), commit `feat: per-stage model selection in the analysis wizard`, push, CI green.
+Stage vocabulary is verified: `api/routes/analyze.py` knows `analysis_stage` values
+`"initial"` and `"follow_up"` (the UI sends `priorAnalysisText ? 'follow_up' : 'initial'` —
+`web/modules/analysis.js:1079`). Override keys: `initial`, `follow_up`, `closure`.
+
+**C3.1 — API.** `api/schemas.py` `AnalyzeRequest` (line ~62) — add one field:
+
+```python
+    stage_models: Optional[Dict[str, str]] = None  # per-stage override: initial|follow_up|closure
+```
+
+(add `from typing import Dict, Optional` if the file lacks it). `api/routes/analyze.py`
+lines 58-63 — replace:
+
+```python
+        case_id = request.case_id
+        model = request.model
+        context = request.context
+```
+
+with:
+
+```python
+        case_id = request.case_id
+        context = request.context
+        # C3: per-stage model override; missing/empty entry falls back to
+        # request.model ("" keeps the auto-resolve-an-installed-model behavior).
+        model = (request.stage_models or {}).get(requested_analysis_stage) or request.model
+```
+
+and MOVE the `requested_analysis_stage = ...` assignment (currently line 61) ABOVE the new
+`model =` line (the exact 6-line block to rearrange is at `api/routes/analyze.py:58-63`).
+Optional C3.1.x: `grep -n "model" api/routes/closure.py` — if the closure-note handler
+threads a model, honor `stage_models.get("closure")` the same way; if it does not, leave a
+one-line comment `# stage_models["closure"] reserved` and skip.
+
+**C3.2 — UI.**
+- `web/app.modular.js` (line ~80, next to `analysisModel: ''`): add
+  `stageModels: { initial: '', follow_up: '', closure: '' },`.
+- `web/modules/analysis.js` — both `API.analyze({…})` payloads (lines ~936-942 and
+  ~1074-1081): add `stage_models: this.stageModels || {},` after the `model:` line.
+- `web/components/AnalysisTab.js`: add prop `'stageModels'` (props list ~line 11) and emit
+  `'update:stage-models'` (emits list ~line 65). In the Stage 4 and Stage 5 panels add a
+  model select mirroring the Stage 3 pattern (that select is at ~line 735, bound
+  `:value="analysisModel" @input="$emit('update:analysis-model', …)"`):
+
+  ```html
+  <select
+      :value="(stageModels && stageModels.follow_up) || ''"
+      @input="$emit('update:stage-models', { ...(stageModels || {}), follow_up: $event.target.value })"
+      class="…same classes as the Stage 3 model select…">
+      <option value="">Default model</option>
+      <option v-for="m in ollamaHealth.models" :key="m" :value="m">{{ m }}</option>
+  </select>
+  ```
+
+  (Stage 5 uses key `closure`.) At the `<analysis-tab>` binding site
+  (`grep -n "analysis-model" web/index.modular.html web/app.modular.js` to find it) add
+  `v-model:stage-models="stageModels"`.
+- Cache-busters: `api.js` untouched; bump `app.modular.js` (v19→v20), `analysis.js`
+  (v19→v20), `AnalysisTab.js` (v19→v20) in `web/index.modular.html`.
+
+**C3.3 — Tests.** `tests/test_api_analyze_flow.py` — new class `TestAnalyzeStageModels`
+(arrange block copied from that file's simplest analyze test; the fake Ollama stub records
+the `model` kwarg): `test_initial_stage_uses_override`, `test_follow_up_stage_uses_override`,
+`test_missing_key_falls_back_to_model`. Harness: extend the `stepper_guards` scenario file
+with `analyze_stage_models` asserting the POST body carries `stage_models` (stub the same
+way `save_supportive` stubs `axios.post`).
+
+**C3.4 —** §0 gates (incl. now-24 scenarios), commit
+`feat: per-stage model selection in the analysis wizard`, push, CI green.
 
 ---
 
-## Stage C4 — Paste-box storage via boundary batch (P2)
+## Stage C4 — Paste-box storage via boundary batch (P2) `[mechanical]`
 
-**C4.1 —** Read `ingest_json_notables` docstring (`services/evidence_service.py`) — the
-sanitization contract MUST stay. Route pasted-notable storage through a
-`splunk_boundary` batch so manifest/purge parity holds (see `services/splunk_boundary.py`).
-**C4.2 — Tests:** one test per property: paste → boundary manifest row exists;
-purge batch → pasted rows removed; sanitization output byte-identical to today's.
-**C4.3 —** §0 gates, commit `feat: paste-box storage through boundary batches (manifest/purge parity)`, push, CI green.
+**DESIGN CALL (recorded Sept 30 — do not re-litigate): the "paste-batch adapter".**
+Verified from source: `ingest_json_notables` lives in `services/splunk_boundary.py:364` and
+its docstring says the paste-box flow deliberately REMAINS the analyst path — so do NOT
+merge the flows. Instead give the paste path the same batch bookkeeping the boundary
+already has: `quarantine_file` → `{batch_id}-manifest.json` → `ingest_manifest` records
+`inserted_ids` + `ingest_window` → `purge_batch` deletes staged file + manifest + DB rows
+by `inserted_ids` (fallback: window). **The manifest is the linkage — no model changes.**
+Paste is an operator-facing admission (`admit_text`), so it satisfies the quarantined-mode
+rule "data may only enter via the boundary" and stays allowed in `quarantined` mode.
+
+**C4.1 — `admit_text` in `services/splunk_boundary.py`.** New function next to
+`quarantine_file` (~line 168), same contract (fail-closed validation: `.txt` extension,
+`max_bytes()` cap, binary sniff — reuse `validate_file` semantics on a temp file), staging
+name `{batch_id}-pasted.txt`, manifest fields identical to `quarantine_file`'s plus
+`"source": "paste-box"`. Public: `admit_text(text: str, source_label: str = "paste-box") -> Dict`.
+
+**C4.2 — wire `paste_notable` (`api/routes/notables.py` ~1272).** As the FIRST action after
+the empty-check, call `admit_text(raw_text)`; keep the ENTIRE existing pipeline byte-for-byte
+(`split_pasted_notables`, `sanitize_logs_with_tokens`, `sanitize_pii_phi`, dedup, inserts).
+After the inserts commit, write into the manifest exactly as `ingest_manifest` does:
+`manifest["ingest"] = {"rows_inserted": …, "inserted_ids": [ids of rows created by THIS paste]}`,
+`manifest["ingest_window"]`, rewrite `{batch_id}-manifest.json`. Include `batch_id` in the
+route's response payload (`"batch_id": …`) so the UI/test can reference it.
+
+**C4.3 — Tests** in `tests/test_investigation_fixes.py`:
+- `test_paste_creates_boundary_manifest` (paste → `list_batches()` shows source `paste-box`,
+  `inserted_ids` non-empty),
+- `test_purge_batch_removes_pasted_rows` (`purge_batch(batch_id)` → those SplunkEvent ids
+  gone, staged file + manifest gone),
+- `test_paste_sanitization_byte_identical` (golden: same input through old entry helper vs
+  new path → identical stored `raw`),
+- `test_paste_dedup_unchanged` (same paste twice → second is skipped),
+- `test_paste_allowed_in_quarantined_mode` (default mode admits via `admit_text`).
+
+**C4.4 —** §0 gates, commit
+`feat: paste-box storage through boundary batches (manifest/purge parity)`, push, CI green.
 
 ---
 
-## Stage D1 — Vercel handoff doc (P3 · assemble now, unblocks by conversation)
+## Stage D1 — Vercel handoff doc (P3 · assemble now, unblocks by conversation) `[mechanical]`
 
 **D1.1 — Create `docs/VERCEL_HANDOFF.md`** with these sections and known content:
 1. **Env vars to set in Vercel:** `DATABASE_URL` (Neon, rotated value — see
@@ -447,7 +771,7 @@ purge batch → pasted rows removed; sanitization output byte-identical to today
 
 ---
 
-## Stage D2 — Live Splunk rehearsal checklist (P3 · assemble now)
+## Stage D2 — Live Splunk rehearsal checklist (P3 · assemble now) `[mechanical]`
 
 **D2.1 — Create `docs/SPLUNK_REHEARSAL.md`:** numbered rehearsal: (1) get `SPLUNK_URL` +
 `SPLUNK_TOKEN` (read-only role); (2) `export SEARCH_BACKEND=splunk SPLUNK_URL=… SPLUNK_TOKEN=…`
@@ -460,7 +784,7 @@ card status. Each step gets an expected-result line.
 
 ---
 
-## Stage D3 — User-side checklist (not automatable — record only)
+## Stage D3 — User-side checklist (not automatable — record only) `[informational]`
 
 Add a short `## User-side hygiene (owner: human)` list to `docs/VERCEL_HANDOFF.md` §5 or the
 tracker: Safari history scrub, thread-history deletion decision. No code. No commit needed
@@ -476,6 +800,8 @@ beyond the doc that carries it.
 | A2 | requirements pinned & pruned; pip-audit result recorded; Dependabot config + alerts attempted |
 | A3 | Tracker + backend-plan statuses match reality |
 | B* | Root = live platform + pointer docs; every move has its refs updated |
-| C1 | Plan doc reviewed-by-human before C2/C3/C4 build |
-| C2–C4 | Each limit/feature has ≥1 regression test in the existing test files |
+| C1 | Plan signed off → build stages C1B.1–C1B.4 land with the auth matrix green |
+| C2 | Defaults signed off → each limit lands with its named regression test |
+| C3 | Per-stage model overrides reach the Ollama stub; fallback proven |
+| C4 | Manifest/purge parity + byte-identical sanitization proven |
 | D1–D2 | Docs assembled so unblocking = one conversation/checklist run |
