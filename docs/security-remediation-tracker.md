@@ -45,11 +45,11 @@
 - **What:** `api/main.py` has no auth middleware, no API key check, no login. Anyone who can reach the server can hit every endpoint (triage data, notables, job execution).
 - **Why it matters:** The Vercel deployment (`soc-plaform-livid.vercel.app`) is publicly reachable; if its backend talks to the shared DB with no auth, anyone can query or mutate SOC data.
 - **Remediation:**
-  - [ ] Add an API-key/token dependency (FastAPI `Depends`) on all non-health endpoints, or
+  - [x] Add an API-key/token dependency (FastAPI `Depends`) on all non-health endpoints (covered by the method-based mutation middleware + A1 path-aware gate), or
   - [ ] Restrict exposure (Vercel password protection / IP allowlist) while internal-only
 - **Note:** biggest structural gap — deserves a deliberate design conversation, not a quick patch.
 - **Progress Sept 25:** API-key scaffold landed — `require_api_key` dependency on the dangerous routes (execute/regression/jobs-delete); no-op until `API_KEY` is set, so local dev is unchanged.
-- **Progress Sept 25 (session 2):** activation is now **config-only** — the frontend ships `web/utils/auth.js` (single axios interceptor stamps `X-API-Key` from `SOC_CONFIG.apiKey`/`?apiKey=` across all 67 call sites; no-op when unset), `X-API-Key` is CORS-allowlisted with a behavioral preflight test, and the boundary write endpoints carry the gate too. **To activate:** set `API_KEY` (Vercel) + get the key into the browser (`SOC_CONFIG.apiKey` injection — the one remaining design choice, needs a ~10-min coworker conversation since static pages can't read env vars at runtime).
+- **Progress Sept 25 (session 2):** activation is now **config-only** — the frontend ships `web/utils/auth.js` (single axios interceptor stamps `X-API-Key` from `SOC_CONFIG.apiKey`/`?apiKey=` across all 67 call sites; no-op when unset), `X-API-Key` is CORS-allowlisted with a behavioral preflight test, and the boundary write endpoints carry the gate too. **To activate:** set `API_KEY` (Vercel) + get the key into the browser (`SOC_CONFIG.apiKey` injection — the one remaining design choice, needs a ~10-min coworker conversation since static pages can't read env vars at runtime). **Resolved Sept 30:** the injection design decision is made — server-side injection at serve time.
 
 ### 6. Unauthenticated job-execution endpoints
 - **What:** `/api/jobs/*` and tool-execution routes spawn processes server-side (`tool_runs`). Combined with #5, this is remote code execution exposed to whoever can reach the server.
@@ -164,7 +164,7 @@
 **Mock Splunk backend** (`services/search_backend.py`, `a216ca7`): pluggable `SearchBackend` — deterministic mock (honest SPL subset, committed seed corpus, three ground-truth scenarios) + loud-failure real-Splunk stub + `SEARCH_BACKEND` factory. Phase 3 develops with **zero Splunk credentials in the environment** — itself a posture improvement, and the future REST connector's credentials will live inside the boundary, not beside it.
 
 **Remaining boundary work (deliberate, not urgent):**
-- [ ] Wire `SOC_CONFIG.apiKey` into the served pages (Vercel deploy-time injection) — unlocks `restricted` mode + full-gate activation
+- [x] **Done Sept 30 (local path):** server-injected `window.SOC_CONFIG` in `/index.modular.html` when the gate is armed (commit 99ee625). Vercel deploy-time variant tracked in the D1 handoff.
 - [ ] Consider routing the paste-box flow's *storage* through a boundary batch for manifest/purge parity (sanitization must stay — see `ingest_json_notables` docstring)
 
 ---
