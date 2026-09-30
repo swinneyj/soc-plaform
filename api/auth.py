@@ -40,11 +40,20 @@ def mutation_gate_rejects(request) -> bool:
     Every mutating /api/* request (POST/PUT/PATCH/DELETE) is gated when
     API_KEY is armed. Read-only GETs, /api/health (deploy smoke test), and
     the static UI stay open per the contract in api.main.
+
+    Belt and suspenders (A1): GET requests to delete-shaped paths
+    (*/delete, */batch-delete, */delete-all) are gated too, so a future
+    GET mutation surface can never sail past the method-based gate.
     """
+    path = request.url.path
+    destructive_suffix = path.endswith(("/delete", "/batch-delete", "/delete-all"))
     return bool(
         _API_KEY
-        and request.method in ("POST", "PUT", "PATCH", "DELETE")
-        and request.url.path.startswith("/api/")
+        and path.startswith("/api/")
+        and (
+            request.method in ("POST", "PUT", "PATCH", "DELETE")
+            or (request.method == "GET" and destructive_suffix)
+        )
     )
 
 

@@ -1097,5 +1097,58 @@ class TestCanonicalRestPaths:
             assert a == b, f"{legacy}={a} but {canonical}={b}"
 
 
+class TestRouteSemanticsAudit:
+    """A1: every GET route must be read-only. New GET routes must be added here
+    after a human classifies them — a failure means an unreviewed GET route (and
+    thus a potential unauthenticated mutation) exists."""
+
+    READ_ONLY_GET_ALLOWLIST = {
+        "/api/", "/health", "/api/health", "/api/db/ollama/health",
+        "/api/db/operations", "/api/db/stats",
+        "/api/db/triage", "/api/db/triage/{case_id}",
+        "/api/db/triage/{case_id}/closure-readiness",
+        "/api/db/triage/{case_id}/evidence",
+        "/api/db/triage/{case_id}/investigation-state",
+        "/api/db/triage/{case_id}/notable",
+        "/api/db/notables", "/api/db/notables/generate-fetch-spl",
+        "/api/db/notables/historical", "/api/db/notables/{event_id}",
+        "/api/db/placeholder-aliases", "/api/db/placeholder-aliases/suggestions",
+        "/api/db/rules", "/api/db/supportive-queries",
+        "/api/db/supportive-queries/status/{case_id}",
+        "/api/code-reviews", "/api/code-reviews/{review_id}",
+        "/api/jobs", "/api/jobs/{job_id}", "/api/registry",
+        "/api/reports", "/api/reports/{report_name}",
+        "/api/tool-artifacts/{artifact_path:path}",
+        "/api/tools", "/api/tools/{tool_name}",
+        "/api/splunk-boundary/status",
+        "/index.modular.html",
+    }
+
+    def test_every_get_route_is_classified_read_only(self):
+        # _iter_api_routes (module helper, shared with the doc-drift guard) recurses
+        # into included routers — FastAPI 0.141 wraps them in _IncludedRouter objects,
+        # so a flat app.routes loop sees almost nothing. Do not "simplify" this back.
+        get_paths = {
+            path
+            for path, methods in _iter_api_routes()
+            if "GET" in methods
+        }
+        assert get_paths == self.READ_ONLY_GET_ALLOWLIST, (
+            "GET routes changed — classify each new route read-only (add to "
+            "allowlist) or make it a gated mutation. Removed routes must leave "
+            "the allowlist. Diff: "
+            f"unclassified={sorted(get_paths - self.READ_ONLY_GET_ALLOWLIST)} "
+            f"stale={sorted(self.READ_ONLY_GET_ALLOWLIST - get_paths)}"
+        )
+
+    def test_no_get_route_is_delete_shaped(self):
+        for path, methods in _iter_api_routes():
+            if "GET" in methods:
+                assert not path.endswith(("/delete", "/batch-delete", "/delete-all")), (
+                    f"GET {path} is delete-shaped — destructive actions must be "
+                    "POST/DELETE so the API-key mutation gate covers them"
+                )
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -166,6 +166,10 @@
         deleteNotable(id) {
             return post('/db/notables/' + id + '/delete');
         },
+        deleteCase(caseId, deleteAnalysis) {
+            return post('/db/triage/' + encodeURIComponent(caseId) + '/delete'
+                + (deleteAnalysis ? '?delete_analysis=true' : ''));
+        },
         triageNotable(caseId) {
             return get('/db/triage/' + encodeURIComponent(caseId) + '/notable');
         },

@@ -459,10 +459,8 @@
             }
 
             try {
-                this.triageData = await API.triage({
-                    delete_case_id: case_.case_id,
-                    delete_analysis: this.deleteAnalysisWithCase
-                });
+                await API.deleteCase(case_.case_id, this.deleteAnalysisWithCase);
+                this.triageData = await API.triage();
                 await this.loadAnalysisCases();
                 await this.loadDbStats();
             } catch (err) {

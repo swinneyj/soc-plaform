@@ -6,7 +6,7 @@ investigation states, supportive results, closure notes).
 """
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, HTTPException, Query
 
@@ -117,29 +117,14 @@ def get_triage(
     limit: int = Query(50, ge=1, le=1000),
     search: str = Query("", description="Search case ID, rule name, or summary"),
     verdict: str = Query("", description="Filter by verdict"),
-    delete_case_id: Optional[str] = Query(None, description="If provided, delete this case before listing"),
-    delete_analysis: bool = Query(False, description="Also delete analysis results for this case when deleting"),
 ):
-    """Get triaged cases from database (optionally deleting one first)."""
+    """Get triaged cases from database."""
     try:
         sys.path.insert(0, deps.get_platform_root())
         from sqlalchemy import or_
-        from db.models import SessionLocal, TriageResult, AnalysisResult
+        from db.models import SessionLocal, TriageResult
 
         db = SessionLocal()
-
-        # Optional delete step using the same session
-        if delete_case_id:
-            case = db.query(TriageResult).filter(TriageResult.case_id == delete_case_id).first()
-            if case:
-                _purge_case_related_records(
-                    db,
-                    delete_case_id,
-                    delete_analysis=delete_analysis,
-                    unlink_source_notable=True,
-                )
-                db.delete(case)
-                db.commit()
 
         query = db.query(TriageResult)
 
@@ -279,12 +264,6 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
             db.close()
         except Exception:
             pass
-
-
-@router.get("/api/db/triage/{case_id}/delete", tags=["Database"])
-def delete_triage_case_get(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
-    """GET wrapper for delete_triage_case for environments that disallow POST."""
-    return delete_triage_case(case_id=case_id, delete_analysis=delete_analysis)
 
 
 @router.post("/api/db/triage/batch-delete", tags=["Database"])

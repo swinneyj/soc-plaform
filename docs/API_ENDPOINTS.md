@@ -66,10 +66,9 @@ middleware were removed. Everything else mutating is
 
 | Method | Canonical | Legacy alias | Auth | Purpose |
 | --- | --- | --- | --- | --- |
-| GET | `/api/cases` | `/api/db/triage` | Open | List triage cases (supports `delete_case_id`, `delete_analysis` query params on this read). |
+| GET | `/api/cases` | `/api/db/triage` | Open | List triage cases. |
 | GET | `/api/cases/{case_id}` | `/api/db/triage/{case_id}` | Open | Single case detail. |
 | POST | `/api/cases/{case_id}/delete` | `/api/db/triage/{case_id}/delete` | Key when armed (middleware) | Delete a case (and optionally its analysis). |
-| GET | `/api/cases/{case_id}/delete` | `/api/db/triage/{case_id}/delete` | Open | Delete via GET — kept for legacy links; prefer POST. |
 | POST | `/api/cases/batch-delete` | `/api/db/triage/batch-delete` | Key when armed (middleware) | Delete many cases. |
 | GET | `/api/cases/{case_id}/notable` | `/api/db/triage/{case_id}/notable` | Open | The source notable linked to the case. |
 | GET | `/api/cases/{case_id}/investigation-state` | `/api/db/triage/{case_id}/investigation-state` | Open | Persisted loop state (status, confidence, timeline). |
@@ -87,7 +86,6 @@ middleware were removed. Everything else mutating is
 | GET | `/api/notables/{event_id}` | `/api/db/notables/{event_id}` | Open | One pasted notable. |
 | DELETE | `/api/notables/{event_id}` | `/api/db/notables/{event_id}` | Key when armed (middleware) | Delete a pasted notable. |
 | POST | `/api/notables/{event_id}/delete` | `/api/db/notables/{event_id}/delete` | Key when armed (middleware) | Delete via POST (frontend uses this). |
-| GET | `/api/notables/{event_id}/delete` | `/api/db/notables/{event_id}/delete` | Open | Delete via GET — kept for legacy links; prefer POST. |
 | POST | `/api/notables/batch-delete` | `/api/db/notables/batch-delete` | Key when armed (middleware) | Delete many pasted notables. |
 | POST | `/api/notables/{event_id}/promote` | `/api/db/notables/{event_id}/promote` | Key when armed (middleware) | Promote a pasted notable into a triage case. |
 | POST | `/api/notables/backfill-closure-notes` | `/api/db/notables/backfill-closure-notes` | Key when armed (middleware) | Backfill closure notes for promoted notables. |

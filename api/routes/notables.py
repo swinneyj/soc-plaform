@@ -1872,12 +1872,6 @@ def delete_pasted_notable_post(event_id: int):
     return delete_pasted_notable(event_id)
 
 
-@router.get("/api/db/notables/{event_id}/delete", tags=["Database"])
-def delete_pasted_notable_get(event_id: int):
-    """GET wrapper for delete_pasted_notable for environments that disallow POST/DELETE."""
-    return delete_pasted_notable(event_id)
-
-
 @router.post("/api/db/notables/batch-delete", tags=["Database"])
 def batch_delete_pasted_notables(payload: Dict[str, Any]):
     """Delete multiple pasted notables in one call.
