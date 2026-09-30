@@ -221,3 +221,17 @@ but-unplanned Phase 5 remainder, and externals. Phased by risk:
 **Recommended order:** A → B (fast, compounding wins) while drafting C1's plan and D1's
 doc in parallel; C builds in the sessions after. A1 is the only item with live exposure
 risk — do it first.
+
+### Hardening limits (signed off Sept 30, 2026)
+
+| Limit | Default | Enforced at | Over-limit |
+|---|---|---|---|
+| Analyze wall-clock | 300 s | `api/routes/analyze.py` ollama call (worker thread + timeout) | 504, nothing persisted |
+| Tool job queue | 100 queued | `api/routes/tools.py` job admission (`POST /api/execute`) | 429 |
+| Artifact size | 50 MiB (= `SPLUNK_BOUNDARY_MAX_BYTES`) | `services/splunk_boundary.validate_file` (fail-closed report) | 413-equivalent rejection |
+| Paste payload | 5 MiB raw text | `api/routes/notables.py` `paste_notable` entry | 413 |
+| Ollama-backed POSTs | 30/min per client IP | rate-limit middleware in `api/main.py` (pre-rewrite canonical paths) | 429 |
+
+(Signed off as proposed. C2.1.3 note: `services/artifact_guard.py` has no importers —
+the live fail-closed enforcement of the size cap is `validate_file` in
+`splunk_boundary.py`, so the limit lands there; the dead module stays untouched.)
