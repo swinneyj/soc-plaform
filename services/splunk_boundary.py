@@ -334,7 +334,30 @@ def ingest_csv_events(
                 return stats
 
             stats["success"] = True
-            for row_num, row in enumerate(reader, start=2):
+            while True:
+                # Lazy csv iteration: a NUL byte anywhere makes csv raise
+                # csv.Error mid-stream ("line contains NUL"). Caught here so
+                # one hostile cell degrades to a per-row skip instead of
+                # aborting the whole batch and losing every pre-error row's
+                # purge bookkeeping (property-fuzz finding, 2026-10-05).
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                except _csv.Error as exc:
+                    # The error may fire mid-record (NUL inside a quoted
+                    # multi-line field), so the stream cannot be resynced
+                    # reliably — continuing would parse garbage. End parsing
+                    # here: keep everything inserted so far (committed below,
+                    # purge bookkeeping intact) and surface the truncation.
+                    stats["rows_read"] += 1
+                    stats["rows_skipped"] += 1
+                    stats["errors"].append(
+                        f"Row {reader.line_num} (csv stream): {str(exc)[:100]}; "
+                        "parsing stopped at this line"
+                    )
+                    break
+                row_num = reader.line_num
                 stats["rows_read"] += 1
                 try:
                     field_lower = {k.lower(): v for k, v in row.items() if k}
@@ -400,10 +423,16 @@ def ingest_csv_events(
         # Guard against silent total failure: if the database itself is
         # broken (missing tables, connection loss), every row lands in
         # errors[] while nothing was inserted. That must not read as success.
+        # Stream errors (NUL lines) are data-quality skips by design and
+        # must not trigger the DB-failure diagnosis.
+        db_failures = sum(
+            1 for e in stats["errors"] if "(csv stream)" not in e
+        )
         if (
             stats["rows_read"] > 0
             and stats["rows_inserted"] == 0
             and stats["rows_skipped"] == len(stats["errors"])
+            and db_failures > 0
         ):
             stats["success"] = False
             stats["error"] = (
@@ -539,7 +568,13 @@ def ingest_json_notables(
                 ts = None
                 ts_present = "_time" in obj or "timestamp" in obj
                 ts_value = obj.get("_time", obj.get("timestamp"))
-                if isinstance(ts_value, (int, float)):
+                if isinstance(ts_value, bool):
+                    # JSON true/false are not timestamps. Python's bool-is-int
+                    # would coerce them through fromtimestamp to epoch 0/1
+                    # (year 1970) — a silent timeline lie. Leave ts None so
+                    # the corrupt-claim skip below surfaces it.
+                    pass
+                elif isinstance(ts_value, (int, float)):
                     try:
                         ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
                     except (OverflowError, OSError, ValueError):

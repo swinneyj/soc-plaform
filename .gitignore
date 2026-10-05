@@ -44,3 +44,6 @@ web/Old/app.js-pre-modular-monolith.bak
 
 # Test/tool caches (never commit)
 .pytest_cache/
+
+# Hypothesis example database (property-based fuzzing)
+.hypothesis/
