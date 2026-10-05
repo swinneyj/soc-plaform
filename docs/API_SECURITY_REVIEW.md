@@ -77,6 +77,16 @@ Args are passed as an argv list (no shell — good), but client-controlled argum
 
 The UI is served with only `Cache-Control: no-cache`; no CSP (the inline `SOC_CONFIG` bootstrap would need a nonce), no `X-Content-Type-Options`, and authenticated JSON responses lack `Cache-Control: no-store` (browsers may cache case data). Minor at current exposure; worth a pass before any wider rollout.
 
+### F14 — LOW (latent): attic endpoints carry no admission checks at all — reactivation checklist
+
+Audited every endpoint-bearing file in `scripts/attic/` (`closure_note_endpoint.py`, `fix_closure_endpoint.py`, `db_routes.py`, `update_api.py`; plus patchers `apply_closure_fix.py`, `fix_endpoint.py`, `update_closure_endpoint.py` that carry endpoint source as string literals). **None carries an inline admission check** — the only non-validation statuses are two 503 Ollama-availability probes in `db_routes.py:110,133` (dependency checks, not gates), and the inline checks that do exist are input validation (400 `rule_id and case_id required`), existence (404), template `KeyError` (400), and pydantic `Query(ge=, le=)` bounds. So reactivation cannot drift from `api/helpers/admission.py`'s boundary semantics with a competing inline check — the risk is the inverse: attic endpoints predate the gates and would **skip them entirely**:
+
+- **No admission** — attic `/api/db/analyze` blocks on Ollama with no queue gate (live: `admission.queue_rejection`, `api/routes/tools.py:311`) and no wall-clock cap (live: `ANALYZE_TIMEOUT_S` 300 s → 504 in `api/routes/analyze.py`); closure-note accepts an unbounded raw `dict` body with no payload byte budget (live: `admission.payload_rejection`, `api/routes/notables.py:1315`); nothing consults the Splunk mode latch (`api/routes/splunk.py:62`) or the per-resource concurrency cap (`api/routes/splunk.py:125`).
+- **No auth/CSRF** — attic endpoints declare no `require_api_key`/`require_role`/CSRF dependencies (`db_routes.py` depends only on `get_db`); they predate the auth scaffold (`api/auth.py`).
+- **F1 regression vector** — `update_api.py` rewrites `api/main.py` including the **old** global handler `{"detail": str(exc)}` — the exact pattern F1's fix (293b366) eliminated. Re-running that patcher silently reintroduces raw exception text in 500 bodies; its `/api/db/rules` also swallows every exception to `[]`.
+
+**Action if any attic endpoint is ever reactivated:** wire it through `api/helpers/admission.py` (measure inputs, raise the returned exception), attach the same auth/CSRF dependencies as its live siblings, keep the generic-500/`raise_internal` pattern, and never re-import the pre-F1 exception handler. The attic is currently unmounted — no module in `api/` imports it (verified by static search) — so this is latent, not live, exposure.
+
 ## Optimizations
 
 1. **Cache actor resolution** — `resolve_actor` → `_session_from_request` runs 2 DB queries (AuthSession + User) on **every** `/api/*` request in session mode (`api/auth.py:167-186`). A short-TTL (30–60 s) in-memory `token_hash → (user_id, role, csrf)` cache, invalidated on logout, removes most of that load; the UI polls frequently.
