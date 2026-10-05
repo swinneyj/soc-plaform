@@ -473,7 +473,10 @@ def ingest_json_notables(
       - ``source`` (default ``splunk_json_export``)
       - ``host`` (default ``unknown``)
       - ``_time``/``timestamp``: ISO string or epoch seconds (Splunk exports
-        epoch floats; both normalize to naive UTC, fallback = now)
+        epoch floats; both normalize to naive UTC). A MISSING timestamp (key
+        absent, null, or empty) falls back to arrival time; a PRESENT but
+        unparseable one SKIPS the row with an error entry — a corrupt claim
+        is surfaced, never silently relabeled "now".
 
     Deduplication: same (sourcetype, source, host, timestamp) candidates are
     additionally compared by raw payload hash, so same-second events do not
@@ -534,6 +537,7 @@ def ingest_json_notables(
                 raw = json.dumps(obj, ensure_ascii=False)
 
                 ts = None
+                ts_present = "_time" in obj or "timestamp" in obj
                 ts_value = obj.get("_time", obj.get("timestamp"))
                 if isinstance(ts_value, (int, float)):
                     try:
@@ -541,8 +545,7 @@ def ingest_json_notables(
                     except (OverflowError, OSError, ValueError):
                         # Absurd epochs (1e20, negatives past the epoch on
                         # some platforms) must not crash the whole run —
-                        # degrade exactly like an unparseable string and
-                        # let the _utcnow() fallback below take it.
+                        # the corrupt-claim skip below handles them.
                         ts = None
                 elif isinstance(ts_value, str) and ts_value.strip():
                     try:
@@ -551,7 +554,26 @@ def ingest_json_notables(
                             ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
                     except ValueError:
                         ts = None
-                if ts is None:
+                if ts is None and ts_present:
+                    ts_missing = ts_value is None or (
+                        isinstance(ts_value, str) and not ts_value.strip()
+                    )
+                    if not ts_missing:
+                        # The export CLAIMS a timestamp it cannot deliver
+                        # (unparseable string, absurd epoch, wrong type).
+                        # Skip the row with an error entry so the
+                        # data-quality problem is visible, instead of
+                        # silently relabeling the event "now" — a fake
+                        # fresh time corrupts timeline analysis. A MISSING
+                        # claim (key absent, null, empty string) keeps the
+                        # arrival-time fallback below.
+                        stats["rows_skipped"] += 1
+                        stats["errors"].append(
+                            f"Event {index}: corrupt _time {str(ts_value)[:50]!r}; row skipped"
+                        )
+                        continue
+                    ts = _utcnow()
+                elif ts is None:
                     ts = _utcnow()
 
                 raw_hash = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
@@ -592,11 +614,18 @@ def ingest_json_notables(
         session.commit()
         stats["inserted_ids"] = [obj.id for obj in inserted]
 
+        db_failures = sum(
+            1 for e in stats["errors"] if "corrupt _time" not in e
+        )
         if (
             stats["rows_read"] > 0
             and stats["rows_inserted"] == 0
             and stats["rows_skipped"] == len(stats["errors"])
+            and db_failures > 0
         ):
+            # Every row died on something OTHER than a data-quality skip
+            # (corrupt _time rows skip by design) — that pattern means the
+            # database itself is broken; never report it as success.
             stats["success"] = False
             stats["error"] = (
                 "all events failed (likely a database error); first: "

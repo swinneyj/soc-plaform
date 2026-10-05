@@ -243,7 +243,10 @@ def test_fuzz_json_non_utf8_bytes(tmp_path, factory):
 
 
 def test_fuzz_json_extreme_and_garbage_timestamps(tmp_path, factory):
-    """Epoch 1e20 (overflow), 0, negatives, NaN-ish strings, empty strings."""
+    """The timestamp decision table under the 2026-10-05 semantic change:
+    corrupt claims (1e20 overflow, "garbage") SKIP with error entries;
+    valid epochs (0, negatives) parse; a MISSING claim (empty string)
+    keeps the arrival-time fallback."""
     objects = [
         {"sourcetype": "st", "source": "SOC-FUZZ", "host": "h1", "_time": 1e20,
          "rule_name": "SMOKE overflow"},
@@ -262,7 +265,13 @@ def test_fuzz_json_extreme_and_garbage_timestamps(tmp_path, factory):
     )
     stats = sb.ingest_json_notables(path, session_factory=factory)
     _assert_safe_stats(stats)
-    assert stats["success"] and stats["rows_inserted"] == 5, stats
+    assert stats["success"] and stats["rows_inserted"] == 3, stats
+    assert stats["rows_skipped"] == 2, stats
+    assert len(stats["errors"]) == 2 and all(
+        "corrupt _time" in e for e in stats["errors"]
+    ), stats
+    stored_hosts = {e.host for e in _stored(factory)}
+    assert stored_hosts == {"h2", "h3", "h4"}, stored_hosts
     for event in _stored(factory):
         assert event.timestamp is not None
 
@@ -330,12 +339,9 @@ def test_fuzz_json_same_second_identical_payload_dedup_in_run():
 
 def test_fuzz_json_extreme_epoch_falls_back_not_crash():
     """FINDING (fixed 2026-10-05): epoch 1e20 raised OverflowError inside
-    fromtimestamp, crashing the whole run. Pinned: the row now degrades
-    exactly like an unparseable timestamp string — fallback to now, run
-    continues — rather than raising. (Semantic note: a corrupt numeric
-    timestamp makes the event look fresh; a future enhancement could
-    skip such rows instead, but that would diverge from the existing
-    garbage-string fallback behavior.)"""
+    fromtimestamp, crashing the whole run. Now doubly pinned: no crash —
+    AND (post semantic change) the corrupt claim SKIPS with an error
+    entry instead of falling back to now."""
     factory2 = _fresh_factory()
     objects = [
         {"sourcetype": "st", "source": "SOC-FUZZ", "host": "h1", "_time": 1e20},
@@ -346,7 +352,31 @@ def test_fuzz_json_extreme_epoch_falls_back_not_crash():
     path.write_text(json.dumps(objects), encoding="utf-8")
     stats = sb.ingest_json_notables(path, session_factory=factory2)
     _assert_safe_stats(stats)
-    assert stats["success"] and stats["rows_inserted"] == 2, stats
+    assert stats["success"] and stats["rows_inserted"] == 1, stats
+    assert stats["rows_skipped"] == 1 and stats["errors"], stats
+    assert any("corrupt _time" in e for e in stats["errors"]), stats
+
+
+def test_fuzz_json_missing_timestamp_still_falls_back_to_now():
+    """The semantic line: a MISSING claim (key absent, null, empty string)
+    is not corrupt — the row keeps the arrival-time fallback. Only a
+    PRESENT-but-unparseable claim skips."""
+    factory2 = _fresh_factory()
+    objects = [
+        {"sourcetype": "st", "source": "SOC-FUZZ", "host": "absent"},
+        {"sourcetype": "st", "source": "SOC-FUZZ", "host": "null_ts", "_time": None},
+        {"sourcetype": "st", "source": "SOC-FUZZ", "host": "empty_ts", "_time": "   "},
+        {"sourcetype": "st", "source": "SOC-FUZZ", "host": "good",
+         "_time": "2026-09-25T10:00:00Z"},
+    ]
+    path = _tmp_path_factory() / "missing.json"
+    path.write_text(json.dumps(objects), encoding="utf-8")
+    stats = sb.ingest_json_notables(path, session_factory=factory2)
+    _assert_safe_stats(stats)
+    assert stats["success"] and stats["rows_inserted"] == 4, stats
+    assert stats["rows_skipped"] == 0, stats
+    for event in _stored(factory2):
+        assert event.timestamp is not None
 
 
 def test_fuzz_json_dedup_same_second_hash(tmp_path, factory):
