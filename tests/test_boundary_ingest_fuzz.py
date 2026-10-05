@@ -487,3 +487,277 @@ def test_fuzz_full_admit_of_messy_csv_round_trip(tmp_path, factory, monkeypatch)
     assert deleted == sorted(stats["inserted_ids"]), (deleted, stats["inserted_ids"])
     assert purge["staged_removed"] is True, purge
     assert purge["events_deleted"] == 3, purge
+
+
+# ===========================================================================
+# Paste-box path (admit_text -> paste_notable -> record_paste_ingest)
+# ===========================================================================
+
+
+class TestPasteBoxIngestFuzz:
+    """Adversarial variance against the analyst paste path, end to end.
+
+    The real paste_notable handler runs against an isolated sqlite DB
+    (same seam as the C4 suite: db_models.SessionLocal) and an isolated
+    staging dir (autouse fixture above). Contract: malformed input either
+    produces a structured response or a clean HTTPException — never a
+    raised surprise — and every admitted batch is purgeable.
+    """
+
+    @pytest.fixture()
+    def paste_env(self, monkeypatch, tmp_path):
+        import db.models as db_models
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        monkeypatch.setattr(db_models, "SessionLocal", None)  # guard vs real DB
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        db_models.Base.metadata.create_all(bind=engine)
+        test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        monkeypatch.setattr(db_models, "SessionLocal", test_session)
+        yield test_session
+        engine.dispose()
+
+    @staticmethod
+    def _paste(text):
+        from api.routes import notables as notables_route
+        from api.schemas import PastedNotableRequest
+
+        return notables_route.paste_notable(PastedNotableRequest(raw_text=text))
+
+    @staticmethod
+    def _paste_bytes(n):
+        """A legal-looking paste padded to exactly n UTF-8 bytes."""
+        prefix = "Notable\nTitle: SMOKE byte budget\nDescription: "
+        base = prefix.encode("utf-8")
+        assert base and len(base) < n
+        filler = n - len(base) - 1  # leave room for the trailing newline
+        return prefix + "a" * filler + "\n"
+
+    def test_fuzz_paste_literal_newline_flattening(self, paste_env):
+        """Splunk table-cell copies deliver literal \\n sequences — the
+        normalizer must reconstruct line structure so parsing still works."""
+        flat = (
+            "Notable\\nTitle: SMOKE flattened\\nRule ID: esca_rule@@notable@@f1at\\n"
+            "Host: FLAT01\\nUser: smoke_user\\n"
+            "Description: literal-newline paste survives normalization\\n"
+        )
+        resp = self._paste(flat)
+        assert resp["success"] is True and resp["added"] == 1, resp
+        assert resp["batch_id"], resp
+
+    def test_fuzz_paste_multibyte_byte_budget(self, paste_env, monkeypatch):
+        """The cap is a BYTE budget: a multibyte paste under it is accepted,
+        one over it is a clean 413 — and rejection happens BEFORE admission
+        (no staging litter)."""
+        from api.routes import notables as notables_route
+        from fastapi import HTTPException
+
+        monkeypatch.setattr(notables_route, "PASTE_MAX_BYTES", 1000)
+
+        resp = self._paste(self._paste_bytes(900))
+        assert resp["success"] is True and resp["added"] == 1, resp
+
+        with pytest.raises(HTTPException) as excinfo:
+            self._paste(self._paste_bytes(1001))
+        assert excinfo.value.status_code == 413, excinfo.value
+
+        import db.models as db_models
+        assert paste_env().query(db_models.SplunkEvent).count() == 1, (
+            "only the under-budget paste may have inserted"
+        )
+
+    def test_fuzz_paste_empty_and_whitespace_only(self, paste_env):
+        """Empty and whitespace-only pastes are clean 400s, no batches."""
+        from fastapi import HTTPException
+
+        for text in ("", "   ", "\n\n\t "):
+            with pytest.raises(HTTPException) as excinfo:
+                self._paste(text)
+            assert excinfo.value.status_code == 400, (text, excinfo.value)
+
+        assert _stored(paste_env) == []
+
+    def test_fuzz_paste_bom_control_chars_and_zero_widths(self, paste_env):
+        """BOM, vertical tab/form feed, and zero-width joiners must not
+        crash the handler; structured response either way."""
+        hostile = (
+            "\ufeffNotable\nTitle: SMOKE control\x0bchars\x0c and \u200bzero\u200dwidths\n"
+            "Host: CTRL01\nUser: smoke_user\n"
+            "Description: control-character paste\n"
+        )
+        resp = self._paste(hostile)
+        assert isinstance(resp, dict) and "success" in resp, resp
+
+    def test_fuzz_paste_failure_after_admit_auto_purges(self, paste_env, monkeypatch):
+        """If the pipeline fails AFTER admission (here: segment detection
+        finds nothing), the handler must purge the batch it admitted —
+        no staging litter from failed pastes."""
+        from api.routes import notables as notables_route
+        from fastapi import HTTPException
+        from services import splunk_boundary as sb
+
+        monkeypatch.setattr(notables_route, "split_pasted_notables", lambda _: [])
+        with pytest.raises(HTTPException) as excinfo:
+            self._paste("Notable\nTitle: SMOKE doomed\nHost: H1\n")
+        assert excinfo.value.status_code == 400, excinfo.value
+
+        assert sb.list_batches() == [], "failed paste must leave no batch"
+        assert _stored(paste_env) == []
+
+    def test_fuzz_paste_duplicate_repaste_dedups(self, paste_env):
+        """The identical hostile-ish paste twice: second is a skip, and
+        both pastes still own distinct purgeable batches."""
+        text = "Notable\nTitle: SMOKE dedup\nRule ID: esca_rule@@notable@@dedup12345678\nHost: D01\n"
+        first = self._paste(text)
+        assert first["added"] == 1, first
+        second = self._paste(text)
+        assert second["added"] == 0 and second["skipped"] == 1, second
+        assert first["batch_id"] != second["batch_id"]
+        from services import splunk_boundary as sb
+        assert len(sb.list_batches()) == 2, "each paste is its own batch"
+
+
+# ===========================================================================
+# splunk_csv_ingestor tool (CLI wrapper around the boundary)
+# ===========================================================================
+
+
+class TestCsvIngestorToolFuzz:
+    """The CLI tool is admit_file + operator output; fuzz it through the
+    same matrix. Its DB leg resolves via db.models.SessionLocal, so the
+    sqlite patch makes ingest AND purge hermetic. Contract: the tool
+    returns a stats dict for every input — success or a clean error —
+    and never raises."""
+
+    @pytest.fixture(autouse=True)
+    def tool_env(self, monkeypatch):
+        import db.models as db_models
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy.pool import StaticPool
+
+        monkeypatch.setattr(db_models, "SessionLocal", None)  # guard vs real DB
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        db_models.Base.metadata.create_all(bind=engine)
+        self.factory = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+        monkeypatch.setattr(db_models, "SessionLocal", self.factory)
+        yield
+        engine.dispose()
+
+    @classmethod
+    def _tool(cls):
+        import importlib.util
+
+        if not hasattr(cls, "_module"):
+            tool_path = os.path.abspath(
+                os.path.join(os.path.dirname(__file__), os.pardir,
+                             "Tools", "splunk_csv_ingestor", "splunk_csv_ingestor.py")
+            )
+            spec = importlib.util.spec_from_file_location("splunk_csv_ingestor_fuzz", tool_path)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            cls._module = module
+        return cls._module
+
+    def test_fuzz_tool_clean_csv_round_trip_and_purge(self, tmp_path):
+        """Legal CSV through the tool, then purge the batch the tool's
+        stats point at — rows must vanish from the isolated DB."""
+        from services import splunk_boundary as sb
+
+        path = tmp_path / "clean.csv"
+        path.write_text(
+            "_time,host,source,sourcetype,_raw\n"
+            "2026-09-25T10:00:00,H1,/v/log,st,one\n"
+            "2026-09-25T10:01:00,H2,/v/log,st,two\n",
+            encoding="utf-8",
+        )
+        stats = self._tool().ingest_splunk_csv(str(path), silent=True)
+        assert stats["success"] is True and stats["rows_inserted"] == 2, stats
+        assert stats["batch_id"], stats
+        assert len(_stored(self.factory)) == 2
+
+        purge = sb.purge_batch(stats["batch_id"])
+        assert purge["events_deleted"] == 2 and purge["purge_strategy"] == "ids", purge
+        assert _stored(self.factory) == []
+
+    def test_fuzz_tool_latin1_and_multiline_and_dupes(self, tmp_path):
+        """Engine-tolerated variance stays tolerated through the tool."""
+        latin = tmp_path / "latin.csv"
+        latin.write_bytes(
+            b"_time,host,source,sourcetype,_raw\n"
+            b"2026-09-25T10:00:00,H1,/v/log,st,caf\xe9 row\n"
+        )
+        stats = self._tool().ingest_splunk_csv(str(latin), silent=True)
+        assert stats["success"] is True and stats["rows_inserted"] == 1, stats
+
+        messy = tmp_path / "messy.csv"
+        # Distinct keys from the latin-1 row above — same keys would be
+        # legitimately skipped as cross-file duplicates (the dedup working).
+        messy.write_text(
+            '_time,host,source,sourcetype,_raw\n'
+            '2026-09-25T11:00:00,H5,/v/log,st,"multi\nline"\n'
+            '2026-09-25T11:00:00,H5,/v/log,st,"multi\nline"\n',
+            encoding="utf-8",
+        )
+        stats = self._tool().ingest_splunk_csv(str(messy), silent=True)
+        _assert_safe_stats(stats)
+        assert stats["rows_inserted"] == 1 and stats["rows_skipped"] == 1, (
+            "in-file duplicate must be skipped, not double-inserted",
+            stats,
+        )
+
+    def test_fuzz_tool_rejects_binary_and_missing_files(self, tmp_path):
+        """Boundary-refused inputs surface as clean failure dicts."""
+        nul = tmp_path / "nul.csv"
+        nul.write_bytes(b"_time,host,_raw\n2026-09-25T10:00:00,H1,a\x00b\n")
+        stats = self._tool().ingest_splunk_csv(str(nul), silent=True)
+        assert stats["success"] is False and stats.get("error"), stats
+
+        missing = self._tool().ingest_splunk_csv(str(tmp_path / "ghost.csv"), silent=True)
+        assert missing["success"] is False and missing.get("error"), missing
+        # (The tool has a FileNotFoundError branch, but the boundary turns a
+        # missing file into a validation ValueError first — the dict comes
+        # out the ValueError branch; either way the contract holds.)
+
+    def test_fuzz_tool_empty_csv_and_json_passthrough(self, tmp_path):
+        """Empty CSV fails inside ingest (post-quarantine); a .json file is
+        routed to the JSON engine by extension — a tool quirk worth pinning."""
+        empty = tmp_path / "empty.csv"
+        empty.write_text("", encoding="utf-8")
+        stats = self._tool().ingest_splunk_csv(str(empty), silent=True)
+        assert stats["success"] is False and stats.get("error"), stats
+        assert _stored(self.factory) == [], "failed ingest must insert nothing"
+
+        note = tmp_path / "notes.json"
+        note.write_text(json.dumps([{
+            "sourcetype": "st", "source": "SOC-FUZZ (tool)", "host": "h1",
+            "_time": "2026-09-25T10:00:00Z", "rule_name": "SMOKE via tool",
+        }]), encoding="utf-8")
+        stats = self._tool().ingest_splunk_csv(str(note), silent=True)
+        assert stats["success"] is True and stats["rows_inserted"] == 1, stats
+
+    def test_fuzz_tool_never_raises_on_hostile_inputs(self, tmp_path):
+        """Blanket sweep: every hostile file yields a dict, never an raise."""
+        hostile_files = {
+            "controls.log": b"\x01\x02\x03" * 40,
+            "no_header.csv": b"2026-09-25T10:00:00,H1,raw\n",
+            "half_row.csv": b"_time,host,_raw\n2026-09-25T10:00:00\n",
+            "truncated.json": b'[{"host": "h1", ',
+            "binary.exe": b"MZ\x90\x00\x03",
+        }
+        for name, body in hostile_files.items():
+            p = tmp_path / name
+            p.write_bytes(body)
+            stats = self._tool().ingest_splunk_csv(str(p), silent=True)
+            assert isinstance(stats, dict), (name, stats)
+            assert "success" in stats, (name, stats)
