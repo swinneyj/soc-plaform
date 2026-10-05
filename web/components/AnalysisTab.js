@@ -368,7 +368,8 @@ window.AnalysisTab = {
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
-                .replace(/\"/g, '&quot;');
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#39;');
             const inline = (text) => escapeHtml(text)
                 .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
                 .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-black/40 text-purple-200">$1</code>');
