@@ -398,6 +398,83 @@ def test_job_queue_cap_429_counts_persisted_jobs(client, with_api_key, monkeypat
         engine.dispose()
 
 
+def test_unfinished_job_count_uses_db_side_count(monkeypatch):
+    """API security review, optimization #4: the persisted
+    half of the admission count must be a DB-side func.count()
+    filtered on unfinished statuses — never a fetch of every
+    ToolRun row — while keeping the row-scan semantics: legacy
+    persisted enum strings still count, finished rows do not,
+    and a job present in BOTH stores counts exactly once."""
+    import api.routes.tools as tools_route
+    import db.models as db_models
+    from sqlalchemy import event
+    from db.util import utcnow_naive
+
+    engine, test_session = _isolated_db_session(monkeypatch)
+    tools_route.jobs.clear()
+
+    statements = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    db = test_session()
+    db.add_all([
+        db_models.ToolRun(job_id="db-pending", tool_name="x",
+                          status="pending", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-running", tool_name="x",
+                          status="running", created_at=utcnow_naive()),
+        # Legacy persisted enum strings must still count.
+        db_models.ToolRun(job_id="db-legacy", tool_name="x",
+                          status="JobStatus.PENDING", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-legacy-upper", tool_name="x",
+                          status="PENDING", created_at=utcnow_naive()),
+        # Finished rows must not consume a slot.
+        db_models.ToolRun(job_id="db-completed", tool_name="x",
+                          status="completed", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-failed", tool_name="x",
+                          status="failed", created_at=utcnow_naive()),
+        # Unfinished in BOTH stores: counts once, not twice.
+        db_models.ToolRun(job_id="both-stores", tool_name="x",
+                          status="pending", created_at=utcnow_naive()),
+    ])
+    db.commit()
+    db.close()
+
+    tools_route.jobs["dict-pending"] = {"status": "pending"}
+    tools_route.jobs["dict-completed"] = {"status": "completed"}
+    tools_route.jobs["both-stores"] = {"status": "running"}
+
+    try:
+        # dict contributes 2 (dict-pending, both-stores); the DB
+        # contributes 4 more (db-pending, db-running, db-legacy,
+        # db-legacy-upper) — both-stores is deduped, finished
+        # rows excluded.
+        assert tools_route._unfinished_job_count() == 6
+
+        # The persisted tally must be a SQL COUNT aggregate, not
+        # a row fetch: every tool_runs SELECT is a count(...), and
+        # none selects the row columns the old code shipped.
+        tool_run_selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+            and "tool_runs" in statement
+        ]
+        assert tool_run_selects, "expected a persisted-count query"
+        assert all(
+            "count(" in statement.lower() for statement in tool_run_selects
+        ), "persisted tally must be a DB-side func.count()"
+        assert not any(
+            "tool_runs.status" in statement and "count(" not in statement.lower()
+            for statement in tool_run_selects
+        ), "must not fetch ToolRun rows to count them"
+    finally:
+        tools_route.jobs.clear()
+        engine.dispose()
+
+
 # ---------------------------------------------------------------------------
 # API security review, optimization #3 — running semaphore on the tool
 # execution path. The job QUEUE may admit JOB_QUEUE_MAX unfinished jobs,

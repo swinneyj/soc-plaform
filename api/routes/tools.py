@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 
 from api import deps
 from api.helpers.errors import InternalError, raise_internal
@@ -115,10 +116,16 @@ def _unfinished_job_count() -> int:
     The dict is process-local, so a daemon restart (or a second
     worker) would otherwise see an empty queue and the C2.1.2
     admission cap would silently reset to zero while persisted
-    jobs keep occupying slots. Persisted statuses are normalized
-    with _job_status_value to cover legacy enum strings. A DB
-    failure degrades to the in-memory count so a database hiccup
-    cannot fail admission outright.
+    jobs keep occupying slots. The persisted tally is a DB-side
+    func.count() filtered on unfinished statuses (API security
+    review optimization #4) — one aggregate, never a fetch of
+    every ToolRun row. Statuses are normalized in SQL with the
+    same prefix-strip + lowercase _job_status_value applies, so
+    legacy persisted enum strings still count, and job ids
+    already counted from the in-memory dict are excluded so a
+    job present in BOTH stores counts once. A DB failure
+    degrades to the in-memory count so a database hiccup cannot
+    fail admission outright.
     """
     unfinished_statuses = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
     live_unfinished_ids = {
@@ -131,14 +138,22 @@ def _unfinished_job_count() -> int:
         from db.models import SessionLocal, ToolRun
         db = SessionLocal()
         try:
-            persisted = db.query(ToolRun.job_id, ToolRun.status).all()
+            # Same normalization _job_status_value applies to a
+            # persisted string: strip the legacy "JobStatus."
+            # enum prefix, trim, lowercase — done in SQL so the
+            # count never ships rows to the process.
+            normalized_status = func.lower(
+                func.trim(func.replace(ToolRun.status, "JobStatus.", ""))
+            )
+            query = db.query(func.count(ToolRun.job_id)).filter(
+                normalized_status.in_(unfinished_statuses)
+            )
+            if live_unfinished_ids:
+                # A job tracked in BOTH stores must count once.
+                query = query.filter(ToolRun.job_id.notin_(live_unfinished_ids))
+            count += query.scalar() or 0
         finally:
             db.close()
-        for job_id, status in persisted:
-            if job_id in live_unfinished_ids:
-                continue
-            if _job_status_value(status) in unfinished_statuses:
-                count += 1
     except Exception as exc:
         logger.warning("[tool_runs] Admission could not count persisted jobs: %s", exc)
     return count
