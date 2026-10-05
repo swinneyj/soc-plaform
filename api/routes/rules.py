@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from api import deps
+from api.helpers.errors import raise_internal
 
 from api.schemas import (
     PlaceholderAliasPayload,
@@ -148,7 +149,7 @@ def list_placeholder_aliases():
 
         return aliases
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.get("/api/db/placeholder-aliases/suggestions", tags=["Rules"])
@@ -206,7 +207,7 @@ def suggest_placeholder_alias_fields(
 
         return {"candidates": candidates}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.post("/api/db/placeholder-aliases", tags=["Rules"])
@@ -257,7 +258,7 @@ def create_placeholder_alias(payload: PlaceholderAliasPayload):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.put("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
@@ -319,7 +320,7 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.delete("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
@@ -347,7 +348,7 @@ def delete_placeholder_alias(alias_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 
@@ -381,7 +382,7 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
             for r in rows
         ]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.post("/api/db/supportive-queries/draft", tags=["Rules"])
@@ -461,7 +462,7 @@ def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
     finally:
         if db is not None:
             db.close()
@@ -507,7 +508,7 @@ def supportive_playbook_status(case_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
     finally:
         if db is not None:
             db.close()
@@ -602,7 +603,7 @@ def import_supportive_results(payload: SupportiveResultsImportRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
     finally:
         if db is not None:
             db.close()
@@ -653,7 +654,7 @@ def create_supportive_query(payload: SupportiveQueryPayload):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.put("/api/db/supportive-queries/{query_id}", tags=["Rules"])
@@ -700,7 +701,7 @@ def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 
 @router.delete("/api/db/supportive-queries/{query_id}", tags=["Rules"])
@@ -731,7 +732,7 @@ def delete_supportive_query(query_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="rules")
 
 # Rules & Closure Notes Endpoints
 

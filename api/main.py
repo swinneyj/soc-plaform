@@ -6,13 +6,20 @@ Serves web UI at root path. Includes database and AI analysis endpoints.
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
+from fastapi.exception_handlers import http_exception_handler as _default_http_exception_handler
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from api.helpers.errors import (
+    INTERNAL_ERROR_DETAIL,
+    log_internal_error,
+    request_id,
+)
 import json
 import logging
 import os
 import re
+import secrets
 import sys
 import time
 
@@ -159,6 +166,22 @@ app = FastAPI(
 )
 
 
+# ---------------------------------------------------------------------------
+# F1: per-request id — stamped onto request.state, echoed back in the
+# X-Request-Id response header, and attached to every server-side internal-
+# error log line (api.helpers.errors), so a client can report the id it saw
+# and the operator finds the matching traceback without the response body
+# ever carrying internal error text.
+# ---------------------------------------------------------------------------
+@app.middleware("http")
+async def _request_id(request, call_next):
+    rid = request.headers.get("X-Request-Id") or secrets.token_hex(8)
+    request.state.request_id = rid
+    response = await call_next(request)
+    response.headers["X-Request-Id"] = rid
+    return response
+
+
 @app.middleware("http")
 async def _api_key_mutation_gate(request, call_next):
     """Gate /api/* requests per AUTH_MODE (SESSION_AUTH_PLAN.md).
@@ -255,11 +278,35 @@ app.include_router(auth_router)
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    # Global exception handler for unhandled errors.
+    # Global exception handler for unhandled errors (F1): the client gets
+    # the generic detail; the real exception is logged server-side with the
+    # request id and its traceback.
+    log_internal_error(request, exc)
     return JSONResponse(
         status_code=500,
-        content={"detail": str(exc)}
+        content={"detail": INTERNAL_ERROR_DETAIL},
+        headers={"X-Request-Id": request_id(request)},
     )
+
+
+@app.exception_handler(HTTPException)
+async def _http_exception_handler(request, exc):
+    # F1 safety net: scrub the detail of ANY 500 raised as a plain
+    # HTTPException (route sweep sites raise InternalError, which this
+    # also covers — its cause is logged here). Sub-500 details are
+    # user-input validation and pass through byte-identical; other 5xx
+    # codes (e.g. the analysis 504 timeout) carry static messages.
+    if exc.status_code == 500:
+        cause = getattr(exc, "cause", None)
+        if cause is None:
+            cause = exc.detail
+        log_internal_error(request, cause, context=getattr(exc, "context", ""))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": INTERNAL_ERROR_DETAIL},
+            headers={**(exc.headers or {}), "X-Request-Id": request_id(request)},
+        )
+    return await _default_http_exception_handler(request, exc)
 
 # Serve web UI. index.modular.html is served through a small route that
 # injects the window.SOC_CONFIG bootstrap (O2) when the API-key mutation

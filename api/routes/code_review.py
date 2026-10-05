@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
 
 router = APIRouter()
 
@@ -242,7 +243,7 @@ def fix_code(payload: dict):
         result = client.generate(prompt, model=model)
         
         if not result["success"]:
-            raise HTTPException(status_code=500, detail=result["error"])
+            raise InternalError(result["error"], context="code-review")
         
         fixed_code = result["response"] or ""
         if "```" in fixed_code:
@@ -254,7 +255,7 @@ def fix_code(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")
 
 
 @router.post("/api/code-review", tags=["AI Analysis"])
@@ -314,7 +315,7 @@ def code_review(payload: dict):
         result = client.generate(prompt, model=model)
         
         if not result["success"]:
-            raise HTTPException(status_code=500, detail=result["error"])
+            raise InternalError(result["error"], context="code-review")
         
         review_text = result["response"] or ""
         
@@ -342,7 +343,7 @@ def code_review(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")
 
 
 @router.post("/api/code-review/sections", tags=["AI Analysis"])
@@ -368,7 +369,7 @@ def code_review_sections(payload: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")
 
 
 @router.post("/api/code-review/zip", tags=["AI Analysis"])
@@ -475,7 +476,7 @@ async def code_review_zip(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")
 
 
 @router.get("/api/code-reviews", tags=["AI Analysis"])
@@ -503,7 +504,7 @@ def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
             for r in reviews
         ]
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")
 
 
 @router.get("/api/code-reviews/{review_id}", tags=["AI Analysis"])
@@ -531,4 +532,4 @@ def get_code_review(review_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="code-review")

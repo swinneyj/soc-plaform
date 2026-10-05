@@ -4,6 +4,7 @@
 **Updated:** Sept 25, 2026 — added environment notes (E1/E2) + finding #14; synced item statuses with commits `1775c10` (Downloads) / `be4c644` (`~/soc-platform`)
 **Updated (session 2, Sept 25):** #15 fixed & deployed-verified; Python pinned 3.14; frontend auth wiring (config-only activation); Splunk boundary ("the latch") architecture landed — see "Architecture hardening" below. Suite is now 121/121 on both Python 3.14 and 3.9. All work lives on `origin/dev-dalton` in `~/soc-platform` (commits `00c7e69`…`908b6d5`).
 **Updated Sept 30:** owner closed the mouse (E2) + exposure-restriction (#5) sub-item; **Vercel deployment retired** (owner decision) — `deploy.yml` deleted, `docs/VERCEL_HANDOFF.md` stubbed to a retirement notice; the Vercel project itself is deliberately **kept on ice** (frozen, undeployable, retained in case circumstances change).
+**Updated 2026-10-05:** added the admission-hardening entries (C2.1.2 job-queue cap, C2.1.4 paste cap, C2.1.6 tool-subprocess env isolation, C4 paste-batch) with their regression-test names, and the API-security-review remediations (F1 generic 500s + request-id server-side logging, F5 constant-time login + per-IP/per-username throttling).
 **Updated Sept 28:** added E3 — AI agent harness (Freebuff Desktop) workstation exposure; canonical risk notes + operating rules live in `AGENTS.md` → "Freebuff Desktop risk notes". Also this session: verified the git restore path (0.040s, sha256-identical) and cleared a stale `postmaster.pid` after unclean shutdown (see AGENTS.md machine quirks).
 **Scope:** code/`git grep` inspection of the working copy at `~/Downloads/soc-plaform-main`. Not a pen-test — a prioritized list of concrete, actionable findings.
 
@@ -168,6 +169,49 @@
 **Remaining boundary work (deliberate, not urgent):**
 - [x] **Done Sept 30 (local path):** server-injected `window.SOC_CONFIG` in `/index.modular.html` when the gate is armed (commit 99ee625). The Vercel deploy-time variant died with the retired deployment (Sept 30).
 - [x] **Done Sept 30 (C4, commit `f7f6556`):** paste-box storage routed through boundary batches — `admit_text` + `record_paste_ingest` give every paste a manifest with `inserted_ids`; `purge_batch` undoes pastes; sanitization pipeline byte-identical (golden test)
+
+---
+
+## Admission hardening — C2.1.x request gates + C4 paste-batch (DEVELOPMENT_PLAN §11)
+
+**Entries added 2026-10-05.** The gates themselves signed off Sept 30, 2026 (one commit per limit, per EXECUTION_PLAYBOOK "C2.1.x — one commit per limit"); recorded here with their regression tests so the admission semantics stay pinned. Shared decision helpers live in `api/helpers/admission.py` — `queue_rejection` (429), `payload_rejection` (413), `latch_rejection` (403), `concurrency_rejection` (409, per-resource occupancy vs. global saturation) — pure functions whose docstrings fix the boundary semantics: **inclusive** queue limit (a queue AT its limit is full), **exclusive** byte budget (the budget itself is the maximum), **fail-closed** mode latch (an unrecognized mode refuses).
+
+### C2.1.2 — job-queue admission cap (429) ✅ LANDED
+- **What:** `POST /api/execute` counts unfinished work across BOTH stores — the process-local `jobs` dict AND persisted `ToolRun` rows (`_unfinished_job_count()`) — and rejects with 429 **before** registry/disk work when `JOB_QUEUE_MAX` (env, default 100) is reached. A daemon restart (empty dict, persisted rows still unfinished) no longer silently resets the cap to zero.
+- **Where:** `api/routes/tools.py:32` (constant + counter), `api/routes/tools.py:278` (admission check).
+- **Regression tests:** `tests/test_api_key_gate.py::test_job_queue_cap_429` (full queue 429s before registry lookup — an unknown tool would 404; the cap must win; one freed slot admits again) · `tests/test_api_key_gate.py::test_job_queue_cap_429_counts_persisted_jobs` (post-restart state: empty in-memory dict + one unfinished persisted `ToolRun` still 429s; a completed persisted row frees the slot).
+
+### C2.1.4 — paste payload cap (413) ✅ LANDED
+- **What:** `POST /api/notables/paste` rejects raw payloads over `PASTE_MAX_BYTES` (env, default 5 MiB) with 413 **before any parsing/sanitization work**. Size is measured on the **encoded UTF-8 byte length**, never the character count — multibyte text can otherwise carry several times the budget past the gate.
+- **Where:** `api/routes/notables.py:28`.
+- **Regression tests:** `tests/test_api_key_gate.py::test_paste_payload_cap_413` (oversized paste 413s before parsing; an at-cap payload passes the gate and fails later at handler validation, proving ordering) · `tests/test_api_key_gate.py::test_paste_payload_cap_413_multibyte` (encoded-size boundary, not character count).
+
+### C2.1.6 — tool subprocess environment (secret isolation) ✅ LANDED
+- **What:** registered tool subprocesses run on an explicit env **allowlist** (`PATH`, `HOME`, `COMMANDER_BOOT`, plus anything named in `_TOOL_ENV_PASSTHROUGH`) instead of `os.environ.copy()`. The wholesale copy handed every registered tool the API process's secrets (`DATABASE_URL`, `API_KEY`, `OLLAMA_API_KEY`, `OLLAMA_URL`, ...). An audit of `Tools/**/*.py` found tools read exactly one env var (`COMMANDER_BOOT`, the interactive-prompt guard) and take everything else as CLI flags, so nothing legitimate is lost. The catalog-regression runner got the same allowlist — it spawns registered tools too, and would have kept leaking secrets through that path.
+- **Where:** `api/routes/tools.py` (`_tool_env()` builder, used by **all three** `subprocess.run` sites in the file — `execute_tool_sync` (covers sync + async/background runs, since `execute_tool_async` funnels through it), the `/api/tools/regression` runner spawn, and the `/api/registry/reload` indexer spawn), `scripts/run_tool_catalog_regression.py` (`_tool_env()`, offline fixture runs). The regression-runner and indexer spawns inherit no env either: both scripts read zero environment variables (verified by audit), and the runner re-applies the same allowlist to the tools it spawns.
+- **Regression test:** `tests/test_api_key_gate.py::test_tool_subprocess_env_is_minimal` (probe tool dumps its own env; the three API secrets are absent, the allowlist keys are present).
+
+### C4 — paste-box storage through a boundary batch ✅ LANDED (commit `f7f6556`)
+- **What:** every paste is admitted through the Splunk boundary (`admit_text`, the C4 paste-batch adapter) as the **first** pipeline action in `paste_notable`; `record_paste_ingest` writes that paste's `inserted_ids` onto the batch manifest exactly like `ingest_manifest` does for file batches, so `purge_batch` undoes any paste (DB rows + staged `{batch_id}-pasted.txt`). Sanitization output is proven byte-identical to the pre-C4 pipeline (golden test). Paste admission stays allowed in `quarantined` mode — the data enters the platform's own DB, not Splunk.
+- **Where:** `services/splunk_boundary.py:198` (`admit_text`), `api/routes/notables.py` (`paste_notable` wiring ~`:1333`, failure-path purge ~`:1283`, manifest insert recording ~`:1570`).
+- **Regression tests:** `tests/test_investigation_fixes.py::TestPasteBoundaryBatch` — `test_paste_creates_boundary_manifest` (paste → manifest with `source: paste-box`, `inserted_ids`, `ingest_window`) · `test_purge_batch_removes_pasted_rows` (purge deletes exactly the pasted ids + staged file) · `test_paste_sanitization_byte_identical` (golden: stored `sanitized_text` == pre-C4 pipeline output) · `test_paste_dedup_unchanged` · `test_paste_allowed_in_quarantined_mode`; plus `tests/test_api_key_gate.py::test_failed_paste_purges_boundary_batch` (a paste that fails after admission purges the staged batch — no orphaned copy of pasted content).
+- **Cross-ref:** boundary checklist line under "Architecture hardening" above; `docs/RELEASE_NOTES.md` C4 entry.
+
+---
+
+## API security review — F1 + F5 remediations (2026-10-05)
+
+Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the source review.
+
+### F1 — internal errors never leak exception text ✅ LANDED
+- **What:** every 500 answers `{"detail": "Internal error"}`; the real exception is logged server-side (with traceback) under a request id. Previously `api/main.py`'s global handler returned `str(exc)` and ~40 route handlers did `raise HTTPException(500, detail=str(e))` — in API-key mode reads are ungated by contract, so anyone who could reach port 8000 could read SQL fragments, table names, host/port, or `OLLAMA_URL` from a 500 body.
+- **Where:** new `api/helpers/errors.py` (`INTERNAL_ERROR_DETAIL`, `InternalError` (a 500 carrying the cause for the log), `raise_internal()`, `log_internal_error()`); `api/main.py` — request-id middleware (stamps `request.state.request_id`, echoes it in the `X-Request-Id` response header; a client-supplied id is honored) + both exception handlers (global handler logs + scrubs; the HTTPException handler scrubs **any** 500 as a safety net so a future `raise HTTPException(500, detail=str(e))` still cannot leak). Sub-500 details and non-500 5xx (the analysis 504 timeout) pass through untouched. Route sweep: `analyze`, `auth`, `closure`, `code_review`, `evidence`, `notables`, `promote`, `rules`, `splunk`, `tools`, `triage` all raise `InternalError`/`raise_internal(e, context=...)` instead of `detail=str(e)`.
+- **Regression tests:** `tests/test_internal_errors.py` — global/HTTPException handler scrub + server-side log correlation (direct invocation), plain-500 safety net, sub-500/other-5xx passthrough, end-to-end unhandled/`InternalError`/plain-500 routes, a real swept route (notables paste) mid-handler DB failure, and the request-id header contract (generated, echoed, client-supplied honored).
+
+### F5 — login: constant-time user resolution + throttling ✅ LANDED
+- **What:** `POST /api/auth/login` used to short-circuit on a missing/inactive user, so a valid username cost a full scrypt/PBKDF2 run and an invalid one returned in microseconds — reliable username enumeration by timing; the endpoint also had no brute-force protection. Now every attempt verifies a password against a hash: missing/inactive users verify against a lazily built **dummy hash** (same KDF, same parameters), so every attempt pays exactly one KDF run. Failed attempts are counted on two independent sliding windows (per source IP and per attempted username, `LOGIN_MAX_FAILURES`/`LOGIN_WINDOW_SECONDS`, env, defaults 5/60 s); either window full → 429 **before** user resolution (even the correct password is refused while throttled). Success clears both windows.
+- **Where:** `api/routes/auth.py` (`_dummy_password_hash`, `_login_windows`, `_login_throttled`, `_record_login_failure`, `_clear_login_failures`; the `login` handler reorder).
+- **Regression tests:** `tests/test_api_key_gate.py` F5 block — spy-on-`verify_password` proofs (missing user → dummy hash; inactive user → dummy hash, never the stored hash; active user → real hash), a timing sanity test (missing-user login ≥ 40% of real-user login — both are one KDF run), throttle after repeat failures (incl. unknown usernames), independent per-IP/per-username windows, success clears windows, and window expiry.
 
 ---
 

@@ -1,7 +1,8 @@
 """Shared admission gates for the API's request entry points.
 
 Every route that must refuse work BEFORE doing expensive work
-(job-queue saturation, payload byte budgets, mode latches)
+(job-queue saturation, payload byte budgets, mode latches,
+per-resource concurrency caps)
 should decide here, so the boundary semantics (inclusive vs
 exclusive limits), status codes, and detail shapes stay
 consistent across admission sites.
@@ -74,3 +75,31 @@ def latch_rejection(
     if mode in permitted_modes:
         return None
     return HTTPException(status_code=403, detail=refusal_detail)
+
+
+def concurrency_rejection(
+    in_flight: bool,
+    label: str = "task",
+    resource: str = "resource",
+    cap: int = 1,
+) -> Optional[HTTPException]:
+    """Admission gate for a per-resource concurrency cap (409 while occupied).
+
+    Where ``queue_rejection`` measures GLOBAL saturation and
+    answers 429 (retry later), this gate measures occupancy of
+    one named resource — a case, a job id — and answers 409:
+    the request conflicts with work already running against the
+    SAME resource, so a different resource may proceed but a
+    re-issue of this one must not. ``in_flight`` is the caller's
+    occupancy probe (e.g. membership of the case id in the
+    inflight set), taken under the caller's lock.
+    """
+    if not in_flight:
+        return None
+    return HTTPException(
+        status_code=409,
+        detail=(
+            f"A {label} is already running for this {resource} "
+            f"(per-{resource} concurrency cap is {cap})"
+        ),
+    )

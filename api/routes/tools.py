@@ -8,12 +8,13 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
 from api.helpers import admission
 
 from api.auth import require_api_key, require_role
@@ -33,6 +34,37 @@ STALE_JOB_SECONDS = 600
 # in-memory job queue so a runaway client cannot grow it without bound.
 # Counts unfinished (pending/running) jobs; over-limit admission answers 429.
 JOB_QUEUE_MAX = int(os.environ.get("JOB_QUEUE_MAX", "100"))
+
+# C2.1.6 hardening: registered tools run on an explicit env allowlist,
+# NOT a copy of the API environment — the wholesale copy handed every
+# registered tool the API process's secrets (DATABASE_URL, API_KEY,
+# OLLAMA_API_KEY, ...). An audit of Tools/**/*.py found tools read
+# exactly one variable from their environment (COMMANDER_BOOT, the
+# interactive-prompt guard); anything else a tool genuinely needs must
+# be named here explicitly.
+_TOOL_ENV_PASSTHROUGH: Tuple[str, ...] = ()
+
+
+def _tool_env() -> Dict[str, str]:
+    """Minimal environment for a registered tool subprocess.
+
+    Allowlist, not inheritance: PATH (helper binaries tools shell
+    out to), HOME (tooling cache location), and COMMANDER_BOOT (the
+    API-boot flag that suppresses terminal-only prompts so API jobs
+    never block waiting for a human). Secrets of the API process
+    stay unreadable by tools.
+    """
+    env: Dict[str, str] = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "COMMANDER_BOOT": "1",
+    }
+    if os.environ.get("HOME"):
+        env["HOME"] = os.environ["HOME"]
+    for key in _TOOL_ENV_PASSTHROUGH:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    return env
 
 def _job_status_value(status: Any) -> str:
     """Normalize enum instances and legacy persisted enum strings."""
@@ -142,16 +174,13 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             cmd.extend([f'--{key}', str(val)])
     before = _tool_artifact_snapshot()
     try:
-        tool_env = os.environ.copy()
-        # API jobs must never block waiting for a terminal-only prompt.
-        tool_env["COMMANDER_BOOT"] = "1"
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=300,
             cwd=deps.get_platform_root(),
-            env=tool_env,
+            env=_tool_env(),
         )
         after = _tool_artifact_snapshot()
         artifacts = [os.path.relpath(p, deps.get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
@@ -263,11 +292,12 @@ def run_tool_catalog_regression():
     result = subprocess.run(
         [sys.executable, runner, "--json"], cwd=deps.get_platform_root(),
         capture_output=True, text=True, timeout=180,
+        env=_tool_env(),
     )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail=result.stdout + result.stderr)
+        raise InternalError(result.stdout + result.stderr, context="tools")
     payload["exit_code"] = result.returncode
     return payload
 
@@ -501,12 +531,13 @@ def reload_registry():
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=deps.get_platform_root()
+            cwd=deps.get_platform_root(),
+            env=_tool_env(),
         )
         return {
             "status": "success" if result.returncode == 0 else "failed",
             "message": result.stdout + result.stderr
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="tools")
 

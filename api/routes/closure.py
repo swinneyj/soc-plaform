@@ -10,6 +10,7 @@ import sys
 from fastapi import APIRouter, HTTPException
 
 from api import deps
+from api.helpers.errors import raise_internal
 
 router = APIRouter()
 
@@ -65,7 +66,7 @@ def check_closure_readiness(case_id: str):
             readiness["blocker_actions"] = classify_blocker_actions(readiness.get("blockers") or [])
         return readiness
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="closure")
 
 
 @router.post("/api/db/closure-note", tags=["Rules"])
@@ -111,5 +112,5 @@ def generate_closure_note(request: dict):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="closure")
 

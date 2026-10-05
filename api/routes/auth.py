@@ -6,7 +6,9 @@ info echoes the actor for the UI to bootstrap from. Only active in
 AUTH_MODE=session (the routes exist regardless so the doc-drift guard sees
 them; flag-off the middleware never consults them).
 """
+import os
 import secrets
+import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -19,6 +21,65 @@ router = APIRouter()
 class LoginRequest(BaseModel):
     username: str
     password: str
+
+
+# ---------------------------------------------------------------------------
+# F5: login throttling + constant-time user resolution.
+#
+# Every login attempt — valid user or not — runs a full password-KDF
+# verification, so a valid username cannot be enumerated by timing
+# (a missing/inactive user verifies against a dummy hash with the
+# same cost as a real one). Failed attempts are counted on two
+# independent sliding windows (per source IP and per attempted
+# username); either window reaching LOGIN_MAX_FAILURES within
+# LOGIN_WINDOW_SECONDS answers 429. Success clears both windows.
+# ---------------------------------------------------------------------------
+LOGIN_MAX_FAILURES = int(os.environ.get("LOGIN_MAX_FAILURES", "5"))
+LOGIN_WINDOW_SECONDS = float(os.environ.get("LOGIN_WINDOW_SECONDS", "60"))
+
+# ("ip", ip) / ("user", username) -> [failure timestamps]
+_LOGIN_FAILURES: dict = {}
+_DUMMY_HASH = None
+
+
+def _dummy_password_hash() -> str:
+    """Lazily built stand-in hash: same KDF, same parameters, so a
+    missing-user login costs the same as a real one. Never verifies
+    against any real password."""
+    global _DUMMY_HASH
+    if _DUMMY_HASH is None:
+        _DUMMY_HASH = auth.hash_password("soc-login-constant-time-dummy")
+    return _DUMMY_HASH
+
+
+def _login_windows(ip: str, username: str):
+    now = time.time()
+    keys = (("ip", ip), ("user", username))
+    for key in keys:
+        _LOGIN_FAILURES[key] = [
+            t for t in _LOGIN_FAILURES.get(key, [])
+            if now - t < LOGIN_WINDOW_SECONDS
+        ]
+    return keys
+
+
+def _login_throttled(ip: str, username: str) -> bool:
+    """True when either the per-IP or the per-username window is full."""
+    for key in _login_windows(ip, username):
+        if len(_LOGIN_FAILURES[key]) >= LOGIN_MAX_FAILURES:
+            return True
+    return False
+
+
+def _record_login_failure(ip: str, username: str) -> None:
+    now = time.time()
+    for key in _login_windows(ip, username):
+        _LOGIN_FAILURES[key].append(now)
+
+
+def _clear_login_failures(ip: str, username: str) -> None:
+    _LOGIN_FAILURES.pop(("ip", ip), None)
+    _LOGIN_FAILURES.pop(("user", username), None)
 
 
 def _issue_session(response: Response, user) -> dict:
@@ -48,14 +109,26 @@ def _issue_session(response: Response, user) -> dict:
 
 
 @router.post("/api/auth/login")
-def login(payload: LoginRequest, response: Response):
+def login(payload: LoginRequest, request: Request, response: Response):
     from db.models import SessionLocal, User
+
+    client_ip = request.client.host if request.client else "?"
+    if _login_throttled(client_ip, payload.username):
+        raise HTTPException(status_code=429, detail="Too many login attempts")
 
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == payload.username).first()
-        if not user or not user.is_active or not auth.verify_password(payload.password, user.password_hash):
+        # F5: resolve the hash in constant time — a missing or inactive
+        # user verifies against the dummy hash, so every attempt pays
+        # one full KDF run and usernames cannot be enumerated by timing.
+        active_user = user is not None and user.is_active
+        encoded = user.password_hash if active_user else _dummy_password_hash()
+        password_ok = auth.verify_password(payload.password, encoded)
+        if not active_user or not password_ok:
+            _record_login_failure(client_ip, payload.username)
             raise HTTPException(status_code=401, detail="Invalid credentials")
+        _clear_login_failures(client_ip, payload.username)
         return _issue_session(response, user)
     finally:
         db.close()

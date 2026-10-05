@@ -13,6 +13,7 @@ import sys
 from fastapi import APIRouter, HTTPException
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
 from services.analysis_service import (
     build_analysis_prompt_intro,
     extract_phase2_evidence_json as _extract_phase2_evidence_json_impl,
@@ -462,7 +463,7 @@ def analyze_case(request: AnalyzeRequest):
         model = result.get("model") or model
 
         if not result["success"]:
-            raise HTTPException(status_code=500, detail=result["error"])
+            raise InternalError(result["error"], context="analyze")
 
         response_text = result["response"] or ""
         phase2_queries = _extract_phase2_queries(response_text)
@@ -634,6 +635,6 @@ def analyze_case(request: AnalyzeRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="analyze")
 
 

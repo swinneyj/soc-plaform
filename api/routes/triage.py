@@ -11,6 +11,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, HTTPException, Query
 
 from api import deps
+from api.helpers.errors import raise_internal
 
 from api.helpers.triage_keys import extract_triage_key_fields
 
@@ -258,7 +259,7 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="triage")
     finally:
         try:
             db.close()
@@ -313,6 +314,6 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="triage")
 
 

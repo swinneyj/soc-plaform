@@ -450,6 +450,34 @@ def test_paste_payload_cap_413_multibyte(client, monkeypatch):
     assert "exceeds" in resp.json()["detail"]
 
 
+def test_tool_subprocess_env_is_minimal(tmp_path, monkeypatch):
+    """C2.1.6: a registered tool subprocess runs on an explicit
+    env allowlist (PATH/HOME/COMMANDER_BOOT), never a copy of
+    the API environment — DATABASE_URL, API_KEY and
+    OLLAMA_API_KEY must be unreadable by the tool even when
+    they are set in the API process."""
+    import json
+
+    import api.routes.tools as tools_route
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://leak:leak@db/neon")
+    monkeypatch.setenv("API_KEY", "leaked-api-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "leaked-ollama-key")
+
+    probe = tmp_path / "env_probe.py"
+    probe.write_text(
+        "import json, os\nprint(json.dumps(sorted(os.environ)))\n",
+        encoding="utf-8",
+    )
+    result = tools_route.execute_tool_sync(str(probe), {})
+    assert result["exit_code"] == 0
+    tool_env_keys = json.loads(result["stdout"])
+    for required in ("PATH", "HOME", "COMMANDER_BOOT"):
+        assert required in tool_env_keys
+    for secret in ("DATABASE_URL", "API_KEY", "OLLAMA_API_KEY"):
+        assert secret not in tool_env_keys
+
+
 def test_analysis_draft_roundtrip(client, with_api_key, monkeypatch):
     """Autosave drafts (ported from main): PUT persists a snapshot inside the
     investigation state; the GET read strips it back out as draft_state."""
@@ -508,3 +536,248 @@ def test_rate_limit_429(client, monkeypatch):
         assert client.get("/api/health").status_code == 200
     finally:
         api_main._RATE_HITS.clear()
+
+
+# ---------------------------------------------------------------------------
+# F5 — login throttling + constant-time user resolution
+# (API security review: /api/auth/login short-circuited on a missing
+# user — a valid username cost a full KDF run, an invalid one returned
+# in microseconds, a reliable username-enumeration timing side channel —
+# and the endpoint had no brute-force protection)
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+import api.routes.auth as auth_route
+
+
+@pytest.fixture()
+def clean_login_throttle_state():
+    """Login failure windows are module-global; keep every
+    F5 test hermetic and leave no state behind for others."""
+    auth_route._LOGIN_FAILURES.clear()
+    yield
+    auth_route._LOGIN_FAILURES.clear()
+
+
+def _spy_verify_password(monkeypatch):
+    """Wrap api.auth.verify_password, recording the hash each
+    attempt was verified against, and return the recording list."""
+    verify_calls = []
+    real_verify = api_auth.verify_password
+
+    def _spy(password, encoded):
+        verify_calls.append(encoded)
+        return real_verify(password, encoded)
+
+    monkeypatch.setattr(api_auth, "verify_password", _spy)
+    return verify_calls
+
+
+def test_missing_user_login_runs_full_kdf(session_client, monkeypatch):
+    """Regression: the login fast-path used to short-circuit on a
+    missing user, so no password verification ran at all. Every
+    attempt — valid username or not — must now pay one full KDF
+    run, verifying against the dummy hash when the user is absent."""
+    verify_calls = _spy_verify_password(monkeypatch)
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "ghost-user", "password": "anything"},
+    )
+    assert resp.status_code == 401
+    assert len(verify_calls) == 1
+    # Verified against the dummy hash — same KDF, same parameters
+    # as a real hash, so a missing user costs a real user's time.
+    assert verify_calls[0] == auth_route._dummy_password_hash()
+    assert verify_calls[0].startswith(("scrypt$", "pbkdf2$"))
+
+
+def test_inactive_user_login_verifies_dummy_hash(session_client, monkeypatch):
+    """An inactive account also resolves in constant time: verifying
+    its real hash would leak that the username exists but is disabled."""
+    db = session_client.test_session()
+    user = _make_user(db, username="sleeping", password="pw123")
+    user.is_active = False
+    db.commit()
+
+    verify_calls = _spy_verify_password(monkeypatch)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "sleeping", "password": "pw123"},
+    )
+    assert resp.status_code == 401
+    assert verify_calls[0] == auth_route._dummy_password_hash()
+    assert verify_calls[0] != user.password_hash
+
+
+def test_active_user_login_verifies_real_hash(session_client, monkeypatch):
+    """Constant-time resolution applies to missing/inactive users;
+    a real active user still verifies against their stored hash."""
+    db = session_client.test_session()
+    user = _make_user(db, username="awake", password="pw123")
+
+    verify_calls = _spy_verify_password(monkeypatch)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "awake", "password": "pw123"},
+    )
+    assert resp.status_code == 200
+    assert verify_calls == [user.password_hash]
+
+
+def test_missing_and_present_user_login_cost_the_same(session_client):
+    """Timing sanity for the enumeration fix: a missing-user login
+    and a real-user (wrong-password) login each pay exactly one KDF
+    run, so neither is reliably faster. The 40% floor is generous —
+    the real-user path additionally does the DB lookup, which only
+    makes it slower, so any real asymmetry fails this test."""
+    db = session_client.test_session()
+    _make_user(db, username="paced", password="pw123")
+
+    def _timed(username, password):
+        t0 = _time.perf_counter()
+        session_client.post(
+            "/api/auth/login",
+            json={"username": username, "password": password},
+        )
+        return _time.perf_counter() - t0
+
+    # Warm both paths once (lazy dummy-hash build, connection pools).
+    _timed("paced", "wrong")
+    _timed("ghost-timing", "wrong")
+
+    present = _timed("paced", "wrong")
+    missing = _timed("ghost-timing", "wrong")
+    assert missing >= 0.4 * present, (
+        f"missing-user login ({missing:.4f}s) is suspiciously faster "
+        f"than real-user login ({present:.4f}s) — enumeration channel"
+    )
+
+
+def test_login_throttled_after_repeat_failures(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failed attempts are counted; once a window is full the login
+    answers 429 — checked BEFORE user resolution, so even the correct
+    password is refused while throttled."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 3)
+    db = session_client.test_session()
+    _make_user(db, username="throttled-user", password="pw123")
+
+    for _ in range(3):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "throttled-user", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "throttled-user", "password": "pw123"},
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "Too many login attempts"
+
+
+def test_unknown_username_failures_throttle_that_username(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failed logins for a username that does not exist still count
+    against that username's window — the enumeration target itself
+    gets throttled."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    for _ in range(2):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "enumerated", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "enumerated", "password": "pw123"},
+    )
+    assert resp.status_code == 429
+
+
+def test_login_throttle_windows_are_independent(
+    monkeypatch, clean_login_throttle_state
+):
+    """Per-IP and per-username windows are separate: a full IP
+    window throttles every username from that IP, a full username
+    window throttles that username from every IP, and neither
+    affects unrelated (ip, username) pairs."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    for _ in range(2):
+        auth_route._record_login_failure("10.0.0.1", "bob")
+
+    assert auth_route._login_throttled("10.0.0.1", "bob")       # both full
+    assert auth_route._login_throttled("10.0.0.1", "alice")     # IP full
+    assert auth_route._login_throttled("10.0.0.2", "bob")       # user full
+    assert not auth_route._login_throttled("10.0.0.2", "alice")  # neither
+
+
+def test_login_success_clears_failure_windows(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """A successful login resets both windows. With the cap at 3:
+    two failures leave the login admitted (2 < 3), the successful
+    login clears, and afterwards a single new failure leaves the
+    window at 1 — had the clear not happened, the count would be
+    3 and the next (correct) login would 429."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 3)
+    db = session_client.test_session()
+    _make_user(db, username="recovered", password="pw123")
+
+    for _ in range(2):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "recovered", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    ok = session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "pw123"},
+    )
+    assert ok.status_code == 200
+    # One new failure does not re-arm the throttle (window was cleared).
+    session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "wrong"},
+    )
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "pw123"},
+    )
+    assert resp.status_code == 200
+
+
+def test_login_failure_window_expires(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failures age out of the sliding window: once the window
+    collapses, stale failures are pruned and login re-admits."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    db = session_client.test_session()
+    _make_user(db, username="expired-window", password="pw123")
+
+    for _ in range(2):
+        session_client.post(
+            "/api/auth/login",
+            json={"username": "expired-window", "password": "wrong"},
+        )
+    assert session_client.post(
+        "/api/auth/login",
+        json={"username": "expired-window", "password": "pw123"},
+    ).status_code == 429
+
+    # Collapse the window to zero: every recorded failure is now
+    # stale and must be pruned on the next probe.
+    monkeypatch.setattr(auth_route, "LOGIN_WINDOW_SECONDS", 0)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "expired-window", "password": "pw123"},
+    )
+    assert resp.status_code == 200

@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api import deps
+from api.helpers.errors import raise_internal
 from api.helpers import admission
 from services import splunk_boundary
 
@@ -117,12 +118,18 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
         raise HTTPException(status_code=400, detail="case_id and query_title are required")
 
     # Per-case concurrency cap: one running search per case.
+    # 409 (not 429): the conflict is with work on THIS case,
+    # so retrying another case is fine but re-issuing this
+    # one is not — that distinction lives in the helper.
     with _SEARCH_ONE_INFLIGHT_LOCK:
-        if case_id in _SEARCH_ONE_INFLIGHT:
-            raise HTTPException(
-                status_code=409,
-                detail="A search is already running for this case (per-case concurrency cap is 1)",
-            )
+        rejection = admission.concurrency_rejection(
+            case_id in _SEARCH_ONE_INFLIGHT,
+            label="search",
+            resource="case",
+            cap=1,
+        )
+        if rejection is not None:
+            raise rejection
         _SEARCH_ONE_INFLIGHT.add(case_id)
 
     db = None
@@ -309,7 +316,7 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="splunk")
     finally:
         with _SEARCH_ONE_INFLIGHT_LOCK:
             _SEARCH_ONE_INFLIGHT.discard(case_id)

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, HTTPException
 
 from api import deps
+from api.helpers.errors import raise_internal
 from api.helpers.correlation import _resolve_correlation_rule
 from api.helpers.triage_keys import _field_lookup
 from db.util import utcnow_naive
@@ -177,7 +178,7 @@ def promote_notable_to_triage(event_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="promote")
     finally:
         try:
             db.close()

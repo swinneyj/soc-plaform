@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from api import deps
+from api.helpers.errors import raise_internal
 from services.investigation_state import (
     _build_investigation_state,
     _serialize_investigation_state_record,
@@ -240,7 +241,7 @@ def save_analysis_draft(case_id: str, request: AnalysisDraftRequest):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         if db is not None:
             db.close()
@@ -287,7 +288,7 @@ def list_case_evidence(
 
         return items
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         try:
             if db is not None:
@@ -400,7 +401,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         try:
             if db is not None:
@@ -466,7 +467,7 @@ def delete_case_evidence(case_id: str, evidence_id: int):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         try:
             if db is not None:
@@ -519,7 +520,7 @@ def delete_case_evidence_batch(case_id: str, payload: dict):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         try:
             if db is not None:
@@ -560,7 +561,7 @@ def delete_all_case_evidence(case_id: str):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="evidence")
     finally:
         try:
             if db is not None:

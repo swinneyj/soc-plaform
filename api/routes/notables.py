@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
 from api.helpers import admission
 
 from api.schemas import NotableFetchSplRequest, PastedNotableRequest
@@ -1243,7 +1244,7 @@ def generate_notable_fetch_spl(request: NotableFetchSplRequest):
     try:
         return build_notable_fetch_spl(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 
 
 @router.get("/api/db/notables/generate-fetch-spl", tags=["Database"])
@@ -1624,7 +1625,7 @@ def paste_notable(request: PastedNotableRequest):
         raise
     except Exception as e:
         _purge_failed_paste_batch(paste_manifest, paste_committed)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1687,7 +1688,7 @@ def list_recent_notables(
         visible = [n for n in serialized if not n.get("hidden_from_recent")]
         return visible
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1747,7 +1748,7 @@ def list_historical_notables(
 
         return summaries
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1827,7 +1828,7 @@ def backfill_historical_closure_notes():
             db.rollback()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise_internal(exc, context="notables")
     finally:
         try:
             db.close()
@@ -1860,7 +1861,7 @@ def get_pasted_notable_details(event_id: int):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise_internal(exc, context="notables")
     finally:
         try:
             db.close()
@@ -1928,7 +1929,7 @@ def delete_pasted_notable(event_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -2016,7 +2017,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 
 
 @router.get("/api/db/triage/{case_id}/notable", tags=["Database"])
@@ -2037,5 +2038,5 @@ def get_triage_source_notable(case_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 
