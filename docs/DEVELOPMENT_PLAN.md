@@ -70,7 +70,7 @@ Turn the paste-driven loop into a one-click loop. **Read-only first** (search + 
 - **Non-goals (v1):** saved-search management, index writes, ES notable updates, multi-cluster.
 - **Tests:** placeholder substitution, outcome mapping, and row summarization (pure, `tests/test_search_backend.py`); `RealSplunkBackend` contract (same file) — export request shape (URL/bearer/timeout/payload), `search ` prefixing vs generating commands, CSV normalization incl. epoch→ISO, stats-row shape defaults, HTTP-error and transport-error wrapping, `execute_for_case` payload, factory selection — all hermetic via a duck-typed injectable session; endpoint via TestClient — substitution, `no_results`/`query_failed` mapping, per-title replace, 404/422 guards, concurrency 409, timeout (`tests/test_api_analyze_flow.py`); mid-loop harness `TestSearchOneMidLoop` (phases 2–5 interleaved with real search-one executions — exactly one `splunk_auto` row per (case, query), auto-evidence consumed by the next phase's prompt) and embedded `earliest=`/`latest=` window parsing (5-tuple `_parse_spl`; embedded windows override the caller's).
 
-**Size:** L. **Depends on:** Phase 1 API tests (so the ledger path is pinned before automating it). **Remaining:** live rehearsal against a real Splunk instance once the API key arrives (set `SPLUNK_URL`/`SPLUNK_TOKEN`, flip `SEARCH_BACKEND=splunk`).
+**Size:** L. **Depends on:** Phase 1 API tests (so the ledger path is pinned before automating it). **Remaining:** live rehearsal against a real Splunk instance once the Splunk credentials arrive (set `SPLUNK_URL`/`SPLUNK_TOKEN`, flip `SEARCH_BACKEND=splunk`) — full turnkey runbook: `docs/SPLUNK_REHEARSAL.md`.
 
 ---
 
@@ -216,6 +216,9 @@ but-unplanned Phase 5 remainder, and externals. Phased by risk:
 - **D2 — Live Splunk rehearsal (blocked on credentials).** Turnkey checklist:
   `SEARCH_BACKEND=splunk` + `SPLUNK_URL`/`SPLUNK_TOKEN`, run the mid-loop search-one
   scenario, verify CSV normalization + boundary-latch interplay.
+  **Full turnkey runbook: `docs/SPLUNK_REHEARSAL.md`** (upgraded Oct 5, 2026 —
+  exact BWS→keychain secret chain, probes, contract checks, corrected
+  failure-drill expectation, cleanup, rollback).
 - **D3 — User-side hygiene (not automatable):** Safari history scrub, thread-deletion
   decision (security tracker).
 
