@@ -129,6 +129,9 @@
                 "description": "Directory containing Extracted IOC CSVs to cross-reference",
                 "required": false
             }
+        ],
+        "output_dirs": [
+            "Data/Reports"
         ]
     },
     {
@@ -145,6 +148,9 @@
                 "description": "Path to the file containing raw logs or data to analyze",
                 "required": true
             }
+        ],
+        "output_dirs": [
+            "Data/Active_Workspace"
         ]
     },
     {
@@ -167,6 +173,9 @@
                 "description": "Optional path to the .map.json produced by the sanitizer",
                 "required": false
             }
+        ],
+        "output_dirs": [
+            "Data/Active_Workspace"
         ]
     },
     {
@@ -183,6 +192,9 @@
                 "description": "1 for File, 2 for Paste",
                 "required": false
             }
+        ],
+        "output_dirs": [
+            "Data/Active_Workspace"
         ]
     },
     {
@@ -199,6 +211,11 @@
                 "description": "Folder containing raw exports for this case",
                 "required": true
             }
+        ],
+        "output_dirs": [
+            "Data/Archive",
+            "Data/Exports",
+            "Data/Reports"
         ]
     },
     {
@@ -215,6 +232,9 @@
                 "description": "Path to the raw MDE Incident or Alert CSV export",
                 "required": true
             }
+        ],
+        "output_dirs": [
+            "Data/Reports"
         ]
     },
     {
@@ -237,6 +257,9 @@
                 "description": "Path to detection science / supportive rules JSON/MD (optional)",
                 "required": false
             }
+        ],
+        "output_dirs": [
+            "Data/Active_Workspace"
         ]
     },
     {
@@ -253,6 +276,9 @@
                 "description": "Path to the raw Splunk export",
                 "required": true
             }
+        ],
+        "output_dirs": [
+            "Data/Reports"
         ]
     },
     {
@@ -301,7 +327,11 @@
         "ext": ".py",
         "path": "Tools/maintenance_suite/maintenance_suite.py",
         "category": "System Utilities",
-        "description": "Interactive hub for cleaning the workspace, generating AI context exports, or backing up the platform."
+        "description": "Interactive hub for cleaning the workspace, generating AI context exports, or backing up the platform.",
+        "output_dirs": [
+            "Data/Exports",
+            "Data/Maintenance"
+        ]
     },
     {
         "name": "Platform_Blueprint",
@@ -309,7 +339,10 @@
         "ext": ".py",
         "path": "Tools/platform_blueprint/platform_blueprint.py",
         "category": "System Utilities",
-        "description": "Scans the SOC platform to map all folder paths, files, metadata, and source code into a single document."
+        "description": "Scans the SOC platform to map all folder paths, files, metadata, and source code into a single document.",
+        "output_dirs": [
+            "Data/Exports"
+        ]
     },
     {
         "name": "Platform_Health_Check",
@@ -399,6 +432,9 @@
                 "description": "Desired wrap width (default 100)",
                 "required": false
             }
+        ],
+        "output_dirs": [
+            "Data/Active_Workspace"
         ]
     },
     {

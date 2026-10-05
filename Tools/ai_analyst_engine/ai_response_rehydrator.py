@@ -1,6 +1,7 @@
 # TOOL_NAME: AI_Response_Rehydrator
 # DESC: Replaces placeholder tokens (e.g., HOST_1, IPV4_1) in an AI response with real values from the sanitizer mapping file.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --response | AI Response File | Path to the AI model output to rehydrate | True
 # ARG: --map | Mapping File | Optional path to the .map.json produced by the sanitizer | False
 

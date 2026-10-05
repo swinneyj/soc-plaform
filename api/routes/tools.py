@@ -183,16 +183,83 @@ def _fix_tool_path(tool_path: str) -> str:
                 return relative_path
     return tool_path
 
-def _tool_artifact_snapshot() -> set:
-    """Return files that tool runs may create, using portable paths."""
+# Legacy artifact sweep (optimization #5 fallback): tools that have not
+# declared their output locations in the registry keep the full sweep so
+# artifact detection never narrows silently.
+_LEGACY_ARTIFACT_DIRS = (
+    ("Reports",),
+    ("Data", "Reports"),
+    ("Data", "Archive"),
+    ("Data", "Active_Workspace"),
+    ("Data", "Exports"),
+)
+
+
+def _legacy_artifact_candidates(root: str) -> List[str]:
+    return [os.path.join(root, *parts) for parts in _LEGACY_ARTIFACT_DIRS]
+
+
+def _registry_output_dirs(tool_name: Optional[str]) -> List[str]:
+    """Declared output locations for one tool, from the registry.
+
+    Registry entries carry `output_dirs` (relative to the platform root
+    unless absolute), seeded from `# OUTPUT_DIR:` headers by the tool
+    indexer. A missing/unparsable registry degrades to no declarations —
+    tool execution must not fail over metadata.
+    """
+    if not tool_name:
+        return []
+    try:
+        registry = load_registry()
+    except Exception:
+        return []
+    wanted = str(tool_name).strip().lower()
+    for entry in registry:
+        if str(entry.get("name", "")).strip().lower() == wanted:
+            dirs = entry.get("output_dirs") or []
+            return [str(d) for d in dirs if str(d or "").strip()]
+    return []
+
+
+def _resolve_output_dirs(declared: List[str], root: str) -> List[str]:
+    """Resolve declared output locations, refusing escapes from the root.
+
+    Relative declarations join the platform root; absolutes are honored
+    only when already inside it. Containment is checked on realpath (so
+    symlinks cannot smuggle the snapshot outside) — the same
+    traversal-stance as the reports/artifact endpoints (#15). Declared
+    lists that resolve to nothing fall back to the legacy sweep at the
+    caller.
+    """
+    real_root = os.path.realpath(root)
+    resolved = []
+    for declared_dir in declared:
+        candidate = (
+            declared_dir if os.path.isabs(declared_dir) else os.path.join(root, declared_dir)
+        )
+        real = os.path.realpath(candidate)
+        if real == real_root or real.startswith(real_root + os.sep):
+            resolved.append(candidate)
+    return resolved
+
+
+def _tool_artifact_snapshot(tool_name: Optional[str] = None) -> set:
+    """Return files that tool runs may create, using portable paths.
+
+    Optimization #5: the before/after diff no longer sweeps all five
+    candidate trees for every run. A tool whose registry entry declares
+    `output_dirs` is snapshotted against only those directories; the
+    legacy sweep remains the fallback for undeclared tools (and for
+    declarations that resolve to nothing), so narrowing is opt-in per
+    tool and never silently loses artifact detection.
+    """
     root = deps.get_platform_root()
-    candidates = [
-        os.path.join(root, "Reports"),
-        os.path.join(root, "Data", "Reports"),
-        os.path.join(root, "Data", "Archive"),
-        os.path.join(root, "Data", "Active_Workspace"),
-        os.path.join(root, "Data", "Exports"),
-    ]
+    candidates = _legacy_artifact_candidates(root)
+    declared = _registry_output_dirs(tool_name)
+    if declared:
+        scoped = _resolve_output_dirs(declared, root)
+        if scoped:
+            candidates = scoped
     found = set()
     for folder in candidates:
         if not os.path.isdir(folder):
@@ -207,8 +274,17 @@ def _tool_artifact_snapshot() -> set:
     return found
 
 
-def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False) -> Dict[str, Any]:
-    """Execute a tool synchronously and return stdout/stderr/exit_code."""
+def execute_tool_sync(
+    tool_path: str,
+    args: Dict[str, str],
+    silent: bool = False,
+    tool_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute a tool synchronously and return stdout/stderr/exit_code.
+
+    `tool_name` scopes the artifact snapshot to the tool's registry-
+    declared output dirs (optimization #5); None keeps the legacy sweep.
+    """
     cmd = [sys.executable, tool_path]
     boolean_flags = {
         "silent", "list", "use_cases", "replace_all_supportive",
@@ -219,7 +295,7 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
                 cmd.append(f"--{key.replace('_', '-')}")
         elif val:
             cmd.extend([f'--{key}', str(val)])
-    before = _tool_artifact_snapshot()
+    before = _tool_artifact_snapshot(tool_name)
     try:
         result = subprocess.run(
             cmd,
@@ -229,7 +305,7 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             cwd=deps.get_platform_root(),
             env=_tool_env(),
         )
-        after = _tool_artifact_snapshot()
+        after = _tool_artifact_snapshot(tool_name)
         artifacts = [os.path.relpath(p, deps.get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
         return {
             "stdout": result.stdout,
@@ -252,7 +328,13 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             "artifacts": [],
         }
 
-async def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent: bool = False):
+async def execute_tool_async(
+    job_id: str,
+    tool_path: str,
+    args: Dict[str, str],
+    silent: bool = False,
+    tool_name: Optional[str] = None,
+):
     """Background task to execute tool asynchronously.
 
     A coroutine on purpose: FastAPI awaits coroutine background tasks on
@@ -273,7 +355,7 @@ async def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], 
         if job_id in deleted_job_ids or job_id not in jobs:
             return
         jobs[job_id]["status"] = JobStatus.RUNNING.value
-        result = await run_in_threadpool(execute_tool_sync, tool_path, args, silent)
+        result = await run_in_threadpool(execute_tool_sync, tool_path, args, silent, tool_name)
         if job_id in deleted_job_ids or job_id not in jobs:
             return
         jobs[job_id].update({
@@ -405,7 +487,8 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
         job_id,
         tool_path,
         request.arguments or {},
-        request.silent
+        request.silent,
+        request.tool_name
     )
     return JobResponse(**jobs[job_id])
 

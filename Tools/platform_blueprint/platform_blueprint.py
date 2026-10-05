@@ -1,6 +1,7 @@
 # TOOL_NAME: Platform_Blueprint
 # DESC: Scans the SOC platform to map all folder paths, files, metadata, and source code into a single document.
 # CATEGORY: System Utilities
+# OUTPUT_DIR: Data/Exports
 
 import os
 import datetime

@@ -1,6 +1,7 @@
 # TOOL_NAME: Case_Bundle_Builder
 # DESC: Builds a consolidated incident case bundle from a folder of exports.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Reports, Data/Archive, Data/Exports
 # SOURCE_TYPES: offline_exports
 # ARG: --source_dir | Source Directory | Folder containing raw exports for this case | True
 

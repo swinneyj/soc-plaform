@@ -1,6 +1,7 @@
 # TOOL_NAME: AI_Analyst_Engine
 # DESC: Fuses an AI Skill from the Knowledge Base with raw evidence to generate a structured analysis prompt.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --evidence | Evidence File | Path to the file containing raw logs or data to analyze | True
 
 import os

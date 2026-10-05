@@ -1,6 +1,7 @@
 # TOOL_NAME: Threat_Intel_Fetcher
 # DESC: Aggregates live intel from CISA KEV, CISA Advisories, and Abuse.ch into a single comprehensive daily bundle. Ready for playbook automation.
 # CATEGORY: Intel Collection
+# OUTPUT_DIR: Data/Reports
 # ARG: --compare_dir | Compare Directory | Directory containing Extracted IOC CSVs to cross-reference | False
 
 import os

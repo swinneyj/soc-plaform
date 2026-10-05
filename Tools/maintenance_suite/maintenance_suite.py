@@ -1,6 +1,7 @@
 # TOOL_NAME: Maintenance_Suite
 # DESC: Interactive hub for cleaning the workspace, generating AI context exports, or backing up the platform.
 # CATEGORY: System Utilities
+# OUTPUT_DIR: Data/Maintenance, Data/Exports
 
 import os
 import sys

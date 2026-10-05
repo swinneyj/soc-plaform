@@ -643,7 +643,7 @@ def test_parked_tool_jobs_hold_no_threadpool_tokens(monkeypatch):
     entered = []
     release = threading.Event()
 
-    def _slow_tool(tool_path, args, silent=False):
+    def _slow_tool(tool_path, args, silent=False, tool_name=None):
         entered.append(args["n"])
         release.wait(timeout=30)
         return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
@@ -700,7 +700,7 @@ def test_deleted_while_waiting_job_never_starts_subprocess(monkeypatch):
     entered = []
     release = threading.Event()
 
-    def _slow_tool(tool_path, args, silent=False):
+    def _slow_tool(tool_path, args, silent=False, tool_name=None):
         entered.append(args["n"])
         release.wait(timeout=30)
         return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
@@ -1381,3 +1381,211 @@ def test_cache_serves_cached_user_shape(session_client, actor_cache_isolated):
 
     assert actor.user.id == db.query(User).first().id
     assert actor.user.role == "analyst"
+
+
+# --- Optimization #5: registry-scoped artifact snapshots -------------------
+
+
+def test_declared_tool_snapshot_walks_only_its_output_dirs(tmp_path, monkeypatch):
+    """Optimization #5: a tool with registry-declared output_dirs is
+    snapshotted against ONLY those directories. A file planted in a
+    declared dir is found; one planted in an undeclared tree is not —
+    even when that tree is one of the legacy candidates."""
+    import api.routes.tools as tools_route
+
+    (tmp_path / "Data" / "Active_Workspace").mkdir(parents=True)
+    (tmp_path / "Data" / "Reports").mkdir(parents=True)
+    (tmp_path / "Tools" / "probe").mkdir(parents=True)
+    declared_file = tmp_path / "Data" / "Active_Workspace" / "declared.txt"
+    undeclared_file = tmp_path / "Data" / "Reports" / "undeclared.txt"
+    declared_file.write_text("x", encoding="utf-8")
+    undeclared_file.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "scoped-probe",
+        "output_dirs": ["Data/Active_Workspace"],
+    }])
+
+    found = tools_route._tool_artifact_snapshot("scoped-probe")
+    assert os.path.realpath(str(declared_file)) in found
+    assert os.path.realpath(str(undeclared_file)) not in found
+
+
+def test_undeclared_tool_keeps_legacy_sweep(tmp_path, monkeypatch):
+    """Optimization #5 must never silently narrow detection: a tool with
+    no registry entry (or no output_dirs) keeps the full five-tree
+    legacy sweep, seeing files in every legacy candidate directory."""
+    import api.routes.tools as tools_route
+
+    candidates = ["Reports", os.path.join("Data", "Reports"),
+                  os.path.join("Data", "Archive"),
+                  os.path.join("Data", "Active_Workspace"),
+                  os.path.join("Data", "Exports")]
+    for rel in candidates:
+        os.makedirs(os.path.join(tmp_path, rel), exist_ok=True)
+        (tmp_path / rel / "f.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "unrelated-tool",  # registry exists, probe has no entry
+        "arguments": [],
+    }])
+
+    found = tools_route._tool_artifact_snapshot("probe-with-no-entry")
+    for rel in candidates:
+        expected = os.path.realpath(str(tmp_path / rel / "f.txt"))
+        assert expected in found, f"legacy sweep missed {rel}"
+    # Registry failures degrade the same way.
+    def _boom():
+        raise RuntimeError("registry unavailable")
+    monkeypatch.setattr(tools_route, "load_registry", _boom)
+    found = tools_route._tool_artifact_snapshot("probe-with-no-entry")
+    assert os.path.realpath(str(tmp_path / "Data" / "Active_Workspace" / "f.txt")) in found
+
+
+def test_declared_tool_artifacts_detected_end_to_end(tmp_path, monkeypatch):
+    """Optimization #5 end to end: execute_tool_sync for a declared tool
+    still reports a file the tool writes into its declared dir — and the
+    walk really stayed scoped (an undeclared-tree file stays invisible)."""
+    import api.routes.tools as tools_route
+
+    out_dir = tmp_path / "Data" / "Reports"
+    out_dir.mkdir(parents=True)
+    probe = tmp_path / "artifact_probe.py"
+    probe.write_text(
+        "import argparse, pathlib\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('--out_dir', required=True)\n"
+        "a = p.parse_args()\n"
+        "pathlib.Path(a.out_dir, 'e2e-artifact.json').write_text('{}')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "artifact-probe",
+        "output_dirs": ["Data/Reports"],
+        "arguments": [],
+    }])
+
+    result = tools_route.execute_tool_sync(
+        str(probe), {"out_dir": str(out_dir)}, silent=True,
+        tool_name="artifact-probe",
+    )
+    assert result["exit_code"] == 0
+    assert result["artifacts"], "declared-dir artifact must be detected"
+    assert any("e2e-artifact.json" in rel for rel in result["artifacts"])
+
+    # Scoped walk: the tool created an undeclared file too (not reported).
+    (tmp_path / "Data" / "Active_Workspace").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "Data" / "Active_Workspace" / "invisible.txt").write_text(
+        "x", encoding="utf-8"
+    )
+    result = tools_route.execute_tool_sync(
+        str(probe), {"out_dir": str(out_dir)}, silent=True,
+        tool_name="artifact-probe",
+    )
+    assert result["exit_code"] == 0
+    assert not any(
+        "invisible.txt" in rel for rel in result["artifacts"]
+    ), "undeclared-tree file must not leak into the artifact list"
+
+
+def test_output_dir_traversal_and_abs_outside_root_refused(tmp_path, monkeypatch):
+    """Declarations must not aim the snapshot outside the platform root:
+    relative `..` escapes and absolute paths outside the root are both
+    refused (falling back to the legacy sweep when nothing survives),
+    while in-root absolutes are honored."""
+    import api.routes.tools as tools_route
+
+    # A directory genuinely outside the platform root (tmp_path itself).
+    outside = tmp_path.parent / "opt5_outside_root"
+    outside.mkdir(exist_ok=True)
+    (outside / "planted.txt").write_text("x", encoding="utf-8")
+    legacy = tmp_path / "Data" / "Active_Workspace"
+    legacy.mkdir(parents=True)
+    (legacy / "f.txt").write_text("x", encoding="utf-8")
+    insider = tmp_path / "Data" / "Exports"
+    insider.mkdir(parents=True)
+    (insider / "in.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+
+    # Mixed: escaping declarations refused, in-root absolute honored.
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "escape-probe",
+        "output_dirs": ["../opt5_outside_root", str(outside), "Data/Exports"],
+    }])
+    found = tools_route._tool_artifact_snapshot("escape-probe")
+    assert os.path.realpath(str(outside / "planted.txt")) not in found, (
+        "declaration escaping the root must never be walked"
+    )
+    assert os.path.realpath(str(insider / "in.txt")) in found
+    assert os.path.realpath(str(legacy / "f.txt")) not in found
+
+    # All declarations refused -> legacy sweep fallback.
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "escape-probe",
+        "output_dirs": ["../opt5_outside_root", str(outside)],
+    }])
+    found = tools_route._tool_artifact_snapshot("escape-probe")
+    assert os.path.realpath(str(legacy / "f.txt")) in found
+
+
+def test_indexer_output_dir_header_round_trip(tmp_path, monkeypatch):
+    """The indexer parses '# OUTPUT_DIR:' headers into output_dirs,
+    normalizes separators, refuses ../ declarations, and omits the key
+    when nothing valid remains."""
+    import importlib.util
+
+    root = tmp_path / "root"
+    tools_dir = root / "Tools"
+    tools_dir.mkdir(parents=True)
+    indexer_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir,
+                     "Tools", "tool_indexer", "tool_indexer.py")
+    )
+    spec = importlib.util.spec_from_file_location("tool_indexer", indexer_path)
+    indexer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(indexer)
+    monkeypatch.setattr(indexer, "get_platform_root", lambda: str(root))
+
+    def _write(rel, body):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    good = _write("Tools/good/good.py", "# TOOL_NAME: good\n"
+                  "# DESC: d\n# CATEGORY: C\n"
+                  "# OUTPUT_DIR: Data/Reports, Data\\Exports\n"
+                  "# ARG: --x | X | x | False\n" + "print(1)\n")
+    escaping = _write("Tools/bad/bad.py", "# TOOL_NAME: bad\n"
+                      "# DESC: d\n# CATEGORY: C\n"
+                      "# OUTPUT_DIR: ../etc, Data/Reports\n"
+                      + "print(1)\n")
+    no_dirs = _write("Tools/none/none.py", "# TOOL_NAME: none\n"
+                     "# DESC: d\n# CATEGORY: C\n" + "print(1)\n")
+
+    assert indexer.parse_tool_headers(good)["output_dirs"] == [
+        "Data/Exports", "Data/Reports"
+    ]
+    parsed = indexer.parse_tool_headers(escaping)
+    assert parsed["output_dirs"] == ["Data/Reports"]
+    assert "output_dirs" not in indexer.parse_tool_headers(no_dirs)
+
+    indexer.rebuild_registry()
+    import json
+    reg = json.loads((root / "Commander_Registry.json").read_text())
+    by_name = {t["name"]: t for t in reg}
+    assert by_name["good"]["output_dirs"] == ["Data/Exports", "Data/Reports"]
+    assert by_name["bad"]["output_dirs"] == ["Data/Reports"]
+    assert "output_dirs" not in by_name["none"]

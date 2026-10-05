@@ -1,6 +1,7 @@
 # TOOL_NAME: Text_Sanitizer_Pipeline
 # DESC: Reflows garbled text and sanitizes IPs, MACs, and common PII/PHI before opening in Notepad.
 # CATEGORY: System Utilities
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --target | Target Text File | Path to the text file to sanitize directly | False
 # ARG: --mode | Input Mode | 1 (Paste), 2 (File Drag & Drop) | False
 # ARG: --width | Line Width | Desired wrap width (default 100) | False
