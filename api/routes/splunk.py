@@ -19,6 +19,7 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api import deps
+from api.helpers import admission
 from services import splunk_boundary
 
 from api.auth import require_api_key, require_role
@@ -57,14 +58,16 @@ def get_splunk_boundary_status():
              dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def admit_splunk_file(file: UploadFile = File(...)):
     """Admit a Splunk export through the boundary (validate -> quarantine -> ingest)."""
-    if splunk_boundary.current_mode() == "quarantined":
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Splunk boundary is quarantined: HTTP admission is disabled. "
-                "Use host-local ingest tooling, or set SPLUNK_BOUNDARY_MODE=restricted."
-            ),
-        )
+    rejection = admission.latch_rejection(
+        splunk_boundary.current_mode(),
+        permitted_modes=("restricted", "open"),
+        refusal_detail=(
+            "Splunk boundary is quarantined: HTTP admission is disabled. "
+            "Use host-local ingest tooling, or set SPLUNK_BOUNDARY_MODE=restricted."
+        ),
+    )
+    if rejection is not None:
+        raise rejection
     import tempfile
 
     suffix = Path(file.filename or "upload").suffix.lower()

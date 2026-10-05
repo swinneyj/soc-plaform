@@ -14,6 +14,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 
 from api import deps
+from api.helpers import admission
 
 from api.auth import require_api_key, require_role
 from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
@@ -42,6 +43,41 @@ def _job_status_value(status: Any) -> str:
         value = value.split(".", 1)[1].lower()
     return value.lower()
 
+
+def _unfinished_job_count() -> int:
+    """Unfinished (pending/running) jobs across BOTH stores: the
+    process-local jobs dict AND the persisted ToolRun rows.
+
+    The dict is process-local, so a daemon restart (or a second
+    worker) would otherwise see an empty queue and the C2.1.2
+    admission cap would silently reset to zero while persisted
+    jobs keep occupying slots. Persisted statuses are normalized
+    with _job_status_value to cover legacy enum strings. A DB
+    failure degrades to the in-memory count so a database hiccup
+    cannot fail admission outright.
+    """
+    unfinished_statuses = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+    live_unfinished_ids = {
+        job_id
+        for job_id, job in jobs.items()
+        if job.get("status") in unfinished_statuses
+    }
+    count = len(live_unfinished_ids)
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        try:
+            persisted = db.query(ToolRun.job_id, ToolRun.status).all()
+        finally:
+            db.close()
+        for job_id, status in persisted:
+            if job_id in live_unfinished_ids:
+                continue
+            if _job_status_value(status) in unfinished_statuses:
+                count += 1
+    except Exception as exc:
+        logger.warning("[tool_runs] Admission could not count persisted jobs: %s", exc)
+    return count
 
 def load_registry() -> List[Dict]:
     """Load tool registry from JSON."""
@@ -240,13 +276,13 @@ def run_tool_catalog_regression():
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
     # C2.1.2: admission check before registry/disk work — under load this is
-    # the cheap first gate.
-    unfinished = sum(1 for job in jobs.values() if job.get("status") in (JobStatus.PENDING.value, JobStatus.RUNNING.value))
-    if unfinished >= JOB_QUEUE_MAX:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Job queue is full ({unfinished} unfinished >= {JOB_QUEUE_MAX}); retry later",
-        )
+    # the cheap first gate. Counts in-memory AND persisted unfinished
+    # jobs so a restart does not reset the cap.
+    rejection = admission.queue_rejection(
+        _unfinished_job_count(), JOB_QUEUE_MAX
+    )
+    if rejection is not None:
+        raise rejection
     registry = load_registry()
     tool = next((t for t in registry if t["name"].lower() == request.tool_name.lower()), None)
     if not tool:

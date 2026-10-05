@@ -306,11 +306,31 @@ def test_expired_session_401(session_client):
 # C2.1.x — route-level hardening gates (signed-off limits)
 # ---------------------------------------------------------------------------
 
+def _isolated_db_session(monkeypatch):
+    """Override db.models.SessionLocal with an empty in-memory
+    sqlite session so DB-touching admission paths stay hermetic."""
+    import db.models as db_models
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    db_models.Base.metadata.create_all(bind=engine)
+    test_session = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine
+    )
+    monkeypatch.setattr(db_models, "SessionLocal", test_session)
+    return engine, test_session
+
+
 def test_job_queue_cap_429(client, with_api_key, monkeypatch):
     """C2.1.2: a full in-memory job queue rejects admission with 429 BEFORE
     registry lookup (unknown tool would 404; the cap must win)."""
     import api.routes.tools as tools_route
 
+    _isolated_db_session(monkeypatch)
     monkeypatch.setattr(tools_route, "JOB_QUEUE_MAX", 2)
     seeded = [f"queued-{i}" for i in range(2)]
     for job_id in seeded:
@@ -336,6 +356,46 @@ def test_job_queue_cap_429(client, with_api_key, monkeypatch):
             tools_route.jobs.pop(job_id, None)
 
 
+def test_job_queue_cap_429_counts_persisted_jobs(client, with_api_key, monkeypatch):
+    """Regression: the C2.1.2 cap counted only the process-local
+    jobs dict, so after a daemon restart (dict empty, persisted
+    ToolRun rows still unfinished) admission silently reset to
+    zero and accepted work past the cap."""
+    import api.routes.tools as tools_route
+    import db.models as db_models
+    from db.util import utcnow_naive
+
+    engine, test_session = _isolated_db_session(monkeypatch)
+
+    # Simulate the post-restart state: empty in-memory queue,
+    # one unfinished run persisted by the previous process.
+    tools_route.jobs.clear()
+    db = test_session()
+    db.add(db_models.ToolRun(job_id="persisted-pending", tool_name="x",
+                             status="pending", created_at=utcnow_naive()))
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(tools_route, "JOB_QUEUE_MAX", 1)
+    try:
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 429
+        assert "queue is full" in resp.json()["detail"]
+
+        # A finished persisted row does NOT consume a slot.
+        db = test_session()
+        db.query(db_models.ToolRun).update({"status": "completed"})
+        db.commit()
+        db.close()
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 404  # admitted; unknown tool
+    finally:
+        tools_route.jobs.clear()
+        engine.dispose()
+
+
 def test_paste_payload_cap_413(client, monkeypatch):
     """C2.1.4: an oversized raw paste is rejected 413 before any parsing."""
     import api.routes.notables as notables_route
@@ -349,6 +409,45 @@ def test_paste_payload_cap_413(client, monkeypatch):
     resp = client.post("/api/notables/paste", json={"raw_text": " " * 10})
     assert resp.status_code == 400
     assert "No notable text" in resp.json()["detail"]
+
+
+def test_failed_paste_purges_boundary_batch(client, monkeypatch):
+    """Regression: a paste that failed after boundary admission
+    (e.g. the DB died mid-pipeline) left the staged
+    {batch_id}-pasted.txt + manifest in the quarantine
+    directory forever — an orphaned, unlinked copy of the
+    pasted content. The failure path must purge the batch
+    when the pipeline failed before its inserts committed."""
+    import db.models as db_models
+    from services import splunk_boundary
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(db_models, "SessionLocal", _boom)
+
+    resp = client.post("/api/notables/paste",
+                       json={"raw_text": "Notable\n\nTitle: t\nHost: h\n"})
+    assert resp.status_code == 500
+    # The admitted batch (staged .txt + manifest) is gone —
+    # nothing is left behind in the quarantine directory.
+    assert splunk_boundary.list_batches() == []
+    assert list(splunk_boundary.staging_dir().glob("*")) == []
+
+
+def test_paste_payload_cap_413_multibyte(client, monkeypatch):
+    """Regression: PASTE_MAX_BYTES is a BYTE budget. A multibyte
+    payload that is under the cap in characters but over it in
+    UTF-8 bytes must still 413 — the gate used to measure
+    len(raw_text), letting ~4x the budget past it."""
+    import api.routes.notables as notables_route
+
+    monkeypatch.setattr(notables_route, "PASTE_MAX_BYTES", 10)
+    # 6 characters (a character-count gate admits this) but
+    # 12 UTF-8 bytes (over the 10-byte budget).
+    resp = client.post("/api/notables/paste", json={"raw_text": "é" * 6})
+    assert resp.status_code == 413
+    assert "exceeds" in resp.json()["detail"]
 
 
 def test_analysis_draft_roundtrip(client, with_api_key, monkeypatch):

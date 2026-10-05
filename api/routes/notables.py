@@ -7,6 +7,7 @@ dedup keys, and artifact saving.
 """
 import datetime
 import json
+import logging
 import os
 import re
 import sys
@@ -15,9 +16,12 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, HTTPException, Query
 
 from api import deps
+from api.helpers import admission
 
 from api.schemas import NotableFetchSplRequest, PastedNotableRequest
 from db.util import utcnow_naive
+
+logger = logging.getLogger("soc.api")
 
 router = APIRouter()
 
@@ -1273,17 +1277,53 @@ def generate_notable_fetch_spl_get(
     return generate_notable_fetch_spl(req)
 
 
+def _purge_failed_paste_batch(
+    manifest: Optional[Dict[str, Any]], committed: bool
+) -> None:
+    """Undo a C4 boundary admission when the paste pipeline
+    failed before its inserts were committed.
+
+    Without this, a paste that fails between admission
+    (``admit_text``) and ``record_paste_ingest`` leaves the
+    staged ``{batch_id}-pasted.txt`` + manifest in the
+    quarantine directory forever — an orphaned, unlinked
+    copy of the pasted content. Purging is skipped once the
+    inserts have committed (the manifest then carries the
+    undo linkage for those rows), and purge failures are
+    logged, never raised over the original exception.
+    """
+    if manifest is None or committed:
+        return
+    try:
+        from services import splunk_boundary
+        splunk_boundary.purge_batch(manifest["batch_id"])
+    except Exception as exc:
+        logger.warning(
+            "[notables] Could not purge failed paste batch %s: %s",
+            manifest.get("batch_id"), exc,
+        )
+
+
 @router.post("/api/db/notables/paste", tags=["Database"])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
-    if len(request.raw_text or "") > PASTE_MAX_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Paste payload exceeds {PASTE_MAX_BYTES} bytes",
-        )
+    # The cap is a BYTE budget: measure the UTF-8 encoding, not the
+    # character count, or a multibyte payload can carry up to 4x the
+    # budget in bytes past this gate (the boundary's own size check
+    # downstream measures real bytes).
+    rejection = admission.payload_rejection(
+        len((request.raw_text or "").encode("utf-8")), PASTE_MAX_BYTES
+    )
+    if rejection is not None:
+        raise rejection
     raw_text = normalize_pasted_text(request.raw_text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=400, detail="No notable text was provided")
+
+    # C4 admission bookkeeping — read by the failure paths below so a
+    # failed paste purges the batch it admitted.
+    paste_manifest: Optional[Dict[str, Any]] = None
+    paste_committed = False
 
     try:
         sys.path.insert(0, deps.get_platform_root())
@@ -1517,6 +1557,10 @@ def paste_notable(request: PastedNotableRequest):
         # Single commit for the whole bulk paste (major speed win vs per-row commits)
         if pending_events:
             db.commit()
+            # Rows are durable from here: a later bookkeeping failure
+            # must NOT purge the staged batch (the manifest is the
+            # undo linkage for those rows).
+            paste_committed = True
             for event in pending_events:
                 try:
                     db.refresh(event)
@@ -1576,8 +1620,10 @@ def paste_notable(request: PastedNotableRequest):
             "mapping_entries": total_mapping_entries,
         }
     except HTTPException:
+        _purge_failed_paste_batch(paste_manifest, paste_committed)
         raise
     except Exception as e:
+        _purge_failed_paste_batch(paste_manifest, paste_committed)
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         try:
