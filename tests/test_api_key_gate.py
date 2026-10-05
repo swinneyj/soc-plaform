@@ -4,7 +4,9 @@ The gate is a no-op unless API_KEY is set in the environment, so these tests
 monkeypatch api.auth._API_KEY (the single auth seam) to exercise both modes.
 """
 
+import asyncio
 import os
+import threading
 
 # CORS middleware is mounted at api.main import time only when CORS_ORIGINS
 # is set; set it here, before the import, so the CORS test below can run.
@@ -394,6 +396,320 @@ def test_job_queue_cap_429_counts_persisted_jobs(client, with_api_key, monkeypat
     finally:
         tools_route.jobs.clear()
         engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# API security review, optimization #3 — running semaphore on the tool
+# execution path. The job QUEUE may admit JOB_QUEUE_MAX unfinished jobs,
+# but simultaneous SUBPROCESSES are capped separately at
+# TOOL_CONCURRENCY_MAX: waiting for a permit parks on the event loop
+# (no anyio threadpool token), and only the subprocess run itself,
+# under a permit, occupies one.
+# ---------------------------------------------------------------------------
+
+def _seed_tool_job(job_id, tool_name="probe"):
+    """A pending job in the process-local jobs dict."""
+    import api.routes.tools as tools_route
+
+    tools_route.deleted_job_ids.discard(job_id)
+    tools_route.jobs[job_id] = {
+        "job_id": job_id,
+        "status": "pending",
+        "tool_name": tool_name,
+        "created_at": "2026-10-05T00:00:00",
+        "completed_at": None,
+        "stdout": None,
+        "stderr": None,
+        "exit_code": None,
+        "arguments": {},
+        "artifacts": [],
+    }
+
+
+def _isolated_file_db_session(monkeypatch, tmp_path):
+    """File-backed sqlite SessionLocal (plus engine for the lifespan
+    create_all) so concurrent request handlers each get their own
+    connection and never touch the configured runtime DB."""
+    import db.models as db_models
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'concurrency.db'}")
+    db_models.Base.metadata.create_all(bind=engine)
+    test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr(db_models, "SessionLocal", test_session)
+    monkeypatch.setattr(db_models, "engine", engine)
+    return engine
+
+
+def test_tool_execution_concurrency_capped_by_semaphore(
+    with_api_key, monkeypatch, tmp_path
+):
+    """Optimization #3, end to end: five simultaneous /api/execute
+    requests with TOOL_CONCURRENCY_MAX=2 run at most two tool
+    subprocesses at once. The other three park on the running
+    semaphore (admission is untouched — all five are accepted, the
+    queue cap is separate) and every job still completes."""
+    import json
+
+    import api.routes.tools as tools_route
+
+    _isolated_file_db_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 2)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    out_dir = tmp_path / "probe-out"
+    out_dir.mkdir()
+    probe = tmp_path / "slow_probe.py"
+    probe.write_text(
+        "import argparse, json, pathlib, time\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('--run_id', required=True)\n"
+        "p.add_argument('--out_dir', required=True)\n"
+        "a = p.parse_args()\n"
+        "start = time.time()\n"
+        "time.sleep(0.4)\n"
+        "pathlib.Path(a.out_dir, 'run-%s.json' % a.run_id).write_text(\n"
+        "    json.dumps({'start': start, 'end': time.time()}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "slow-probe",
+        "file_name": "slow_probe.py",
+        "category": "test",
+        "description": "test probe",
+        "path": str(probe),
+        "arguments": [],
+    }])
+
+    submitted = {}
+    barrier = threading.Barrier(5, timeout=120)
+
+    def _submit(i):
+        barrier.wait()
+        submitted[i] = client_post(
+            "/api/execute",
+            json={
+                "tool_name": "slow-probe",
+                "arguments": {"run_id": str(i), "out_dir": str(out_dir)},
+            },
+            headers={"X-API-Key": "test-secret-key"},
+        )
+
+    job_ids = []
+    try:
+        # One shared TestClient lifespan == one event loop == one
+        # permit pool, exactly like the single-loop production API.
+        api_main._RATE_HITS.clear()
+        with TestClient(api_main.app) as shared_client:
+            client_post = shared_client.post
+            threads = [
+                threading.Thread(target=_submit, args=(i,)) for i in range(5)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            for i in range(5):
+                assert submitted[i].status_code == 200
+                job_ids.append(submitted[i].json()["job_id"])
+
+            runs = [
+                json.loads((out_dir / f"run-{i}.json").read_text())
+                for i in range(5)
+            ]
+            # Event-point sweep over the recorded intervals. The probe
+            # stamps with time.time() (wall clock): unlike monotonic(), it
+            # is comparable across processes, which is what comparing
+            # subprocess start/end times requires.
+            points = []
+            for run in runs:
+                points.append((run["start"], 1))
+                points.append((run["end"], -1))
+            concurrent = peak = 0
+            for _, delta in sorted(points, key=lambda p: (p[0], p[1])):
+                concurrent += delta
+                peak = max(peak, concurrent)
+            assert peak == 2, (
+                f"running-semaphore must cap simultaneous subprocesses at 2, "
+                f"observed {peak}"
+            )
+
+            # Every admitted job completed despite the cap.
+            for job_id in job_ids:
+                status = shared_client.get(f"/api/jobs/{job_id}")
+                assert status.status_code == 200
+                body = status.json()
+                assert body["status"] == "completed"
+                assert body["exit_code"] == 0
+    finally:
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_parked_tool_jobs_hold_no_threadpool_tokens(monkeypatch):
+    """The point of optimization #3: with the concurrency cap
+    exhausted, jobs waiting for a permit must NOT borrow anyio
+    threadpool tokens — only the subprocesses running under a
+    permit do. Four live jobs with TOOL_CONCURRENCY_MAX=2 hold
+    exactly 2 of the ~40 default tokens while two park; the old
+    design (whole background task in the threadpool) held one
+    token per job for the full run and starved sync endpoints."""
+    import anyio
+
+    import api.routes.tools as tools_route
+
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 2)
+
+    entered = []
+    release = threading.Event()
+
+    def _slow_tool(tool_path, args, silent=False):
+        entered.append(args["n"])
+        release.wait(timeout=30)
+        return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
+
+    monkeypatch.setattr(tools_route, "execute_tool_sync", _slow_tool)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    job_ids = [f"parked-{i}" for i in range(4)]
+    for job_id in job_ids:
+        _seed_tool_job(job_id)
+    try:
+        async def _scenario():
+            tasks = [
+                asyncio.create_task(
+                    tools_route.execute_tool_async(job_id, "probe", {"n": i})
+                )
+                for i, job_id in enumerate(job_ids)
+            ]
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while len(entered) < 2 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert len(entered) == 2, "both permits should be taken"
+            limiter = anyio.to_thread.current_default_thread_limiter()
+            # Give parked tasks every chance to (wrongly) borrow a token.
+            await asyncio.sleep(0.2)
+            assert limiter.borrowed_tokens == 2, (
+                "parked jobs must hold zero threadpool tokens; only the "
+                "subprocesses under a permit may borrow"
+            )
+            release.set()
+            await asyncio.gather(*tasks)
+            assert limiter.borrowed_tokens == 0
+
+        asyncio.run(_scenario())
+        assert sorted(entered) == [0, 1, 2, 3]
+        for job_id in job_ids:
+            assert tools_route.jobs[job_id]["status"] == "completed"
+    finally:
+        release.set()
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_deleted_while_waiting_job_never_starts_subprocess(monkeypatch):
+    """A job cancelled while queued behind the semaphore must never
+    start its subprocess: the deletion is re-checked once a permit
+    is finally acquired."""
+    import api.routes.tools as tools_route
+
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 1)
+
+    entered = []
+    release = threading.Event()
+
+    def _slow_tool(tool_path, args, silent=False):
+        entered.append(args["n"])
+        release.wait(timeout=30)
+        return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
+
+    monkeypatch.setattr(tools_route, "execute_tool_sync", _slow_tool)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    holder, waiter = "job-holder", "job-waiter"
+    _seed_tool_job(holder)
+    _seed_tool_job(waiter)
+    try:
+        async def _scenario():
+            first = asyncio.create_task(
+                tools_route.execute_tool_async(holder, "probe", {"n": holder})
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while len(entered) < 1 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert len(entered) == 1, "the holder should be running"
+            second = asyncio.create_task(
+                tools_route.execute_tool_async(waiter, "probe", {"n": waiter})
+            )
+            # The waiter is now parked on the semaphore; cancel the job
+            # while it waits, then let the holder finish.
+            await asyncio.sleep(0.1)
+            tools_route.deleted_job_ids.add(waiter)
+            release.set()
+            await asyncio.gather(first, second)
+
+        asyncio.run(_scenario())
+        assert entered == [holder], "the deleted job must never start"
+        assert tools_route.jobs[waiter]["status"] == "pending"
+        assert tools_route.jobs[holder]["status"] == "completed"
+    finally:
+        release.set()
+        for job_id in (holder, waiter):
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_tool_run_semaphore_pool_is_per_event_loop(
+    with_api_key, monkeypatch, tmp_path
+):
+    """Regression guard for the per-loop permit cache: every
+    TestClient lifespan runs on its own event loop and an
+    asyncio.Semaphore binds to its loop, so two sequential
+    lifespans (two loops) must each get their own pool — a single
+    module-level semaphore would raise 'bound to a different event
+    loop' on the second client."""
+    import api.routes.tools as tools_route
+
+    _isolated_file_db_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    probe = tmp_path / "echo_tool.py"
+    probe.write_text("print('probe-ok')\n", encoding="utf-8")
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "echo-probe",
+        "file_name": "echo_tool.py",
+        "category": "test",
+        "description": "test probe",
+        "path": str(probe),
+        "arguments": [],
+    }])
+
+    job_ids = []
+    try:
+        for _ in range(2):  # two fresh event loops, two permit pools
+            api_main._RATE_HITS.clear()
+            with TestClient(api_main.app) as loop_client:
+                resp = loop_client.post(
+                    "/api/execute",
+                    json={"tool_name": "echo-probe"},
+                    headers={"X-API-Key": "test-secret-key"},
+                )
+                assert resp.status_code == 200
+                job_ids.append(resp.json()["job_id"])
+                status = loop_client.get(f"/api/jobs/{job_ids[-1]}")
+                assert status.status_code == 200
+                assert status.json()["status"] == "completed"
+                assert status.json()["exit_code"] == 0
+    finally:
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
 
 
 def test_paste_payload_cap_413(client, monkeypatch):

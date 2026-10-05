@@ -1,5 +1,6 @@
 """Tools surface: tool registry, sync/async execution with in-memory jobs,
 reports, tool artifacts, and the ToolRun persistence trail."""
+import asyncio
 import datetime
 import json
 import logging
@@ -7,10 +8,12 @@ import os
 import subprocess
 import sys
 import uuid
+import weakref
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
 
 from api import deps
@@ -34,6 +37,35 @@ STALE_JOB_SECONDS = 600
 # in-memory job queue so a runaway client cannot grow it without bound.
 # Counts unfinished (pending/running) jobs; over-limit admission answers 429.
 JOB_QUEUE_MAX = int(os.environ.get("JOB_QUEUE_MAX", "100"))
+
+# API security review, optimization #3: bound simultaneous tool
+# subprocesses SEPARATELY from the job-queue cap above. The queue may
+# admit up to JOB_QUEUE_MAX unfinished jobs, but every RUNNING job used
+# to occupy an anyio threadpool thread (default pool: 40 tokens) for
+# its whole subprocess run — up to 300 s each — so ~40+ concurrent
+# runs exhausted the pool and sync endpoints starved. Background tasks
+# now park on this running-semaphore (see _tool_run_semaphore): waiting
+# for a permit costs no threadpool token, and only the subprocess run
+# itself, under a permit, occupies one. The queue stays at 100;
+# simultaneous subprocesses stay at TOOL_CONCURRENCY_MAX.
+TOOL_CONCURRENCY_MAX = max(1, int(os.environ.get("TOOL_CONCURRENCY_MAX", "6")))
+
+# Permit pools, one per event loop. asyncio primitives bind to the loop
+# they are first used on, and test clients spin up a fresh loop per
+# portal — a single module-level semaphore would raise "bound to a
+# different event loop" on the second client. In production there is
+# exactly one loop, i.e. one shared pool of TOOL_CONCURRENCY_MAX permits.
+_tool_run_semaphores = weakref.WeakKeyDictionary()
+
+
+def _tool_run_semaphore() -> "asyncio.Semaphore":
+    """The tool-running permit pool for the current event loop."""
+    loop = asyncio.get_running_loop()
+    semaphore = _tool_run_semaphores.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(TOOL_CONCURRENCY_MAX)
+        _tool_run_semaphores[loop] = semaphore
+    return semaphore
 
 # C2.1.6 hardening: registered tools run on an explicit env allowlist,
 # NOT a copy of the API environment — the wholesale copy handed every
@@ -205,23 +237,41 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             "artifacts": [],
         }
 
-def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent: bool = False):
-    """Background task to execute tool asynchronously."""
+async def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent: bool = False):
+    """Background task to execute tool asynchronously.
+
+    A coroutine on purpose: FastAPI awaits coroutine background tasks on
+    the event loop instead of handing them to the threadpool, so the job
+    can park on the running-semaphore without holding a threadpool thread
+    (optimization #3 — a 100-job queue of 300 s runs must not consume
+    the ~40 anyio tokens sync endpoints depend on). The blocking
+    subprocess run is dispatched to the threadpool only while a permit
+    is held, and the permit is released however the run ends.
+    """
     if job_id in deleted_job_ids or job_id not in jobs:
         return
-    jobs[job_id]["status"] = JobStatus.RUNNING.value
-    result = execute_tool_sync(tool_path, args, silent)
-    if job_id in deleted_job_ids or job_id not in jobs:
-        return
-    jobs[job_id].update({
-        "status": JobStatus.COMPLETED.value if result["exit_code"] == 0 else JobStatus.FAILED.value,
-        "stdout": result["stdout"],
-        "stderr": result["stderr"],
-        "exit_code": result["exit_code"],
-        "artifacts": result.get("artifacts", []),
-        "completed_at": utcnow_naive().isoformat()
-    })
-    _persist_tool_run(jobs[job_id])
+    semaphore = _tool_run_semaphore()
+    await semaphore.acquire()
+    try:
+        # Re-check: the job may have been deleted while it waited for
+        # a permit — a cancelled job must never start its subprocess.
+        if job_id in deleted_job_ids or job_id not in jobs:
+            return
+        jobs[job_id]["status"] = JobStatus.RUNNING.value
+        result = await run_in_threadpool(execute_tool_sync, tool_path, args, silent)
+        if job_id in deleted_job_ids or job_id not in jobs:
+            return
+        jobs[job_id].update({
+            "status": JobStatus.COMPLETED.value if result["exit_code"] == 0 else JobStatus.FAILED.value,
+            "stdout": result["stdout"],
+            "stderr": result["stderr"],
+            "exit_code": result["exit_code"],
+            "artifacts": result.get("artifacts", []),
+            "completed_at": utcnow_naive().isoformat()
+        })
+        await run_in_threadpool(_persist_tool_run, jobs[job_id])
+    finally:
+        semaphore.release()
 
 
 def _persist_tool_run(job: Dict[str, Any]) -> None:
