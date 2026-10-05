@@ -47,11 +47,20 @@ else
 fi
 
 # 5. API key activation ---------------------------------------------------
+# The gate is enforcing (witnessed Oct 5, 2026): API_KEY is injected from
+# BWS at launch. It legitimately lives in the keychain rather than .env,
+# so check both places before calling it missing.
+API_KEY_SOURCE=""
 if [ -n "${API_KEY:-}" ] && [ "$API_KEY" != "replace-with-a-long-random-password" ]; then
-    echo "${OK}API gate: API_KEY present in .env — gate armed locally (no hosted leg; Vercel retired Sept 30)"
+    API_KEY_SOURCE="environment / .env"
 else
-    echo "${WAIT}API gate: dormant by design — activate when you + coworker agree (set API_KEY;"
-    echo "        the frontend already knows how to send it)"
+    KEY_VALUE="$(bash scripts/secrets-keychain get API_KEY 2>/dev/null)"
+    [ -n "$KEY_VALUE" ] && API_KEY_SOURCE="login keychain (injected at launch)"
+fi
+if [ -n "$API_KEY_SOURCE" ]; then
+    echo "${OK}API gate: enforcing — API_KEY available (${API_KEY_SOURCE}); unauthenticated /api/* gets 401"
+else
+    echo "${WAIT}API gate: API_KEY missing from env AND keychain — gate degrades to a no-op; restore via 'scripts/pull-secrets' (BWS) or 'scripts/secrets-keychain put API_KEY'"
 fi
 
 # 6. Hygiene reminders ----------------------------------------------------

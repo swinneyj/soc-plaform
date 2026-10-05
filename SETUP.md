@@ -23,7 +23,7 @@ Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https:
 
 Secrets no longer live in `.env` by hand — they live in the **SSC-Lewis** BWS org (free 2-person plan), project **SOC Platform**. `.env` is just a bootstrap: it holds `BWS_ACCESS_TOKEN` (machine account `Machine-Dev`, scoped to the project only) plus local-only keys.
 
-**The four vault secrets:** `DATABASE_URL` (currently local Postgres — swap to Neon's URL when it arrives), `OLLAMA_URL`, `API_KEY` (dormant until the gate activates), `CORS_ORIGINS`.
+**The four vault secrets:** `DATABASE_URL` (Neon since Sept 28), `OLLAMA_URL`, `API_KEY` (**gate enforcing locally** — BWS-injected at launch; unauthenticated `/api/*` → 401, witnessed Oct 5, 2026), `CORS_ORIGINS`.
 
 **Daily commands:**
 ```bash
