@@ -423,7 +423,7 @@
         "ext": ".py",
         "path": "Tools/bulk_rule_matcher/bulk_rule_matcher.py",
         "category": "Uncategorized",
-        "description": "No description provided."
+        "description": "Matches triage cases to enabled ES correlation rules by exact or fuzzy rule name."
     },
     {
         "name": "closure_notes_generator",
@@ -431,7 +431,7 @@
         "ext": ".py",
         "path": "Tools/closure_notes_generator/closure_notes_generator.py",
         "category": "Uncategorized",
-        "description": "No description provided."
+        "description": "Generates structured incident closure notes from rule templates and evidence values."
     },
     {
         "name": "es_rules_importer",
@@ -439,7 +439,7 @@
         "ext": ".py",
         "path": "Tools/es_rules_importer/es_rules_importer.py",
         "category": "Uncategorized",
-        "description": "No description provided."
+        "description": "Imports and lists Splunk ES correlation rules and supportive queries."
     },
     {
         "name": "filecheck",
@@ -455,7 +455,7 @@
         "ext": ".py",
         "path": "Tools/splunk_csv_ingestor/splunk_csv_ingestor.py",
         "category": "Uncategorized",
-        "description": "No description provided."
+        "description": "Parses Splunk CSV exports and loads events into the active database backend."
     },
     {
         "name": "splunk_folder_watcher",
@@ -463,6 +463,6 @@
         "ext": ".py",
         "path": "Tools/splunk_folder_watcher/splunk_folder_watcher.py",
         "category": "Uncategorized",
-        "description": "No description provided."
+        "description": "Watches a folder for Splunk CSV exports, ingests them via the Splunk boundary, and archives processed files."
     }
 ]
