@@ -317,27 +317,45 @@ async def _http_exception_handler(request, exc):
 # asset, including the index.html redirect shim, stays on the plain mount.
 web_dir = os.path.join(os.path.dirname(__file__), '..', 'web')
 if os.path.exists(web_dir):
+    # Optimization #2 (API security review): the page used to be
+    # re-read from disk and re-injected with the SOC_CONFIG
+    # bootstrap on EVERY page load. The rendered HTML is cached
+    # keyed on (API_KEY, file mtime): a page load is a cache
+    # lookup plus one stat, and the file is re-read + bootstrap
+    # re-injected only when the key changes — the file was edited
+    # on disk, or the gate armed/disarmed with a different key.
+    # The launcher runs a single worker, so a plain dict needs
+    # no lock.
+    _index_cache = {"key": None, "html": None}  # (api_key, mtime) -> html
+
     @app.get("/index.modular.html", include_in_schema=False)
     def _index_modular():
         index_path = os.path.join(web_dir, "index.modular.html")
-        if not os.path.exists(index_path):
+        try:
+            mtime = os.stat(index_path).st_mtime
+        except FileNotFoundError:
             raise HTTPException(status_code=404, detail="UI not found")
-        with open(index_path, "r", encoding="utf-8") as fh:
-            html = fh.read()
         from api.auth import _API_KEY
-        if not _API_KEY:
-            return Response(content=html, media_type="text/html",
-                            headers={"Cache-Control": "no-cache"})
-        # json.dumps keeps arbitrary key bytes safely inside the JS string
-        # literal; placed before the first script tag so auth.js's interceptor
-        # (loaded later) sees the config.
-        bootstrap = "<script>window.SOC_CONFIG = %s;</script>\n" % json.dumps({"apiKey": _API_KEY})
-        cut = html.find("<script")
-        if cut == -1:
-            html = bootstrap + html
-        else:
-            html = html[:cut] + bootstrap + html[cut:]
-        return Response(content=html, media_type="text/html",
+        cache_key = (_API_KEY, mtime)
+        if _index_cache["key"] != cache_key:
+            with open(index_path, "r", encoding="utf-8") as fh:
+                html = fh.read()
+            if _API_KEY:
+                # json.dumps keeps arbitrary key bytes safely inside
+                # the JS string literal; placed before the first
+                # script tag so auth.js's interceptor (loaded later)
+                # sees the config.
+                bootstrap = "<script>window.SOC_CONFIG = %s;</script>\n" % json.dumps(
+                    {"apiKey": _API_KEY}
+                )
+                cut = html.find("<script")
+                if cut == -1:
+                    html = bootstrap + html
+                else:
+                    html = html[:cut] + bootstrap + html[cut:]
+            _index_cache["key"] = cache_key
+            _index_cache["html"] = html
+        return Response(content=_index_cache["html"], media_type="text/html",
                         headers={"Cache-Control": "no-cache"})
 
     app.mount("/", StaticFiles(directory=web_dir, html=True), name="web")

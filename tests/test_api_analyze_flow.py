@@ -18,6 +18,7 @@ the UI does.
 """
 
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -1215,6 +1216,85 @@ class TestApiKeyActivation:
             headers={"X-API-Key": cfg["apiKey"]},
         )
         assert resp.status_code == 200, resp.text
+
+    # Optimization #2 (API security review): the bootstrapped
+    # page is cached on (_API_KEY, file mtime) — repeat page
+    # loads are a cache lookup plus one stat, not a re-read
+    # and re-inject of the whole file.
+    def _index_path(self):
+        return os.path.join(api_main.web_dir, "index.modular.html")
+
+    def test_index_html_cached_across_repeat_loads(
+        self, api_client, monkeypatch
+    ):
+        import builtins
+
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        index_path = self._index_path()
+        api_main._index_cache["key"] = None  # start cold
+        reads = []
+        real_open = builtins.open
+
+        def counting_open(file, *args, **kwargs):
+            if str(file) == index_path:
+                reads.append(str(file))
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", counting_open)
+        first = api_client.get("/index.modular.html")
+        second = api_client.get("/index.modular.html")
+        assert first.status_code == second.status_code == 200
+        assert "window.SOC_CONFIG" in second.text
+        assert "sekret" in second.text
+        assert first.text == second.text
+        # Two page loads, one read of the file from disk.
+        assert len(reads) == 1
+
+    def test_index_html_cache_invalidated_on_file_change(
+        self, api_client, monkeypatch
+    ):
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        index_path = self._index_path()
+        api_main._index_cache["key"] = None  # start cold
+        assert "window.SOC_CONFIG" in api_client.get("/index.modular.html").text
+
+        # Edit the file on disk and force a distinct mtime:
+        # the next load must re-read and re-inject (cache miss).
+        original = Path(index_path).read_text(encoding="utf-8")
+        try:
+            Path(index_path).write_text(
+                original.replace("</head>", "<!-- cache-bust -->\n</head>", 1),
+                encoding="utf-8",
+            )
+            stamp = time.time() + 10
+            os.utime(index_path, (stamp, stamp))
+            second = api_client.get("/index.modular.html")
+            assert second.status_code == 200
+            assert "cache-bust" in second.text
+        finally:
+            Path(index_path).write_text(original, encoding="utf-8")
+
+    def test_index_html_cache_keyed_on_api_key(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "key-one")
+        api_main._index_cache["key"] = None  # start cold
+        page_one = api_client.get("/index.modular.html").text
+        assert "key-one" in page_one
+        # A different armed key is a different cache entry:
+        # the page is re-rendered with the new bootstrap.
+        monkeypatch.setattr(api_auth, "_API_KEY", "key-two")
+        page_two = api_client.get("/index.modular.html").text
+        assert "key-two" in page_two
+        assert "key-one" not in page_two
+
+    def test_index_html_cached_verbatim_when_disarmed(
+        self, api_client, monkeypatch
+    ):
+        monkeypatch.setattr(api_auth, "_API_KEY", "")
+        api_main._index_cache["key"] = None  # start cold
+        first = api_client.get("/index.modular.html")
+        second = api_client.get("/index.modular.html")
+        assert "window.SOC_CONFIG" not in second.text
+        assert first.text == second.text
 
 
 def _load_migration_module():

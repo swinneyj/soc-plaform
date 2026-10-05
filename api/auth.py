@@ -141,6 +141,26 @@ def verify_password(password: str, encoded: str) -> bool:
 
 Actor = namedtuple("Actor", "kind role user csrf_ok csrf_token")
 
+# Optimization #1 (API security review): resolve_actor runs two DB
+# queries (AuthSession + User) on EVERY /api/* request in session
+# mode — the gate middleware resolves every request and the UI polls
+# frequently. A short-TTL in-memory cache keyed by the session
+# cookie's token HASH (never the cookie itself) spares those
+# queries: the first request for a cookie pays the two queries,
+# later ones within the TTL answer from the cache. Entries carry
+# plain resolution values only — no ORM rows, no tokens — and are
+# evicted on logout (destroy_session) and when the cached session
+# expires. Staleness is bounded by ACTOR_CACHE_TTL: a role change
+# or deactivation takes effect within one TTL (default 30 s, the
+# review's 30–60 s band; 0 disables the cache entirely).
+ACTOR_CACHE_TTL = float(os.environ.get("ACTOR_CACHE_TTL", "30"))
+_actor_cache: dict = {}  # token_hash -> (expires_at, user_id, role, username, csrf_token)
+
+# Plain-data stand-in for the ORM User on cache hits. Every current
+# consumer of Actor.user reads .username (the session bootstrap
+# route); id and role ride along for the common cases.
+CachedUser = namedtuple("CachedUser", "id username role")
+
 EXEMPT_PATHS = ("/health", "/api/health", "/api/auth/login", "/api/auth/session")
 SESSION_COOKIE = "soc_session"
 SESSION_TTL_HOURS = 12
@@ -192,24 +212,57 @@ def _session_from_request(request):
         db.close()
 
 
+def _csrf_ok(request, csrf_token: str) -> bool:
+    """Double-submit check of the X-CSRF-Token header against the
+    session's CSRF token."""
+    header = request.headers.get("X-CSRF-Token")
+    return bool(header) and hmac.compare_digest(
+        header.encode("utf-8"), csrf_token.encode("utf-8")
+    )
+
+
 def resolve_actor(request) -> Actor:
     """Classify the request: session user, API-key machine actor, or anonymous.
 
     A valid API key is a deployment credential and authenticates as admin
     (SESSION_AUTH_PLAN §2); sessions need an unexpired AuthSession row for
-    the cookie's token hash.
+    the cookie's token hash. Session resolution is served from the
+    short-TTL _actor_cache (optimization #1): the first request for a
+    cookie pays the two DB queries, subsequent ones within the TTL do
+    not — the cached values include the session expiry, so an expired
+    session is never served from the cache.
     """
-    session = _session_from_request(request)
-    if session is not None:
-        row, user = session
-        header = request.headers.get("X-CSRF-Token")
-        csrf_ok = bool(header) and hmac.compare_digest(
-            header.encode("utf-8"), row.csrf_token.encode("utf-8")
-        )
-        return Actor(
-            kind="session", role=user.role, user=user,
-            csrf_ok=csrf_ok, csrf_token=row.csrf_token,
-        )
+    token = request.cookies.get(SESSION_COOKIE)
+    if token:
+        token_hash = hash_token(token)
+        if ACTOR_CACHE_TTL > 0:
+            entry = _actor_cache.get(token_hash)
+            if entry is not None:
+                expires_at, user_id, role, username, csrf_token = entry
+                from db.util import utcnow_naive
+
+                if expires_at > utcnow_naive():
+                    return Actor(
+                        kind="session", role=role,
+                        user=CachedUser(id=user_id, username=username, role=role),
+                        csrf_ok=_csrf_ok(request, csrf_token),
+                        csrf_token=csrf_token,
+                    )
+                # Cached session has expired: drop the entry and
+                # re-resolve from the DB below.
+                _actor_cache.pop(token_hash, None)
+        session = _session_from_request(request)
+        if session is not None:
+            row, user = session
+            if ACTOR_CACHE_TTL > 0:
+                _actor_cache[token_hash] = (
+                    row.expires_at, user.id, user.role, user.username, row.csrf_token,
+                )
+            return Actor(
+                kind="session", role=user.role, user=user,
+                csrf_ok=_csrf_ok(request, row.csrf_token),
+                csrf_token=row.csrf_token,
+            )
     if _API_KEY and request_has_api_key(request):
         return Actor(kind="api-key", role="admin", user=None, csrf_ok=True, csrf_token="")
     return Actor(kind="anonymous", role="", user=None, csrf_ok=False, csrf_token="")
@@ -220,6 +273,10 @@ def destroy_session(request) -> None:
     token = request.cookies.get(SESSION_COOKIE)
     if not token:
         return
+    # Optimization #1: evict the cached resolution so a logged-out
+    # cookie cannot ride out its TTL as an authenticated actor (the
+    # gate middleware may have cached it earlier in this same request).
+    _actor_cache.pop(hash_token(token), None)
     from db.models import AuthSession, SessionLocal
 
     db = SessionLocal()

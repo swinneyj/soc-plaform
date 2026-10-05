@@ -1097,3 +1097,210 @@ def test_login_failure_window_expires(
         json={"username": "expired-window", "password": "pw123"},
     )
     assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Optimization #1 (API security review): actor-resolution cache
+#
+# resolve_actor runs two DB queries (AuthSession + User) on every
+# /api/* request in session mode. The short-TTL _actor_cache spares
+# them: the first request for a cookie pays the queries, later ones
+# within the TTL answer from the cache. These tests pin the contract:
+# cache hits spare the DB, expiry/logout/TTL=0 fall back to the DB,
+# and CSRF is still evaluated per request (never cached).
+# ---------------------------------------------------------------------------
+
+class _StubRequest:
+    """Minimal stand-in for a Starlette Request: resolve_actor only
+    reads .cookies and .headers."""
+
+    def __init__(self, cookies=None, headers=None):
+        self.cookies = cookies or {}
+        self.headers = headers or {}
+
+
+@pytest.fixture()
+def actor_cache_isolated(monkeypatch):
+    """Hermetic actor-cache state for one test: empty cache, TTL
+    armed, and a counting wrapper around _session_from_request so
+    tests can prove exactly how many DB resolutions ran."""
+    api_auth._actor_cache.clear()
+    monkeypatch.setattr(api_auth, "ACTOR_CACHE_TTL", 30.0)
+    resolutions = []
+    real_resolve = api_auth._session_from_request
+
+    def counting_resolve(request):
+        resolutions.append(request)
+        return real_resolve(request)
+
+    monkeypatch.setattr(api_auth, "_session_from_request", counting_resolve)
+    yield resolutions
+    api_auth._actor_cache.clear()
+
+
+def _login(session_client, username="cache-user", password="pw123"):
+    """Create a user, log in, and return (login response, cookie token)."""
+    db = session_client.test_session()
+    _make_user(db, username=username, password=password)
+    login = session_client.post(
+        "/api/auth/login", json={"username": username, "password": password}
+    )
+    assert login.status_code == 200
+    token = session_client.cookies.get(api_auth.SESSION_COOKIE)
+    assert token
+    return login, token
+
+
+def test_first_resolution_pays_db_and_warms_cache(
+    session_client, actor_cache_isolated
+):
+    """The first request for a cookie resolves via the two DB
+    queries and populates the cache; the entry is keyed by the
+    token HASH and carries only plain values."""
+    login, token = _login(session_client)
+    assert api_auth._actor_cache == {}  # login sets no cookie request-side
+
+    resp = session_client.get("/api/auth/session")
+    assert resp.status_code == 200
+    assert resp.json()["user"] == "cache-user"
+    # Exactly one DB resolution ran (AuthSession + User queries).
+    assert len(actor_cache_isolated) == 1
+
+    entry = api_auth._actor_cache[api_auth.hash_token(token)]
+    assert len(entry) == 5  # (expires_at, user_id, role, username, csrf_token)
+    assert entry[3] == "cache-user" and entry[2] == "analyst"
+
+
+def test_cache_hits_spare_db_queries(session_client, actor_cache_isolated):
+    """Within the TTL, repeated requests resolve the same actor with
+    zero additional DB queries — the UI polls frequently, so this is
+    the load the optimization removes."""
+    _login(session_client)
+    session_client.get("/api/auth/session")  # warm the cache
+    assert len(actor_cache_isolated) == 1
+
+    for _ in range(4):
+        resp = session_client.get("/api/auth/session")
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "cache-user"
+    # No DB resolution for any of the four follow-up requests.
+    assert len(actor_cache_isolated) == 1
+
+
+def test_cached_session_expiry_drops_entry(session_client, actor_cache_isolated):
+    """A cached entry whose session has expired is never served: it
+    is dropped and the actor is re-resolved from the DB."""
+    from datetime import timedelta
+
+    from db.util import utcnow_naive
+
+    _, token = _login(session_client)
+    session_client.get("/api/auth/session")  # warm
+    assert len(actor_cache_isolated) == 1
+
+    # Age the cached session out from under the cache (the
+    # session TTL is 12 h, so a full day is safely past it).
+    key = api_auth.hash_token(token)
+    expires_at = api_auth._actor_cache[key][0]
+    api_auth._actor_cache[key] = (
+        expires_at - timedelta(hours=24),) + api_auth._actor_cache[key][1:]
+
+    resp = session_client.get("/api/auth/session")
+    assert resp.status_code == 200  # re-resolved, not served stale
+    assert len(actor_cache_isolated) == 2  # paid the DB queries again
+    # The re-populated entry carries the real future expiry again.
+    assert api_auth._actor_cache[key][0] > utcnow_naive()
+
+
+def test_logout_evicts_cached_actor(session_client, actor_cache_isolated):
+    """Logout evicts the cached resolution so the cookie cannot ride
+    out its TTL as an authenticated actor — including the in-request
+    race where the gate middleware cached it moments earlier."""
+    login, token = _login(session_client)
+    session_client.get("/api/auth/session")  # warm the cache
+    assert api_auth.hash_token(token) in api_auth._actor_cache
+
+    out = session_client.post(
+        "/api/auth/logout", headers={"X-CSRF-Token": login.json()["csrf_token"]}
+    )
+    assert out.status_code == 200
+    # Evicted: the cached resolution is gone even though its TTL
+    # (30 s) has not elapsed.
+    assert api_auth.hash_token(token) not in api_auth._actor_cache
+    # And the logged-out cookie no longer authenticates anything.
+    assert session_client.get("/api/auth/session").status_code == 401
+
+
+def test_actor_cache_disabled_when_ttl_zero(
+    session_client, actor_cache_isolated, monkeypatch
+):
+    """ACTOR_CACHE_TTL=0 opts out entirely: every request pays the
+    DB queries (the pre-optimization behavior), byte for byte."""
+    monkeypatch.setattr(api_auth, "ACTOR_CACHE_TTL", 0.0)
+    _login(session_client)
+
+    # /api/db/stats resolves the actor once per request (the
+    # middleware), so with the cache off every request pays.
+    for _ in range(3):
+        resp = session_client.get("/api/db/stats")
+        assert resp.status_code == 200
+    assert len(actor_cache_isolated) == 3
+    assert api_auth._actor_cache == {}
+
+
+def test_cache_hit_evaluates_csrf_per_request(
+    session_client, actor_cache_isolated
+):
+    """CSRF validity is never cached: the same cached session yields
+    csrf_ok False without the header and True with it, and a bogus
+    header fails the constant-time compare."""
+    login, token = _login(session_client)
+    csrf = login.json()["csrf_token"]
+    session_client.get("/api/auth/session")  # warm the cache
+
+    no_header = api_auth.resolve_actor(
+        _StubRequest(cookies={api_auth.SESSION_COOKIE: token})
+    )
+    assert no_header.kind == "session"
+    assert no_header.csrf_ok is False
+
+    with_header = api_auth.resolve_actor(
+        _StubRequest(
+            cookies={api_auth.SESSION_COOKIE: token},
+            headers={"X-CSRF-Token": csrf},
+        )
+    )
+    assert with_header.csrf_ok is True
+    assert with_header.csrf_token == csrf
+
+    bogus = api_auth.resolve_actor(
+        _StubRequest(
+            cookies={api_auth.SESSION_COOKIE: token},
+            headers={"X-CSRF-Token": csrf + "x"},
+        )
+    )
+    assert bogus.csrf_ok is False
+
+
+def test_cache_serves_cached_user_shape(session_client, actor_cache_isolated):
+    """Cache hits return a plain CachedUser (id/username/role) —
+    no ORM row — and every current consumer field is present."""
+    db = session_client.test_session()
+    _make_user(db, username="shape-user", role="analyst", password="pw123")
+    login = session_client.post(
+        "/api/auth/login", json={"username": "shape-user", "password": "pw123"}
+    )
+    token = session_client.cookies.get(api_auth.SESSION_COOKIE)
+    session_client.get("/api/auth/session")  # warm the cache
+
+    actor = api_auth.resolve_actor(
+        _StubRequest(cookies={api_auth.SESSION_COOKIE: token})
+    )
+    assert actor.kind == "session"
+    assert actor.role == "analyst"
+    assert type(actor.user).__name__ == "CachedUser"
+    assert actor.user.username == "shape-user"
+    from db.models import User
+
+    assert actor.user.id == db.query(User).first().id
+    assert actor.user.role == "analyst"
