@@ -322,6 +322,10 @@ def ingest_csv_events(
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
     inserted: list = []
+    # Dedup guard for rows added during THIS run but not yet flushed:
+    # with autoflush off, session.query() cannot see them, so same-file
+    # duplicates would otherwise all insert (fuzz finding, 2026-10-05).
+    pending_keys: set = set()
     try:
         with open(source, "r", encoding="utf-8", errors="ignore") as fh:
             reader = _csv.DictReader(fh)
@@ -359,6 +363,7 @@ def ingest_csv_events(
                     if ts is None:
                         ts = _utcnow()
 
+                    row_key = (sourcetype, src, host, ts)
                     existing = (
                         session.query(SplunkEvent)
                         .filter(
@@ -369,7 +374,7 @@ def ingest_csv_events(
                         )
                         .first()
                     )
-                    if existing:
+                    if existing or row_key in pending_keys:
                         stats["rows_skipped"] += 1
                         continue
 
@@ -381,6 +386,7 @@ def ingest_csv_events(
                         timestamp=ts,
                     )
                     session.add(event)
+                    pending_keys.add(row_key)
                     inserted.append(event)
                     stats["rows_inserted"] += 1
                     if stats["rows_inserted"] % 50 == 0:
@@ -494,7 +500,9 @@ def ingest_json_notables(
 
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError: non-UTF-8 exports must be a clean error,
+        # never a raised crash (fuzz finding, 2026-10-05).
         stats["error"] = f"invalid JSON: {exc}"
         return stats
 
@@ -511,6 +519,10 @@ def ingest_json_notables(
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
     inserted: list = []
+    # Same unflushed-insert guard as the CSV engine: with autoflush off,
+    # the candidate query cannot see rows added earlier in this run, so
+    # same-second same-payload duplicates would all insert.
+    pending_keys: set = set()
     try:
         stats["success"] = True
         for index, obj in enumerate(objects, start=1):
@@ -524,7 +536,14 @@ def ingest_json_notables(
                 ts = None
                 ts_value = obj.get("_time", obj.get("timestamp"))
                 if isinstance(ts_value, (int, float)):
-                    ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
+                    try:
+                        ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
+                    except (OverflowError, OSError, ValueError):
+                        # Absurd epochs (1e20, negatives past the epoch on
+                        # some platforms) must not crash the whole run —
+                        # degrade exactly like an unparseable string and
+                        # let the _utcnow() fallback below take it.
+                        ts = None
                 elif isinstance(ts_value, str) and ts_value.strip():
                     try:
                         ts = datetime.fromisoformat(ts_value.strip().replace("Z", "+00:00"))
@@ -536,6 +555,7 @@ def ingest_json_notables(
                     ts = _utcnow()
 
                 raw_hash = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+                row_key = (sourcetype, src, host, ts, raw_hash)
                 candidate = (
                     session.query(SplunkEvent)
                     .filter(
@@ -546,7 +566,7 @@ def ingest_json_notables(
                     )
                     .all()
                 )
-                if any(
+                if row_key in pending_keys or any(
                     hashlib.sha1((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
                     for e in candidate
                 ):
@@ -561,6 +581,7 @@ def ingest_json_notables(
                     timestamp=ts,
                 )
                 session.add(event)
+                pending_keys.add(row_key)
                 inserted.append(event)
                 stats["rows_inserted"] += 1
                 if stats["rows_inserted"] % 50 == 0:
