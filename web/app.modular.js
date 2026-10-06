@@ -192,6 +192,11 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 };
             },
             computed: {
+                // Admin controls stay enabled in every mode except a
+                // non-admin session (flag-off = pre-C1B behavior).
+                isAdmin() {
+                    return this.auth.mode !== 'session' || this.auth.role === 'admin';
+                },
                 categories() {
                     const cats = new Set(this.tools.map(t => t.category));
                     return Array.from(cats).sort();
@@ -417,13 +422,6 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                         return 1;
                     }
                     return countHeadings;
-                }
-            },
-            computed: {
-                // Admin controls stay enabled in every mode except a
-                // non-admin session (flag-off = pre-C1B behavior).
-                isAdmin() {
-                    return this.auth.mode !== 'session' || this.auth.role === 'admin';
                 }
             },
             methods: {
