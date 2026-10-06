@@ -2,6 +2,15 @@
 
 *Last verified: Sep 25, 2026. Maintained by Dalton & Buffy (Codebuff).*
 
+> **Doc scope note:** this is the **Mac workstation / tailnet / shared-folder / BWS /
+> accounts-on-Dalton's-Mac** setup doc. It is intentionally separate from the Docker /
+> new-user setup guide, which lives at [docs/SETUP.md](docs/SETUP.md). Both are named
+> `SETUP.md` by historical accident (same drift class as the README trio); if you are
+> looking for Docker Compose / bootstrap / branch preview environments / the deployment
+> stories matrix, go there instead. If the split ever becomes more nuisance than useful,
+> consolidate to a single canonical `docs/SETUP.md` and move this to a more specific name
+> (e.g. `SETUP_MAC_WORKSTATION.md`).
+
 ## What this is
 
 Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https://tailscale.com) mesh VPN, with a shared file drop zone. Everything runs over an encrypted WireGuard tunnel — **nothing is exposed to the public internet**.

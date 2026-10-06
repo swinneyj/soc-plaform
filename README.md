@@ -99,6 +99,15 @@ Each follow-up phase has targeted queries, a phase-specific evidence source, inq
 
 Start with [RUNBOOK.md](RUNBOOK.md), [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md), [docs/REPO_MAP.md](docs/REPO_MAP.md), and [docs/multi-user-workflow.md](docs/multi-user-workflow.md).
 
+> **Where to start depends on who you are:**
+> - **New developer:** [docs/NEW_DEVELOPER_ONBOARDING.md](docs/NEW_DEVELOPER_ONBOARDING.md) (this README's quick-start is the fast version; that doc is the guided version).
+> - **Daily operator:** [OPERATOR_CHEAT_SHEET.md](OPERATOR_CHEAT_SHEET.md) and `scripts/start --check`.
+> - **Before touching code or adopting an upstream snapshot:** read [docs/EXECUTION_PLAYBOOK.md](docs/EXECUTION_PLAYBOOK.md) §0 (guardrails + gates), run `bash scripts/baseline --verify`, and keep the test-file count invariant in mind (`tests/test_*.py` — currently 12 on disk; never add a new one without an explicit decision).
+> - **Security/incident questions:** [docs/security-remediation-tracker.md](docs/security-remediation-tracker.md) and [.github/SECURITY.md](.github/SECURITY.md) (disclosure channel).
+> - **Pre-push hygiene is now a tracked gate too:** the repo's pre-push hook (`scripts/git-hooks/pre-push`, installed per clone by `scripts/install-hooks`) runs the baseline + requirement-pin/marker check **and** the hygiene assertions (test-file count is a positive integer; `delete_case_id` absent from `web/ tests/ api/`). If a push is blocked, fix it or bypass with `git push --no-verify`.
+>
+> All four entry points are meant to agree; if they seem to contradict, treat the docs under `docs/` as the more current source and flag the README as the thing to refresh.
+
 ## Security
 
 - Use authorized Splunk ES data only.

@@ -19,12 +19,53 @@ fi
 
 # Pin/marker gate: every requirement pin must support the interpreter its
 # python_version branch selects (PyPI requires_python). Stdlib-only script.
-if command -v python3 >/dev/null 2>&1 && [ -f scripts/check_requirement_markers.py ]; then
-  echo "── requirement pin/marker check ──"
-  if ! python3 scripts/check_requirement_markers.py; then
+# Resolve an interpreter with a repo-venv fallback so the gate runs in a
+# fresh shell (no venv activation); PYTHON=<path> still forces one.
+REQ_PY="${PYTHON:-}"
+if [ -z "$REQ_PY" ] && [ -f scripts/check_requirement_markers.py ]; then
+  for cand in python3 .venv314/bin/python .venv/bin/python; do
+    if "$cand" -c "import sys" >/dev/null 2>&1; then REQ_PY="$cand"; break; fi
+  done
+fi
+if [ -f scripts/check_requirement_markers.py ]; then
+  if [ -z "$REQ_PY" ]; then
+    echo "── requirement pin/marker check: SKIPPED (no python interpreter found) ──"
+  else
+    echo "── requirement pin/marker check ──"
+    if ! "$REQ_PY" scripts/check_requirement_markers.py; then
+      echo ""
+      echo "❌ Requirement pin/marker mismatch — push BLOCKED."
+      echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
+      exit 1
+    fi
+  fi
+fi
+
+# Hygiene assertions (mirrors the CI "Hygiene assertions" step).
+# These are invariant checks that must not silently drift: the test-file
+# count must be a positive integer, and delete_case_id must be absent from
+# the shipped trees (web/ tests/ api/) per playbook stage A1.3.
+if command -v bash >/dev/null 2>&1; then
+  echo "── hygiene assertions ──"
+  if ! bash -c '
+    set -euo pipefail
+    count=
+    for f in tests/test_*.py; do
+      [ -f "$f" ] && count=$((count + 1))
+    done
+    if [ -z "$count" ] || [ "$count" -lt 1 ]; then
+      echo "❌ hygiene: unexpected test-file count: ${count:-0}" >&2
+      exit 1
+    fi
+    if grep -rn --include=*.py --include=*.js --include=*.html --include=*.md --include=*.json -e "delete_case_id" web/ tests/ api/ >/dev/null 2>&1; then
+      echo "❌ hygiene: delete_case_id still referenced in shipped trees (web/ tests/ api/)" >&2
+      exit 1
+    fi
+    echo "OK: hygiene invariants held (test-file count=$count, no delete_case_id in trees)"
+  '; then
     echo ""
-    echo "❌ Requirement pin/marker mismatch — push BLOCKED."
-    echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
+    echo "❌ Hygiene assertion failed — push BLOCKED."
+    echo "   Fix the drift, or bypass with: git push --no-verify"
     exit 1
   fi
 fi

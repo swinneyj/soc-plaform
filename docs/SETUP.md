@@ -1,5 +1,15 @@
 # Setup Guide
 
+> **Doc scope note:** this is the **Docker / new-user setup** guide — clone, compose,
+> bootstrap, dump restore, branch preview environments, deployment stories. It is
+> intentionally separate from the Mac workstation / tailnet / shared-folder / BWS /
+> accounts-on-Dalton's-Mac setup doc, which lives at [SETUP.md](SETUP.md) (same name by
+> historical accident — same drift class as the README trio). Both are named
+> `SETUP.md`; if you want the tailnet / SMB / guest-access / account quirks / fail-safe
+> story, go to the root one. If the split ever becomes more nuisance than useful,
+> consolidate to a single canonical `docs/SETUP.md` and move the Mac-workstation doc to
+> a more specific name (e.g. `SETUP_MAC_WORKSTATION.md`).
+
 ## Purpose
 
 This guide is the single setup path for a new user who pulls the project from Git and needs both code and current database-backed runtime behavior.

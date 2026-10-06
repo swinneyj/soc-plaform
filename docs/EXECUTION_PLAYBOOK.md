@@ -16,9 +16,7 @@ specified. `[mechanical after sign-off]` = run only after the named human gate.
 - Never touch `.env`, BWS, keychain, or any secret value. Never print a secret (the API key
   appears in served HTML — do not `curl` that HTML into your output).
 - Never `git push` to `main`. Work only on `dev-dalton`.
-- **Never create new test files.** The test-file count must stay **8** (`tests/test_*.py`).
-  Add tests to `tests/test_investigation_fixes.py`, `tests/test_api_analyze_flow.py`, or
-  `tests/test_api_key_gate.py` (auth tests go in the last one).
+- **Never create new test files.** The test-file count must stay **12** (`tests/test_*.py`) — re-derive from `ls tests/test_*.py` before assuming the count; it grew after Sept 30, 2026. Add tests to `tests/test_investigation_fixes.py`, `tests/test_api_analyze_flow.py`, or `tests/test_api_key_gate.py` (auth tests go in the last one).
 - Never delete `commander.py`, `seed_test_cases.py`, `seed_supportive_results.py`,
   `supportive_rules.json`, `placeholder_aliases.json`, `data_source_catalog.json`, or
   anything under `api/`, `services/`, `web/` unless a step says so explicitly.
@@ -33,25 +31,28 @@ specified. `[mechanical after sign-off]` = run only after the named human gate.
 ```bash
 .venv314/bin/python -m pytest 2>&1 | tail -1        # expect: N passed
 .venv/bin/python -m pytest 2>&1 | tail -1           # expect: N passed (same N)
-PYTHON=.venv314/bin/python bash scripts/check_undefined_names.sh   # expect: OK
+bash scripts/check_undefined_names.sh                    # expect: OK (auto-falls back to repo venv)
 bash scripts/check_no_merge_markers.sh              # expect: OK
 bash scripts/baseline --verify 2>&1 | tail -2       # expect: BASELINE HOLDING
 for f in $(find web -name '*.js' -not -path 'web/Old_archive/*'); do node --check "$f" || echo "FAIL $f"; done   # expect: no FAIL
 ```
 UI-harness scenarios (run each separately; ALL of them must stay green when you touch
-`web/` — 23 today, +1 when C3.3 adds `analyze_stage_models`; run every name listed here
-plus any a later stage added):
+`web/` — re-derive the current scenario names from `tests/ui_regression/*.mjs` before
+assuming the count; the "23 scenarios" figure was accurate on Sept 30, 2026 but is stale
+vs. disk):
 ```bash
 node tests/ui_regression/evidence_promote_load.mjs <scenario>   # scenarios:
 # save_supportive save_phase2 save_busy_guard load_saved_evidence load_saved_error
 # load_saved_no_case promote promote_historical_guard promote_failure promote_all_open
 # closure_readiness_punchlist closure_blocked_generate_punchlist draft_autosave_debounce
 # evidence_ledger_view loop_timeline_panel snapshot_migration_folds_legacy_maps
-# api_layer_canonical_fallback stepper_guards
+# api_layer_canonical_fallback stepper_guards  analyze_stage_models
 node tests/ui_regression/run_splunk_search_status.mjs <scenario>  # success failure no_case empty_spl running_to_complete_transitions
 ```
-
-### Commit protocol (every stage)
+(These are the scenario names a current executor can run today. The two harness files
+in `tests/ui_regression/` are listed in `docs/CURRENT_STATE_CHECKS.md`; re-derive the
+full scenario list from `evidence_promote_load.mjs` / `run_splunk_search_status.mjs`
+before assuming a total count.) (every stage)
 ```bash
 printf '%s\n' '<type>: <summary>' '' '<bullet details>' '' \
   'Gates: pytest <N>x2 (3.14+3.9), <other gates run>.' '' \
@@ -61,12 +62,15 @@ git commit -F /tmp/msg
 git push origin dev-dalton
 sleep 8; RUN_ID=$(gh run list --repo swinneyj/soc-plaform --workflow=Tests --limit 1 --json databaseId --jq '.[0].databaseId') && gh run watch "$RUN_ID" --repo swinneyj/soc-plaform --exit-status >/dev/null 2>&1; gh run list --repo swinneyj/soc-plaform --workflow=Tests --limit 1 --json conclusion --jq '.[0].conclusion'   # expect: success
 ```
-(`<N>` = the count pytest prints in its final summary line — 276 as of Sept 30. It grows as
-C2/C3/C4 add tests, so never hardcode a stale count in the commit body.)
+(`<N>` = the count pytest prints in its final summary line — on Sept 30, 2026 it was
+276; re-derive from `.venv314/bin/python -m pytest -q` tail line before trusting the number.
+It grows as C2/C3/C4 add tests, so never hardcode a stale count in the commit body.)
 
 ### Gotchas learned the hard way
 - `pytest.ini` already sets `addopts = -q`. Do NOT pass `-q` again (it hides the summary).
-- `scripts/check_undefined_names.sh` needs `PYTHON=.venv314/bin/python` or it fails on missing pyflakes.
+- `scripts/check_undefined_names.sh` falls back to `.venv314`/`.venv` automatically when
+  bare `python3` lacks pyflakes, so it passes in a fresh shell — `PYTHON=<path>` still
+  forces a specific interpreter.
 - When editing any `web/**/*.js`, bump its `?v=N` cache-buster in `web/index.modular.html`.
 - macOS: BSD sed/awk — avoid `sed -i` ranges; prefer `str_replace`-style edits or python.
 - VM-harness stubs must use canonical URLs (`/api/cases`, `/api/evidence/...`) — the api.js
@@ -85,6 +89,19 @@ C2/C3/C4 add tests, so never hardcode a stale count in the commit body.)
    STOP and report — the baseline must be green.
 3. Read the whole stage you are about to run before editing anything.
 
+> **Doc-status note (2026-10-06):** this playbook was written Sept 30, 2026 against a
+> project that was mid-roadmap then. As of this writing Phases A–E are **all complete**
+> (security floor, repo hygiene, session auth behind `AUTH_MODE`, hardening limits,
+> paste-box boundary parity, Vercel retired, D2 rehearsal doc assembled). The playbook's
+> own counts are now stale vs. disk: test files are **12** (`tests/test_*.py`) not 8,
+> UI harness scenarios are **3** `.mjs` files (a subset of the scenarios once listed),
+> and the suite is larger than the 276/23 figures quoted in §11. Before re-running any
+> stage from this doc, re-derive the current numbers from disk (`ls tests/test_*.py`,
+> `ls tests/ui_regression/*.mjs`, and the pytest summary) — do not trust the quoted
+> counts. Stages that are already done (A1, A2, A3, B1–B5, C1B.1–C1B.4, C2, C3, C4,
+> D1 retired, D2) should be treated as record, not as pending work, unless a later
+> human gate explicitly re-opens one.
+
 ### Stage order & cross-stage state (do not reorder)
 - Order: A1 → A2 → A3 → B1–B5 → C1B.1–C1B.4 → C2.0–C2.1.5 → C3 → C4 → D1–D3 → E.
 - C1B.2 RESTRUCTURES `mutation_gate_rejects` (replacing A1.4's form) and extends the A1.6
@@ -93,7 +110,7 @@ C2/C3/C4 add tests, so never hardcode a stale count in the commit body.)
   the current N in `web/index.modular.html`, write N+1" — the numbers quoted in a stage are
   the values ON SEPT 30, when this playbook was written.
 - The harness scenario count only grows (C3.3 adds one); the test-file count must NEVER
-  change (8 `tests/test_*.py`).
+  change (12 `tests/test_*.py` — re-derive from disk, never trust a quoted number).
 
 ### If a verify fails
 STOP. Do not improvise. If the stage's files are still uncommitted, restore them
@@ -886,7 +903,7 @@ per `docs/VERCEL_HANDOFF.md`. Commit the E docs (`docs: release notes + closeout
 
 | Stage | DoD |
 |-------|-----|
-| A1 | No GET route mutates; audit test green + negative control proven; UI delete works via POST; 23 harness scenarios green |
+| A1 | No GET route mutates; audit test green + negative control proven; UI delete works via POST; all UI harness scenarios green (re-derive count from `tests/ui_regression/*.mjs`) |
 | A2 | requirements pinned & pruned; pip-audit result recorded; Dependabot config + alerts attempted |
 | A3 | Tracker + backend-plan statuses match reality |
 | B* | Root = live platform + pointer docs; every move has its refs updated |

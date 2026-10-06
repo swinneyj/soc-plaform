@@ -35,12 +35,28 @@ Three services:
    - Volume-mounted data directories
 
 2. **postgres**: Default runtime database backend
-  - Exposed on configurable host port (default `5433`)
-  - Intended for repo-managed local runtime use
+  - Image: `postgres:16-alpine` (compose default).
+  - Exposed on configurable host port (default `5433`).
+  - Intended for repo-managed local runtime use.
+  - **Version skew warning:** this compose image is PostgreSQL 16, but the live
+    system-of-record database (Neon) runs PostgreSQL 18. That matters when you
+    restore a prod dump locally: `pg_dump` must be at least the server's major
+    version, so a 16-era client will refuse a 18 dump. The backup doc
+    (`docs/BACKUP_AND_RESTORE.md`) covers the `pg_dump` version requirement and
+    the `libpq`/matching-`postgresql@N` fix. If you restore a Neon dump into the
+    compose 16 container, expect a version-mismatch failure, not a silent success.
 
-3. **redis**: Job queue and state management
-   - Alpine-based, minimal footprint
-   - Persisted data volume
+3. **redis**: Present for backward compatibility only — **not used**.
+   - The compose file still declares a `redis:7-alpine` service so existing
+     `docker compose up` commands (and any leftover docs/scripts that assume
+     it) do not error on a missing service, but the platform does **not** use
+     Redis: the API has zero Redis imports (`pip-audit`/supply-chain pass in
+     `docs/security-remediation-tracker.md` confirmed this). There is no job
+     queue, no state back-end, and no code that talks to it.
+   - If you start the full compose stack, you get a running Redis container that
+     nothing queries. Planned disposition: either remove the service entirely or
+     document its real purpose if one ever emerges. This doc will be updated when
+     that decision is made.
 
 ### Core Libraries (Enhanced)
 

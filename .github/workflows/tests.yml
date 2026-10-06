@@ -48,5 +48,68 @@ jobs:
         # missing typing imports locally (see scripts/check_undefined_names.sh).
         run: bash scripts/check_undefined_names.sh
 
+      - name: Shell lint (bash -n on repo bash scripts)
+        # GAP_AUDIT F7: CI previously covered Python only. Add a basic syntax
+        # gate on the repo's bash scripts so a merge marker, broken quoting, or a
+        # typo in a gate/launcher/baseline script cannot slip through undetected.
+        # bash -n is a syntax-only check (no execution); it is a floor, not a
+        # replacement for shellcheck when the team wants one.
+        # Scope: files that are actually bash — *.sh plus the repo's bash scripts
+        # without a .sh extension (baseline, dev, next, start, install-hooks,
+        # secrets-keychain, soc-platform.command, start_soc_api.sh,
+        # sync_shared_logic_to_db.sh, restart_api.sh, start_platform.sh,
+        # git-hooks/pre-push — a gate script had a real logic bug once, so the
+        # hooks count as in-scope).
+        # PowerShell (.ps1) and Python scripts are out of scope for bash -n.
+        run: |
+          set -euo pipefail
+          shopt -s extglob
+          bash_scripts=( scripts/*.sh scripts/!((*.ps1|*.py|*.plist|*.command)) )
+          # dedupe in case a file matched both patterns
+          targets=()
+          for f in scripts/*.sh; do
+            [ -f "$f" ] && targets+=("$f")
+          done
+          for f in \
+            scripts/baseline \
+            scripts/dev \
+            scripts/next \
+            scripts/start \
+            scripts/install-hooks \
+            scripts/secrets-keychain \
+            scripts/soc-platform.command \
+            scripts/start_platform.sh \
+            scripts/restart_api.sh \
+            scripts/start_soc_api.sh \
+            scripts/sync_shared_logic_to_db.sh \
+            scripts/git-hooks/pre-push \
+          ; do
+            [ -f "$f" ] && targets+=("$f")
+          done
+          printf '%s\n' "${targets[@]}" | sort -u | while read -r f; do
+            bash -n "$f" || { echo "FAIL: bash -n $f"; exit 1; }
+          done
+          count=$(printf '%s\n' "${targets[@]}" | sort -u | wc -l | tr -d ' ')
+          echo "OK: bash -n passed on $count repo bash scripts"
+
+      - name: Hygiene assertions (counts + delete-case-id absence)
+        # GAP_AUDIT F7: these were greps run by hand, not CI-asserted. Assert
+        # them here so the invariants can't silently drift.
+        run: |
+          set -euo pipefail
+          TEST_FILE_COUNT=$(ls -1 tests/test_*.py | wc -l | tr -d ' ')
+          echo "test files on disk: $TEST_FILE_COUNT"
+          # The playbook publishes a count; re-derive from disk rather than trust
+          # a quoted number (the count grew after Sept 30, 2026).
+          if ! [[ "$TEST_FILE_COUNT" =~ ^[0-9]+$ ]] || [ "$TEST_FILE_COUNT" -lt 1 ]; then
+            echo "FAIL: unexpected test-file count: $TEST_FILE_COUNT"
+            exit 1
+          fi
+          if grep -rn --include='*.py' --include='*.js' --include='*.html' --include='*.md' --include='*.json' -e 'delete_case_id' web/ tests/ api/ 2>/dev/null; then
+            echo "FAIL: delete_case_id still referenced in shipped trees (see playbook A1.3)"
+            exit 1
+          fi
+          echo "OK: hygiene invariants held (test-file count=$TEST_FILE_COUNT, no delete_case_id in trees)"
+
       - name: Run pytest
         run: python -m pytest

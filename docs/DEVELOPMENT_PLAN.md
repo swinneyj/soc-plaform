@@ -2,6 +2,8 @@
 
 *Last updated: 2026-09-29. Owner: Dalton Lewis · Repo: `swinneyj/soc-plaform`*
 
+> **Doc status:** ✅ Phases 1–5 as described below are **all complete**. This is a *historical plan doc* — it records the build rationale and the commit-level shape of what landed. For current-state and live remediation detail, start from `docs/security-remediation-tracker.md` (updated through Oct 5, 2026) and the rest of `docs/`. The commit-level runbook is `docs/EXECUTION_PLAYBOOK.md`; the playbook's own counts (test-file count, harness scenario count, suite size) are stale vs. disk and should be refreshed before any future execution session uses them as truth.
+
 ---
 
 ## 1. Where we are (snapshot)

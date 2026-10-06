@@ -184,6 +184,8 @@ cp scripts/attic/web-Old_archive/modules-old/database.js.bak-before-full web/mod
 - Slim `data()` in `app.modular.js` by grouping related state per domain (still one root instance unless you adopt Pinia/Vuex later).
 - ~~Remove or archive `app.js` / `index.modular.html` / old `.bak` files once the team is confident in the modular live path.~~ **Done Sept 29, 2026** — retired to `scripts/attic/app.js` + `scripts/attic/web-old/`.
 
+> **Doc status:** ✅ COMPLETE — this plan describes the current modular layout; it is a *historical plan doc*, not an active work item.
+
 ---
 
 ## Related docs

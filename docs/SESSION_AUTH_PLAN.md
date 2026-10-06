@@ -1,12 +1,13 @@
 # Session Auth & Role Split Plan — analyst / admin
 
 **Date:** 2026-09-30
-**Status:** BUILT Sept 30, 2026 — C1B.1–C1B.4 landed behind `AUTH_MODE` (Phase C1
+**Status:** ✅ BUILT Sept 30, 2026 — C1B.1–C1B.4 landed behind `AUTH_MODE` (Phase C1
 deliverable of `docs/EXECUTION_PLAYBOOK.md`; build commits `30eae76`, `4d4134e`,
 `c795bdb`, + C1B.4). Flag-off behavior is byte-identical (full suite green with the
 flag unset); the `AUTH_MODE=session` matrix is green; zero new dependencies — the
 scrypt KDF falls back to stdlib PBKDF2-SHA256 on runtimes whose Python build lacks
-OpenSSL scrypt (verify dispatches on the stored scheme prefix).
+OpenSSL scrypt (verify dispatches on the stored scheme prefix). This is a *historical
+plan doc*; the auth seam it describes is the current seam.
 **Goal:** same treatment as `docs/FRONTEND_MODULARIZATION.md` / `docs/BACKEND_MODULARIZATION_PLAN.md` —
 extend the existing `api/auth.py` seam with per-user session auth and an analyst/admin
 role split, additively, with the current API-key behavior byte-identical until a feature

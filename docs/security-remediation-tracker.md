@@ -146,7 +146,65 @@
 
 ---
 
+## Auth rotation coverage — session-auth secret classes (C1B, LANDED Sept 30, 2026)
+
+**Why this entry exists:** the platform's rotation/incident story previously covered
+only three secret classes — the shared Neon `DATABASE_URL` password (#1), the armed
+`API_KEY` (#5), and the local Postgres password (#3). Session auth
+(`AUTH_MODE=session`, behind a feature flag) introduces new secret classes that did
+not exist when the tracker was first written, so the rotation/incident picture was
+incomplete. This entry closes that gap by recording what the new classes are and how
+they are stored, sourced from `docs/SESSION_AUTH_PLAN.md` §4 (storage) and
+`docs/API_SECURITY_REVIEW.md` (F5 login remediation).
+
+**Secret classes now in scope:**
+
+- **Password hashes** — `User.password_hash` in `db/models.py`. Stored encoded as
+  `scrypt$n$r$p$salthex$hashhex` (stdlib `hashlib.scrypt`, n=2**14, r=8, p=1,
+  16-byte salt, dklen=32); some Python 3.9 builds lack OpenSSL scrypt, so
+  `verify_password` falls back to PBKDF2-HMAC-SHA256 at 600k iterations and
+  dispatches on the stored scheme prefix. Compared with `hmac.compare_digest`.
+  Plaintext password never stored; random salt means the same password hashes
+  differently every time.
+- **Session tokens** — `AuthSession.token_hash`. The cookie value is
+  `secrets.token_urlsafe(32)`; the DB stores only its SHA-256 hex, never the raw
+  cookie.
+- **CSRF tokens** — `AuthSession.csrf_token`. A second per-session random; the
+  client must send it back as `X-CSRF-Token`, compared with `hmac.compare_digest`.
+- **The armed `API_KEY`** — unchanged from #5; in session mode a valid key still
+  authenticates as an admin machine actor (it is a deployment credential), so it
+  remains in the rotation story.
+
+**Rotation / incident posture (summary):**
+
+- Password rotation: change it via the user-CLI (`scripts/manage_users.py`)
+  — `set-password` takes the new password from a `--password-env VARNAME` (an env
+  var NAME, never the secret in argv or shell history) or a `getpass` prompt.
+- Session revocation: logout deletes the `AuthSession` row; there is no
+  password-change endpoint yet, so revocation-on-password-change is not wired today
+  (tracked as a low-severity note in `docs/API_SECURITY_REVIEW.md`, F12).
+- Expired sessions: `_session_from_request` checks expiry, but expired rows are
+  never vacuumed automatically (same F12 note — minor DB growth, not an exposure).
+- CSRF compromise: a stolen `csrf_token` is only useful together with the session
+  cookie (double-submit), so it is tied to session lifetime; logout invalidates it.
+- API key: unchanged — rotate in the BWS UI, re-pull, restart. In session mode the
+  key is still accepted as admin (no CSRF needed for API-key actors).
+- **Never-log rule:** logs and error bodies may contain usernames and actor kinds
+  only — never passwords, tokens, cookie values, or CSRF tokens
+  (`docs/SESSION_AUTH_PLAN.md` §6).
+
+**What is NOT yet covered (carry into the tracker after C1B, as the GAP_AUDIT
+intended):** a documented full-reset procedure for "session token or password hash
+leaked" beyond the per-class notes above; expired-session vacuum; a
+password-change/rotation endpoint if the team ever wants one. Those remain open
+hygiene items, not missing gates.
+
+**Sources:** `docs/SESSION_AUTH_PLAN.md` (plan + storage + risk controls); `docs/API_SECURITY_REVIEW.md` (F5 login remediation + F12 expired-session note); `api/auth.py` and `api/routes/auth.py` (live implementation).
+
+---
+
 ## Architecture hardening — the Splunk boundary ("the latch") — Sept 25
+
 
 **Motivation (Dalton's requirement):** Splunk is the sensitive system of record; importing/exporting between it and this platform needed one detachable, inspectable unit instead of data-loading paths accreting across tools.
 
