@@ -54,6 +54,7 @@ Then read: `SETUP.md` (network/share/accounts), `docs/security-remediation-track
 3. **Git**: branch `dev-dalton`; conventional-commit subjects; Codebuff footer via `git commit -F <file>` (heredoc quoting breaks in this shell `[V]`). Push only when asked. Never touch files untracked by you without asking. `[V]`
 4. **macOS config changes**: verify effects after acting — elevated commands here have a history of "exit 0 but didn't happen" and "errored but did happen." `[V]`
 5. **Check Justin's existing work before building CI anything.** `[I]` (born from the duplicate smoke-test collision; re-derived below)
+6. **Git hooks are tracked**: run `bash scripts/install-hooks` once per clone — it points `core.hooksPath` at `scripts/git-hooks`, so the pre-push gate (baseline + pin/marker check) runs from the tracked copy, with nothing to go stale after pulls. Skip it and pushes leave that clone ungated. `[V]` (witnessed: local-bare probe push executed both gates from the tracked hook)
 
 ## Freebuff Desktop risk notes
 

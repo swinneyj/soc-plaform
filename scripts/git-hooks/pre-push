@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Pre-push gate — TRACKED at scripts/git-hooks/pre-push.
+# Installed per clone by scripts/install-hooks (sets core.hooksPath so git
+# runs hooks straight from this tracked directory — no copies to go stale).
+# Runs the platform baseline, then the requirement pin/marker check.
+# Bypass with: git push --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if [ -x scripts/baseline ]; then
+  echo "── baseline pre-push check ──"
+  if ! bash scripts/baseline --verify; then
+    echo ""
+    echo "❌ Baseline drifted — push BLOCKED."
+    echo "   Investigate, or bypass with: git push --no-verify"
+    exit 1
+  fi
+else
+  echo "scripts/baseline not found — skipping (this clone may not be the dev Mac)"
+fi
+
+# Pin/marker gate: every requirement pin must support the interpreter its
+# python_version branch selects (PyPI requires_python). Stdlib-only script.
+if command -v python3 >/dev/null 2>&1 && [ -f scripts/check_requirement_markers.py ]; then
+  echo "── requirement pin/marker check ──"
+  if ! python3 scripts/check_requirement_markers.py; then
+    echo ""
+    echo "❌ Requirement pin/marker mismatch — push BLOCKED."
+    echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+exit 0

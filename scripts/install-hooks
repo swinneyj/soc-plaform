@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Install this clone's tracked git hooks — run once per fresh clone.
+#
+# Points core.hooksPath at scripts/git-hooks so git executes the TRACKED
+# pre-push gate directly (baseline + requirement pin/marker check), with no
+# copied file that can go stale after a pull. A relative hooksPath resolves
+# against the worktree root, so the clone stays portable.
+#
+# Without this step pushes leave the clone ungated. Bypass any single push
+# with: git push --no-verify
+set -eu
+
+TOP="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "ERROR: not inside a git worktree — run this from your clone." >&2
+  exit 2
+}
+cd "$TOP"
+
+HOOKS=scripts/git-hooks
+if [ ! -f "$HOOKS/pre-push" ]; then
+  echo "ERROR: $HOOKS/pre-push not found — is this a full clone?" >&2
+  exit 2
+fi
+chmod +x "$HOOKS"/*
+
+EXISTING="$(git config core.hooksPath || true)"
+if [ -n "$EXISTING" ]; then
+  if [ "$EXISTING" = "$HOOKS" ]; then
+    echo "✅ hooks already installed: core.hooksPath → $HOOKS"
+    exit 0
+  fi
+  echo "ERROR: core.hooksPath is already set to '$EXISTING' — not clobbering." >&2
+  echo "       Decide between that and '$HOOKS', then re-run." >&2
+  exit 1
+fi
+
+git config core.hooksPath "$HOOKS"
+echo "✅ installed: core.hooksPath → $HOOKS"
+echo "   pre-push gate: baseline + pin/marker check"
+echo "   verify with: bash $HOOKS/pre-push"
