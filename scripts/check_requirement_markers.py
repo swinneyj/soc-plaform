@@ -15,8 +15,11 @@ may use python_version comparisons joined by `and`/`or`; anything else
 (unknown variables, other marker fields, parentheses) fails loudly rather
 than being silently skipped.
 
-Targets default to the CI matrix interpreters (keep in sync with
-.github/workflows/tests.yml); override with repeated --python flags.
+Targets are derived from the `python-version` matrix in
+.github/workflows/tests.yml (override with repeated --python flags), so
+the gate validates exactly the interpreters CI runs and the two cannot
+drift apart. A missing or unparseable matrix is a loud exit 2 — never a
+silent fallback to a hardcoded copy.
 
 Stdlib only — runs under both matrix interpreters (3.9 and 3.14) before any
 dependency install. Exit codes: 0 ok, 1 pin/marker mismatch, 2 usage,
@@ -32,8 +35,11 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-DEFAULT_TARGETS = ["3.9", "3.14"]  # keep in sync with the tests.yml matrix
 DEFAULT_FILES = ["requirements.txt", "requirements-dev.txt"]
+WORKFLOW = ".github/workflows/tests.yml"
+MATRIX_KEY_RE = re.compile(r'^(\s*)python-version:\s*(.*?)\s*$')
+LIST_ITEM_RE = re.compile(r'^(\s*)-\s+(.*)$')
+TARGET_RE = re.compile(r'^\d+(\.\d+){1,2}$')
 
 PIN_RE = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)"
@@ -174,6 +180,71 @@ def fetch_requires_python(name, version, where, cache):
     raise UsageError("%s: could not query PyPI for %s==%s (%s)" % (where, name, version, last_error))
 
 
+def strip_comment(text):
+    return re.split(r"\s+#", text, maxsplit=1)[0].strip()
+
+
+def validate_target(value, context):
+    if not TARGET_RE.match(value):
+        raise UsageError(
+            "%s: target %r must be an explicit numeric interpreter version "
+            "like 3.9 or 3.14 — not '3.x', 'min', or an implementation alias"
+            % (context, value)
+        )
+    return value
+
+
+def derive_targets(path):
+    """Read every list-valued `python-version:` matrix entry from the workflow.
+
+    Occurrences whose value is an expression
+    (`python-version: ${{ matrix.python-version }}`) are references, not
+    definitions, and are skipped. Multiple matrix lists are unioned; no list
+    at all is a loud UsageError (exit 2), never a hardcoded default.
+    """
+    if not path.is_file():
+        raise UsageError("workflow file not found: %s" % path)
+    targets = []
+    lines = path.read_text().splitlines()
+    for i, line in enumerate(lines):
+        match = MATRIX_KEY_RE.match(line)
+        if not match:
+            continue
+        indent, rest = match.group(1), strip_comment(match.group(2))
+        items = []
+        if rest.startswith("["):
+            if not rest.endswith("]"):
+                raise UsageError(
+                    "%s:%d: multi-line flow list for python-version is not "
+                    "supported — use a single-line list or block items"
+                    % (path, i + 1)
+                )
+            items = [item.strip() for item in rest[1:-1].split(",") if item.strip()]
+        elif not rest:
+            for j in range(i + 1, len(lines)):
+                candidate = lines[j]
+                stripped = candidate.strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                item = LIST_ITEM_RE.match(candidate)
+                if item and len(item.group(1)) > len(indent):
+                    items.append(strip_comment(item.group(2)).strip())
+                    continue
+                break
+        else:
+            continue  # expression reference, not a matrix definition
+        for item in items:
+            value = validate_target(item.strip("\"'"), "%s:%d" % (path, i + 1))
+            if value not in targets:
+                targets.append(value)
+    if not targets:
+        raise UsageError(
+            "no python-version matrix list found in %s — the gate cannot "
+            "derive its targets; fix the workflow or pass --python" % path
+        )
+    return targets
+
+
 def parse_line(raw, where):
     line = re.split(r"\s+#", raw.strip(), maxsplit=1)[0].strip()
     if not line or line.startswith("#"):
@@ -222,8 +293,15 @@ def main(argv=None):
         dest="targets",
         action="append",
         metavar="VERSION",
-        help="target interpreter to validate against (repeatable; "
-        "default: %s)" % ", ".join(DEFAULT_TARGETS),
+        help="target interpreter to validate against (repeatable; default: "
+        "derived from the python-version matrix in --workflow)",
+    )
+    parser.add_argument(
+        "--workflow",
+        default=WORKFLOW,
+        metavar="PATH",
+        help="workflow to derive default targets from (default: %s)"
+        % WORKFLOW,
     )
     parser.add_argument(
         "files",
@@ -231,8 +309,18 @@ def main(argv=None):
         help="requirement files to check (default: %s)" % ", ".join(DEFAULT_FILES),
     )
     args = parser.parse_args(argv)
-    targets = args.targets or list(DEFAULT_TARGETS)
     root = Path(__file__).resolve().parent.parent
+    try:
+        if args.targets:
+            targets = [validate_target(value, "--python") for value in args.targets]
+        else:
+            workflow = Path(args.workflow)
+            if not workflow.is_file():
+                workflow = root / args.workflow
+            targets = derive_targets(workflow)
+    except UsageError as exc:
+        print("ERROR: %s" % exc, file=sys.stderr)
+        return 2
     paths = []
     for name in args.files or DEFAULT_FILES:
         candidate = Path(name)
