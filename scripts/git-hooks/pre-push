@@ -69,4 +69,16 @@ if command -v bash >/dev/null 2>&1; then
     exit 1
   fi
 fi
+# Web option-key guard (mirrors the CI step): a duplicate key inside any one
+# object literal silently shadows at parse time — the C1B.3 `computed` bug
+# that emptied every case table while all checks stayed green.
+if command -v node >/dev/null 2>&1 && [ -f scripts/check_web_option_keys.mjs ]; then
+  echo "── web option-key check ──"
+  if ! node scripts/check_web_option_keys.mjs; then
+    echo ""
+    echo "❌ Duplicate object-literal key(s) — push BLOCKED."
+    echo "   Remove the shadowed key, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
 exit 0

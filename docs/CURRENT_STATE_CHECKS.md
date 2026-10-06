@@ -31,6 +31,9 @@ a pointer so nobody has to remember the commands.
   `PYTHON=<path>` still forces a specific interpreter. Python only; the reason it
   exists is 3.14 lazy annotation masking — see script header).
 - Merge-marker gate: `bash scripts/check_no_merge_markers.sh`.
+- Web option-key guard: `node scripts/check_web_option_keys.mjs` (a duplicate
+  key inside one object literal is silently discarded at parse time — the
+  C1B.3 `computed:` bug that emptied the case tables; exit 0 = clean).
 - JS syntax: `for f in $(find web -name '*.js' -not -path 'web/Old_archive/*'); do node --check "$f" || echo "FAIL $f"; done`
 - Auth seam tests (API-key + session-auth matrix): `tests/test_api_key_gate.py`.
 - Investigation-loop regression tests: `tests/test_investigation_fixes.py`,

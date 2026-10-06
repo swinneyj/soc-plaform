@@ -33,6 +33,7 @@ specified. `[mechanical after sign-off]` = run only after the named human gate.
 .venv/bin/python -m pytest 2>&1 | tail -1           # expect: N passed (same N)
 bash scripts/check_undefined_names.sh                    # expect: OK (auto-falls back to repo venv)
 bash scripts/check_no_merge_markers.sh              # expect: OK
+node scripts/check_web_option_keys.mjs              # expect: OK (dupe object keys = C1B.3 shadowing)
 bash scripts/baseline --verify 2>&1 | tail -2       # expect: BASELINE HOLDING
 for f in $(find web -name '*.js' -not -path 'web/Old_archive/*'); do node --check "$f" || echo "FAIL $f"; done   # expect: no FAIL
 ```

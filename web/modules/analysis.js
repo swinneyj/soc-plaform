@@ -1492,7 +1492,6 @@
                 followUpPhase: this.followUpPhase,
                 phase2CardState: this.phase2CardState,
                 phase2EditedQueries: this.phase2EditedQueries,
-                phase2CardState: this.phase2CardState,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,

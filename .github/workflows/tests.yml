@@ -111,5 +111,13 @@ jobs:
           fi
           echo "OK: hygiene invariants held (test-file count=$TEST_FILE_COUNT, no delete_case_id in trees)"
 
+      - name: Web option-key guard (duplicate object keys silently shadow)
+        # C1B.3 regression: a second `computed:` key inside createApp({...})
+        # silently discarded the first 225-line block — node --check, pytest,
+        # and the harness all stayed green while the case tables rendered
+        # empty. A duplicate key inside any one object literal is parse-time
+        # data loss; fail the build instead of shipping a shadowed UI.
+        run: node scripts/check_web_option_keys.mjs
+
       - name: Run pytest
         run: python -m pytest
