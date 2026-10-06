@@ -175,7 +175,7 @@ def fetch_requires_python(name, version, where, cache):
 
 
 def parse_line(raw, where):
-    line = re.split(r"\s+#", raw.strip(), 1)[0].strip()
+    line = re.split(r"\s+#", raw.strip(), maxsplit=1)[0].strip()
     if not line or line.startswith("#"):
         return None
     req, sep, marker = line.partition(";")
