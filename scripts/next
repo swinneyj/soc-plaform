@@ -26,8 +26,31 @@ else
 fi
 
 # 2. New Neon URL ---------------------------------------------------------
-if grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
-    echo "${OK}Neon: DATABASE_URL points at Neon ✓"
+# DATABASE_URL lives in the launch environment, .env, or the login
+# keychain (scripts/start injects it; credential keys live in the
+# keychain) — grepping .env alone reported a false "waiting on URL"
+# TODO while the platform was already querying Neon.
+DB_URL_SOURCE=""
+DB_URL_FOREIGN=""
+if [ -n "${DATABASE_URL:-}" ]; then
+    case "$DATABASE_URL" in
+        *neon.tech*) DB_URL_SOURCE="environment" ;;
+        *) DB_URL_FOREIGN=1 ;;
+    esac
+elif grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
+    DB_URL_SOURCE=".env"
+else
+    DB_URL_KEY="$(bash scripts/secrets-keychain get DATABASE_URL 2>/dev/null)"
+    case "$DB_URL_KEY" in
+        "") ;;
+        *neon.tech*) DB_URL_SOURCE="login keychain" ;;
+        *) DB_URL_FOREIGN=1 ;;
+    esac
+fi
+if [ -n "$DB_URL_SOURCE" ]; then
+    echo "${OK}Neon: DATABASE_URL points at Neon ✓ (${DB_URL_SOURCE})"
+elif [ -n "$DB_URL_FOREIGN" ]; then
+    echo "${WAIT}Neon: DATABASE_URL resolves to a non-Neon host — run scripts/start --check to see which DB is active"
 elif grep -qE '^DATABASE_URL=.*neon\.tech' .env.example 2>/dev/null; then
     echo "${WAIT}Neon: new URL in .env.example? — copy it into .env"
 else
