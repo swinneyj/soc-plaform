@@ -28,6 +28,14 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Check pins vs markers (PyPI requires_python)
+        # Fails fast when a python_version branch selects a pin that does not
+        # support that interpreter (e.g. hypothesis==6.149.1, requires >=3.10,
+        # pinned to the <"3.10" branch — it used to kill the 3.9 leg deep in
+        # pip's resolver). Stdlib only; validates both matrix branches on
+        # every leg, so no dependency install is needed first.
+        run: python scripts/check_requirement_markers.py
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
