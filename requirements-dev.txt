@@ -6,13 +6,17 @@
 # >=3.10; the 3.9 branch keeps the last supported versions (accepted risk,
 # see requirements.txt header / security tracker item #9).
 #
-# httpx is required by starlette's TestClient (used by the API-level tests).
-# The 3.9 runtime's older starlette requires httpx; the 3.14 env's
-# starlette 1.6 prefers httpx2 and falls back to httpx if present.
+# httpx/httpx2 back starlette's TestClient (used by the API-level tests).
+# The 3.9 runtime's older starlette imports plain httpx; starlette 1.6+
+# imports httpx2 and only falls back to httpx with a
+# StarletteDeprecationWarning, so the 3.10+ branch pins httpx2 explicitly
+# (it was never pinned — CI's 3.14 leg always warned at
+# tests/test_api_analyze_flow.py:31).
 # pyflakes backs scripts/check_undefined_names.sh (the CI import lint).
 pytest==9.1.1; python_version >= "3.10"
 pytest==8.4.2; python_version < "3.10"
 httpx==0.28.1
+httpx2==2.13.1; python_version >= "3.10"
 pyflakes==4.0.0; python_version >= "3.10"
 pyflakes==3.4.0; python_version < "3.10"
 # Property-based fuzz layer for the boundary ingest engines
