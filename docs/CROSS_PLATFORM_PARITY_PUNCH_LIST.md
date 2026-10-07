@@ -18,13 +18,12 @@
 
 ## Remaining gaps, in priority order
 
-### P1 — Windows: no scheduled backup (the biggest real hole)
+### P1 — No scheduled backups on any platform (deliberate, off the table)
 
-- **State:** `scripts/backup_db.sh` is scheduled by `scripts/local.soc-platform.backup.plist` (launchd, 03:30 daily) on macOS. `scripts/backup_db.ps1` exists but has **no scheduler attached on Windows**. There is no `schtasks` / `Register-ScheduledTask` / Task Scheduler integration.
-- **What exists:** `scripts/export_postgres_dump.ps1` and `scripts/backup_db.ps1` can produce a dump manually on Windows (when pg_dump/gzip/Docker are available). `scripts/start_platform.ps1` refreshes the backup on every platform start (stale skip < 20 h) and `-StartPlatform` forces one on demand — but that's start-riding, not a schedule.
-- **Why it matters:** the macOS side has an automated daily path (even though the plist is deliberately not installed by decision — see 🟦). Windows has nothing automated.
-- **Not a bug, but an asymmetry:** the launchd plist is **deliberately not installed** on macOS either (owner decision, Sept 30). So the "gap" is really: neither platform has an *installed* scheduler; macOS has a plist that *could* be installed, Windows has nothing equivalent at all.
-- **Suggested owner:** whoever owns Phase 5 ops backlog. Scope: pick a Windows scheduler mechanism (Task Scheduler via `Register-ScheduledTask`, or a pwsh wrapper + user-driven schedule) and decide whether to install the macOS plist too, to make the two sides symmetric. Do **not** install anything that hits the shared Neon DB without the pre-action confirmation protocol from `AGENTS.md` ("One shared production dataset").
+- **State:** there is **no scheduled backup on any platform**. The macOS launchd plist `scripts/local.soc-platform.backup.plist` (03:30 daily) exists on disk but is **deliberately not installed** (owner decision, Sept 30). Windows has no scheduler integration at all.
+- **What exists instead:** ops rides along with platform starts — `scripts/start` refreshes the backup when the newest dump is < 20 h old, and a forced backup runs on demand. `scripts/backup_db.ps1` / `scripts/export_postgres_dump.ps1` can produce a dump manually when pg_dump/gzip/Docker are available, but there is no automation behind them.
+- **This is a decision, not an open gap.** The punch list records it so it isn't re-opened as "the biggest real hole" or picked up as Phase 5 ops backlog. No owner, no scheduled backup on any platform, by choice.
+- **If that decision ever changes:** anything that hits the shared Neon DB needs the pre-action confirmation protocol from `AGENTS.md` ("One shared production dataset"). `backup_db.ps1` reads `DATABASE_URL` from `.env` — if that's the Neon connection string, the dump hits shared prod data.
 
 ### P2 — `start_soc_api.ps1` on Windows: uvicorn "no exec" process-tree difference
 
