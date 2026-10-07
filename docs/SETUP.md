@@ -169,13 +169,12 @@ To test changes on a feature branch without touching the main/staging runtime, t
 - Ports for the preview are assigned dynamically based on the branch name (stable per branch):
 	- app port: 9000 + (hash(branch) % 300)
 	- PostgreSQL host port: 9300 + (hash(branch) % 300)
-	- Redis port: 9600 + (hash(branch) % 300)
 - The preview uses its own PostgreSQL volume (isolated from the main/staging volume) so test data does not contaminate the primary runtime.
 
 To keep preview DBs aligned with the current shared snapshot, the hook calls [scripts/start_branch_preview_from_shared_dump.ps1](scripts/start_branch_preview_from_shared_dump.ps1):
 
 - Stops any existing preview project for that branch (`docker compose -p soc-<branch> down --remove-orphans`).
-- Starts PostgreSQL and Redis for the branch (`docker compose -p soc-<branch> up -d postgres redis`) and waits for PostgreSQL health.
+- Starts PostgreSQL for the branch (`docker compose -p soc-<branch> up -d postgres`) and waits for PostgreSQL health.
 - If `Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql` exists, it resets the `public` schema in the branch DB and restores that shared dump.
 - Starts the branch API service via Docker Compose (`docker compose -p soc-<branch> up -d --build --force-recreate api-service`).
 
@@ -186,6 +185,6 @@ Result: each push from a feature branch both rebuilds and reseeds its sandbox fr
 | Story | Status | Entry point | Notes |
 |-------|--------|-------------|-------|
 | Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
-| Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
+| Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+api-service via compose; shared-dump restore. |
 | Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves (project kept on ice, owner decision) — `docs/VERCEL_HANDOFF.md`. |
 | launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |

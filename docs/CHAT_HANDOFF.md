@@ -171,7 +171,7 @@ set +a
 ./scripts/start_platform.sh
 ```
 
-The startup script starts PostgreSQL and Redis, restores the shared dump, builds the API, and starts the API service.
+The startup script starts PostgreSQL, restores the shared dump, builds the API, and starts the API service.
 
 Open:
 

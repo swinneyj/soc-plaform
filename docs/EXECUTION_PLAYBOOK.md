@@ -275,9 +275,9 @@ The UI's `deleteTriageCase` currently uses the third one.
 ```bash
 grep -rln "import redis\|from redis\|import pptx\|from pptx\|import cryptography\|from cryptography" api/ services/ db/ web/ scripts/ Tools/ *.py 2>/dev/null
 ```
-Expect: only `scripts/attic/…` hits (or none). If a LIVE file appears, STOP and report.
+Expect: only `scripts/attic/…` hits for `redis`/`python-pptx` (or none). For `cryptography`, a single live hit in `Tools/pki_cert_decoder/pki_cert_decoder.py` is expected — that is the reason it is kept. If any OTHER live file imports `redis` or `python-pptx`, STOP and report.
 
-**A2.2 — Prune + pin `requirements.txt`.** Remove `redis`, `python-pptx`, `cryptography`.
+**A2.2 — Prune + pin `requirements.txt`.** Remove `redis`, `python-pptx` (both confirmed zero live imports — `redis` only exists as a Docker compose service; `python-pptx` only in `scripts/attic/`). Keep `cryptography` — it is imported by the live `Tools/pki_cert_decoder/pki_cert_decoder.py` (X.509 cert parsing) and has no API/service importers.
 Then pin what remains to the versions installed in `.venv314`:
 ```bash
 .venv314/bin/python -m pip freeze | grep -iE '^(requests|sqlalchemy|psycopg|pydantic|fastapi|uvicorn|python-dotenv|python-multipart)='

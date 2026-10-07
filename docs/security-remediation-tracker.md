@@ -273,6 +273,41 @@ Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the sour
 
 ---
 
+## Destructive-path audit — shared production Neon (2026-10-06, not re-verified this session)
+
+Scope: the no-undo paths named in AGENTS.md, each with its guard.
+
+**Verified this session (recon, 2026-10-07):** `scripts/start --check`
+confirms `DATABASE_URL` points at Neon (shared production), and
+`scripts/secrets-keychain get API_KEY` returns an armed key — so the gate
+substance below (unauthenticated mutations rejected when `API_KEY` is set)
+is structurally true in the current code (`api/auth.py`, `api/main.py`).
+
+**Not re-verified this session:** the local API is **not running** right now
+(`scripts/start --check`: api not running), so the "Live proof" column below
+records the 2026-10-06 result and is **not** a current probe — it can be
+re-run at any time once the API is up:
+`curl -X <verb> http://localhost:8000/<path>` (expect 401 when the gate is
+armed). Nothing in this table asserts a destructive action was taken.
+
+| Path | Guard | Live proof (2026-10-06, not re-run this session) |
+|---|---|---|
+| `POST /api/cases/{id}/delete`, `POST /api/cases/batch-delete` | mutation gate — armed `API_KEY` (flag-off) / session + CSRF (session mode) | 401, 401 |
+| `POST /api/evidence/{id}/delete-all`, `POST /api/evidence/{id}/batch-delete` | same, plus the destructive-suffix clause | 401, 401 |
+| `POST /api/notables/{id}/delete` | same | 401 |
+| `DELETE /api/splunk-boundary/batches/{id}` (purge/release) | same; UI adds an inline double-confirm; manifest `purge_batch` is the sanctioned undo | 401 |
+| GET-shaped deletes (`…/delete`, `…/batch-delete`, `…/delete-all`) | `mutation_gate_rejects` classifies GET + destructive suffix as mutations (A1 belt-and-suspenders) | 401 on `GET /api/cases/1/delete-all` |
+| Reads (contrast) | open by design in flag-off mode; session mode gates all `/api/*` except health/login | 200 on `GET /api/cases` |
+| `scripts/attic/wipe_db.py` | retired to `scripts/attic/` (Sept); **no interlock** — guarded by protocol only; still reachable via `Reset-DummyDb.ps1` | dead fallback path **fixed this session** (now resolves `scripts/attic/`) |
+| `Reset-DummyDb.ps1`, `restore_db_dump_from_share.ps1`, `restore_postgres_dump.ps1` | **no interactive confirmation** — operator protocol only. Windows-only; not executable on this Mac (`pwsh` absent), so the PS1 fix is review-verified (CRLF preserved, braces balanced) | audit finding |
+| `scripts/migrate_sqlite_to_postgres.py --drop-existing` | destructive only behind the explicit `--drop-existing` flag | flag-gated (not run) |
+| `scripts/prune_analysis_results.py` | preview by default; deletes only with `--apply` | pattern OK (not run) |
+
+Standing rule unchanged: before ANY destructive DB action run
+`scripts/start --check`, confirm the target (`neon.tech` = shared prod), and
+get explicit user confirmation. The boundary batch purge remains the only
+sanctioned undo; nothing analogous exists for `wipe_db.py`.
+
 ## Checked and found OK ✅
 - `.env` is gitignored (`.gitignore:6`)
 - No `npg_` values or Neon hostnames appear in any tracked file
@@ -284,6 +319,7 @@ Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the sour
 - Boundary validation, latch modes, purge, and both ingest engines are unit-tested hermetically (sqlite-injected) — suite 121/121 on Python 3.14 and 3.9 at the time; 124/124 earlier Sept 28; **141/141 as of Sept 28, 2026** (Phase 2 verdict suite + confidence-hint tests landed)
 - **pip-audit (Sept 28, 2026)**: `pip-audit 2.10.1` against `requirements.txt`, `requirements-dev.txt`, and the full installed 3.14 venv (includes transitive deps) — **no known vulnerabilities** in any pass (PyPI advisory DB, as of that date). Watch list per #11 unchanged (`fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`) — re-run on dependency bumps.
 - **Repo-wide credential sweep (Sept 28, 2026)**: pattern classes run across all 248 tracked files — `npg_`/Neon URLs, `sk-`/`ghp_`/`AKIA`-style keys, JWT/Bearer tokens, private-key blocks, `postgres://user:pass@` URLs, generic `(password|secret|token|api_key)=value` assignments, `.pem/.key/.db`-type tracked files. **Zero live findings.** `.env.example` still fully placeholder-ized (#8 fix holding); `deploy.yml` uses `${{ secrets.* }}` references only; `admin.jlee`/`WIN-APP-042` corpus confirmed synthetic per `CHAT_HANDOFF.md`. Caveats: (1) the 5 tracked `.pptx`/`.docx` binaries are not text-searchable — unaudited by this pass, low risk, spot-check once if desired; (2) dead credentials remain in git history by design (`theitguru` placeholder, rotated `remoteguest` password scrubbed from the working tree the same day)
+- **Case-sensitivity "Section/Structure" spec — CLOSED (2026-10-06)**: repo-wide search (docs, `PROJECT_SPEC.md`, `OPERATOR_CHEAT_SHEET.md`, `Playbooks/`, `Data/`, code) found no such spec; no document asserts case behavior, so there is nothing to reconcile. No action pending — re-open only if a spec actually surfaces.
 
 ## Open items, in order
 

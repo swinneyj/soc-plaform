@@ -31,7 +31,6 @@ Three services:
 
 1. **api-service** (default): FastAPI on `0.0.0.0:8000`
    - Auto-reload on code changes
-   - Redis backend for async job queuing
    - Volume-mounted data directories
 
 2. **postgres**: Default runtime database backend
@@ -46,17 +45,6 @@ Three services:
     the `libpq`/matching-`postgresql@N` fix. If you restore a Neon dump into the
     compose 16 container, expect a version-mismatch failure, not a silent success.
 
-3. **redis**: Present for backward compatibility only — **not used**.
-   - The compose file still declares a `redis:7-alpine` service so existing
-     `docker compose up` commands (and any leftover docs/scripts that assume
-     it) do not error on a missing service, but the platform does **not** use
-     Redis: the API has zero Redis imports (`pip-audit`/supply-chain pass in
-     `docs/security-remediation-tracker.md` confirmed this). There is no job
-     queue, no state back-end, and no code that talks to it.
-   - If you start the full compose stack, you get a running Redis container that
-     nothing queries. Planned disposition: either remove the service entirely or
-     document its real purpose if one ever emerges. This doc will be updated when
-     that decision is made.
 
 ### Core Libraries (Enhanced)
 
@@ -301,7 +289,7 @@ PYTHONUNBUFFERED=1                        # Real-time logs
 ## Stopping Services
 
 ```bash
-# Stop API and Redis
+# Stop API
 docker compose --profile api down
 
 # Stop and remove volumes
@@ -327,20 +315,13 @@ docker exec soc-api-service python -c "from api.main import app; print('Import O
 ```bash
 docker compose ps -a          # Check volume mounts
 docker volume ls              # List all volumes
-docker volume inspect soc_platform_release_20260812_0943_redis-data
+docker volume inspect soc_platform_release_20260812_0943_postgres-data
 ```
 
 ### Tool execution failing?
 
 ```bash
 docker exec soc-api-service python Tools/base64_decoder/base64_decoder.py --target "test=="
-```
-
-### Redis connection issues?
-
-```bash
-docker exec soc-redis redis-cli ping
-docker logs soc-redis
 ```
 
 ---
@@ -350,7 +331,6 @@ docker logs soc-redis
 1. **Webhook Integration**: Trigger tool execution from SOAR platforms (Splunk, Demisto, etc.)
 2. **Authentication**: Add JWT or API key support
 3. **Rate Limiting**: Protect against abuse
-4. **Async Queue**: Use Celery or Bull for distributed job processing
 5. **Metrics**: Export Prometheus metrics for monitoring
 6. **CLI Client**: Python CLI tool to interact with API from terminal
 7. **Front-End**: React/Vue dashboard for job submission and report viewing
@@ -360,7 +340,7 @@ docker logs soc-redis
 ## Files Modified/Created
 
 - ✅ **Dockerfile** — Multi-stage, ~216MB final image
-- ✅ **docker-compose.yml** — API + Redis + CLI services
+- ✅ **docker-compose.yml** — API + CLI services
 - ✅ **requirements.txt** — Python dependencies
 - ✅ **.dockerignore** — Exclude unnecessary files
 - ✅ **Tools/core_lib/utils.py** — Enhanced for containerization

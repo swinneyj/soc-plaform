@@ -16,7 +16,7 @@ What it does:
 1. checks whether Docker is running and attempts to start Docker Desktop if it is not
 2. optionally starts Ollama if it is not already listening on `127.0.0.1:11434`
 3. acquires a simple share lock in the handoff folder
-4. starts the project PostgreSQL container and Redis
+4. starts the project PostgreSQL container
 5. restores the latest shared dump from the handoff folder when present
 6. syncs repo-managed shared logic into the local database
 7. starts the API service and waits for health

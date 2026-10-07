@@ -22,7 +22,7 @@ Think about the system in three layers:
 
 ```mermaid
 flowchart TD
-    A[Operator Layer<br/>scripts and docs] --> B[Runtime Layer<br/>API, Postgres, Redis, Ollama]
+    A[Operator Layer<br/>scripts and docs] --> B[Runtime Layer<br/>API, Postgres, Ollama]
     B --> C[State Layer<br/>Git repo, local DB, shared dump]
 ```
 
@@ -48,7 +48,7 @@ This is the core runtime shape from `docker-compose.yml` and the FastAPI app.
 flowchart LR
     User[Operator / Browser] --> API[api-service<br/>FastAPI + web mount]
     API --> PG[(PostgreSQL<br/>localhost:5433)]
-    API --> Redis[(Redis)]
+    
     API --> Ollama[Ollama<br/>localhost:11434]
     API --> Repo[Repo Files<br/>Tools, config, web, docs]
 ```
@@ -127,7 +127,7 @@ This is the normal "bring the platform up" path.
 flowchart TD
     A[Run start_platform.ps1] --> B[Check Docker]
     B --> C[Optionally ensure Ollama]
-    C --> D[Start Postgres and Redis]
+    C --> D[Start Postgres]
     D --> E[Optionally restore shared dump]
     E --> F[Sync shared logic into DB]
     F --> G[Start api-service]

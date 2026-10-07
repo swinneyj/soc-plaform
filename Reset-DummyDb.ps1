@@ -119,12 +119,19 @@ if (-not $packDir) {
 $wipeScript = Join-Path $packDir "wipe_db.py"
 $closedScript = Join-Path $packDir "seed_dummy_closed_notables.py"
 
-# Fallbacks if user flattened the pack into project root
+# Fallbacks: flattened pack into project root, then scripts/attic (these
+# two scripts were git mv'd to attic in the Sept 2026 hygiene pass).
 if (-not (Test-Path $wipeScript)) {
     $wipeScript = Join-Path $RepoRoot "wipe_db.py"
 }
+if (-not (Test-Path $wipeScript)) {
+    $wipeScript = Join-Path $RepoRoot "scripts\attic\wipe_db.py"
+}
 if (-not (Test-Path $closedScript)) {
     $closedScript = Join-Path $RepoRoot "seed_dummy_closed_notables.py"
+}
+if (-not (Test-Path $closedScript)) {
+    $closedScript = Join-Path $RepoRoot "scripts\attic\seed_dummy_closed_notables.py"
 }
 
 $testCasesScript = Join-Path $RepoRoot "seed_test_cases.py"
