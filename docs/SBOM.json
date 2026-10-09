@@ -1440,11 +1440,11 @@
     },
     {
       "bom-ref": "npm:vue@3.5.43",
-      "description": "Vue 3 global build; loaded from cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js (floating major tag; 3.5.43 observed live)",
+      "description": "Vue 3 global build; version-pinned in web/index.modular.html at the previously live 3.5.43 (sha256-verified byte-identical to the former floating @3 tag, 2026-10-09)",
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"
+          "url": "https://cdn.jsdelivr.net/npm/vue@3.5.43/dist/vue.global.js"
         }
       ],
       "name": "vue",
@@ -1467,16 +1467,18 @@
       "version": "1.6.0"
     },
     {
-      "bom-ref": "npm:tailwindcss@cdn",
-      "description": "Tailwind Play CDN (runtime JIT build, version not pinned; loaded from cdn.tailwindcss.com)",
+      "bom-ref": "npm:tailwindcss@3.4.17",
+      "description": "Tailwind Play CDN (runtime JIT build); version-pinned in web/index.modular.html at the previously live 3.4.17 (sha256-verified, 2026-10-09)",
       "externalReferences": [
         {
           "type": "distribution",
-          "url": "https://cdn.tailwindcss.com"
+          "url": "https://cdn.tailwindcss.com/3.4.17"
         }
       ],
       "name": "tailwindcss",
-      "type": "library"
+      "purl": "pkg:npm/tailwindcss@3.4.17",
+      "type": "library",
+      "version": "3.4.17"
     }
   ],
   "dependencies": [
@@ -1743,7 +1745,7 @@
       },
       {
         "name": "frontend:note",
-        "value": "frontend has no npm toolchain; Vue/axios/Tailwind load from CDNs in web/index.modular.html \u2014 components appended below"
+        "value": "frontend has no npm toolchain; Vue/axios/Tailwind load from CDNs in web/index.modular.html (all three version-pinned 2026-10-09) \u2014 components appended below"
       }
     ],
     "tools": {

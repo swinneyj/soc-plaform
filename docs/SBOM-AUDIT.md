@@ -12,6 +12,12 @@ against `requirements*.txt` and the repo's actual imports.
 > edition of this audit have been **removed** from both venvs (`.venv314` 63→39 packages, legacy `.venv`
 > 45→39) and this SBOM regenerated from the lean environment. The 24-component drop (66→42) is entirely
 > F1/F2 packages plus their orphaned transitive deps; every remaining component traces to a declared pin.
+>
+> **Same-day follow-up — F3 resolved**: the frontend CDNs are now **version-pinned** in
+> `web/index.modular.html` — `vue@3.5.43` (was floating `@3`) and `cdn.tailwindcss.com/3.4.17` (was
+> unpinned; the live redirect target that day). Both pins were sha256-verified byte-identical to what
+> served before, so behavior is unchanged — the page was re-verified live (full Vue mount, Tailwind
+> styling, API 200s, no console errors).
 
 ## Verdict
 
@@ -19,23 +25,23 @@ against `requirements*.txt` and the repo's actual imports.
   exact installed freeze of `.venv314` and against `requirements.txt` (run from a throwaway 3.14 tool venv).
 - **No declared-vs-installed drift**: all 15 canonical pins from `requirements.txt` + `requirements-dev.txt`
   are present in the venv at the pinned versions; `pip check` reports no broken requirements on either venv.
-- **3 findings remain** (below) — hygiene, not compromise. F1/F2 are resolved; nothing in the venv is
-  unexplained.
+- **1 finding remains** (F4, accepted risk) — hygiene, not compromise. F1/F2/F3 are resolved; nothing in
+  the venv or the loaded frontend is unexplained.
 
 | # | Finding | Severity | Action |
 |---|---|---|---|
 | ~~F1~~ | ~~`pip-audit` + `cyclonedx-python-lib` (~20 transitives) installed in the production venv, declared nowhere~~ | ~~Low~~ **Resolved 2026-10-09** | Uninstalled from `.venv314`; audits/SBOM generation now run from throwaway tool venvs in `/tmp` |
 | ~~F2~~ | ~~True strays: `redis`, `python-pptx` + `pillow`/`xlsxwriter`~~ | ~~Low~~ **Resolved 2026-10-09** | Uninstalled from both venvs (`.venv` also carried an orphaned `lxml` + `async-timeout`); SBOM regenerated |
-| F3 | Frontend supply chain: `vue@3` is a **floating major tag** and the Tailwind Play CDN is **unpinned** (only axios is pinned, at 1.6.0) | Medium | Pin exact versions or self-host the three CDN files |
+| ~~F3~~ | ~~Frontend supply chain: `vue@3` floating major tag, Tailwind Play CDN unpinned~~ | ~~Medium~~ **Resolved 2026-10-09** | Pinned `vue@3.5.43` + `cdn.tailwindcss.com/3.4.17` in `web/index.modular.html` (sha256-verified identical to prior live bytes); axios already pinned at 1.6.0 |
 | F4 | The Python **3.9 CI leg** intentionally keeps last-3.9 `starlette`/`pytest` with documented accepted risk (PYSEC-2026-248/2281/2280, -1845); the 3.14 production leg is clean | Accepted | Revisit when 3.9 leaves the CI matrix (tracker item #9) |
 
 ## A. Frontend runtime (3 components, loaded from CDNs in `web/index.modular.html`)
 
 | Component | Version | What it is / why it's here |
 |---|---|---|
-| vue | 3.5.43 (from **floating** `@3` tag) | The entire UI shell — every tab component (`DatabaseTab`, `AnalysisTab`, …) is a Vue options component rendered by `createApp` in `app.modular.js`. Global build, no bundler. |
+| vue | 3.5.43 (**pinned**) | The entire UI shell — every tab component (`DatabaseTab`, `AnalysisTab`, …) is a Vue options component rendered by `createApp` in `app.modular.js`. Global build, no bundler. |
 | axios | 1.6.0 (pinned) | HTTP client behind `web/modules/api.js`; every API call (canonical-first with legacy `/api/db/*` fallback) goes through it. |
-| tailwindcss | CDN, **unpinned** | The Play CDN compiles Tailwind classes at runtime in the browser; all styling in the components is Tailwind utility classes. |
+| tailwindcss | 3.4.17 (**pinned**) | The Play CDN compiles Tailwind classes at runtime in the browser; all styling in the components is Tailwind utility classes. |
 
 ## B. Web framework + server (direct runtime pins and their chain)
 
@@ -131,10 +137,8 @@ python3.14 -m venv /tmp/audit-tool314 && /tmp/audit-tool314/bin/pip install pip-
 
 ## Recommendations
 
-1. **Pin the frontend** (F3): exact-version jsdelivr URLs (or self-host) for `vue` and Tailwind — the single
-   biggest supply-chain exposure in this stack, since a floating tag can change under you.
-2. **Hash-pin** (`pip-compile --generate-hashes`): pip-audit's own output recommends it, and it closes the
+1. **Hash-pin** (`pip-compile --generate-hashes`): pip-audit's own output recommends it, and it closes the
    "same version, different artifact" gap that version pins alone leave open.
-3. Regenerate the SBOM in CI on every push to `dev-dalton` and diff it — dependency drift becomes a
+2. Regenerate the SBOM in CI on every push to `dev-dalton` and diff it — dependency drift becomes a
    reviewable event instead of a surprise. (No repo script references pip-audit/cyclonedx today, so the
    commands above are the canonical recipe until one exists.)
