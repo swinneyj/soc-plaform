@@ -141,8 +141,12 @@ python3.14 -m venv /tmp/audit-tool314 && /tmp/audit-tool314/bin/pip install pip-
 
 ## Recommendations
 
-1. **Hash-pin** (`pip-compile --generate-hashes`): pip-audit's own output recommends it, and it closes the
-   "same version, different artifact" gap that version pins alone leave open.
+1. ~~**Hash-pin**~~ — **Done 2026-10-09**: both requirements files are hash-locked (full closure of every
+   pin, both marker branches, sdist + every platform wheel, linux-only deps included) by
+   `scripts/pin_requirements.py`, which is idempotent and coverage-checked. pip auto-enables
+   `--require-hashes` the moment any line carries a hash, so the closure must stay complete — regenerate
+   with that script after any pin change. The marker gate validates hash shape, strips them, and keeps
+   checking markers (verified: a bad marker with a valid hash still fails the gate).
 2. Regenerate the SBOM in CI on every push to `dev-dalton` and diff it — dependency drift becomes a
    reviewable event instead of a surprise. `scripts/sbom` is the canonical entry point to wire into CI;
    regenerate on push and diff the result.

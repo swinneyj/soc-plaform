@@ -290,7 +290,7 @@
       "version": "2.1.1"
     },
     {
-      "bom-ref": "charset-normalizer==3.5.1",
+      "bom-ref": "charset-normalizer==3.5.2",
       "description": "The Real First Universal Charset Detector. Open, modern and actively maintained alternative to Chardet.",
       "externalReferences": [
         {
@@ -323,9 +323,9 @@
         }
       ],
       "name": "charset-normalizer",
-      "purl": "pkg:pypi/charset-normalizer@3.5.1",
+      "purl": "pkg:pypi/charset-normalizer@3.5.2",
       "type": "library",
-      "version": "3.5.1"
+      "version": "3.5.2"
     },
     {
       "bom-ref": "click==8.5.0",
@@ -697,7 +697,7 @@
       "version": "3.20"
     },
     {
-      "bom-ref": "iniconfig==2.3.0",
+      "bom-ref": "iniconfig==2.3.1",
       "description": "brain-dead simple config-ini parsing",
       "externalReferences": [
         {
@@ -715,9 +715,9 @@
         }
       ],
       "name": "iniconfig",
-      "purl": "pkg:pypi/iniconfig@2.3.0",
+      "purl": "pkg:pypi/iniconfig@2.3.1",
       "type": "library",
-      "version": "2.3.0"
+      "version": "2.3.1"
     },
     {
       "bom-ref": "packaging==26.3",
@@ -902,7 +902,7 @@
       "version": "3.3.6"
     },
     {
-      "bom-ref": "pycparser==3.0",
+      "bom-ref": "pycparser==3.11",
       "description": "C parser in Python",
       "externalReferences": [
         {
@@ -920,9 +920,9 @@
         }
       ],
       "name": "pycparser",
-      "purl": "pkg:pypi/pycparser@3.0",
+      "purl": "pkg:pypi/pycparser@3.11",
       "type": "library",
-      "version": "3.0"
+      "version": "3.11"
     },
     {
       "bom-ref": "pydantic==2.13.5",
@@ -1510,12 +1510,12 @@
     },
     {
       "dependsOn": [
-        "pycparser==3.0"
+        "pycparser==3.11"
       ],
       "ref": "cffi==2.1.1"
     },
     {
-      "ref": "charset-normalizer==3.5.1"
+      "ref": "charset-normalizer==3.5.2"
     },
     {
       "ref": "click==8.5.0"
@@ -1598,7 +1598,7 @@
       "ref": "idna==3.20"
     },
     {
-      "ref": "iniconfig==2.3.0"
+      "ref": "iniconfig==2.3.1"
     },
     {
       "ref": "packaging==26.3"
@@ -1625,7 +1625,7 @@
       "ref": "psycopg==3.3.6"
     },
     {
-      "ref": "pycparser==3.0"
+      "ref": "pycparser==3.11"
     },
     {
       "dependsOn": [
@@ -1649,7 +1649,7 @@
       "dependsOn": [
         "Pygments==2.21.0",
         "hypothesis==6.168.4",
-        "iniconfig==2.3.0",
+        "iniconfig==2.3.1",
         "packaging==26.3",
         "pluggy==1.6.0",
         "requests==2.34.2"
@@ -1668,7 +1668,7 @@
     {
       "dependsOn": [
         "certifi==2026.7.22",
-        "charset-normalizer==3.5.1",
+        "charset-normalizer==3.5.2",
         "idna==3.20",
         "urllib3==2.8.0"
       ],
@@ -1733,7 +1733,7 @@
       },
       {
         "name": "repo:commit",
-        "value": "7f545a5"
+        "value": "38fd03f"
       },
       {
         "name": "generated:from",

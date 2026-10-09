@@ -77,6 +77,7 @@ jobs:
             scripts/start \
             scripts/install-hooks \
             scripts/secrets-keychain \
+            scripts/sbom \
             scripts/soc-platform.command \
             scripts/start_platform.sh \
             scripts/restart_api.sh \

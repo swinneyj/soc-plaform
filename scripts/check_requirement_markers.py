@@ -13,7 +13,11 @@ Scope: exact pins (`name==version`, optional extras) in the dual-runtime
 requirement files, each optionally followed by a `; marker` clause. Markers
 may use python_version comparisons joined by `and`/`or`; anything else
 (unknown variables, other marker fields, parentheses) fails loudly rather
-than being silently skipped.
+than being silently skipped. The files are hash-locked (every pin carries
+pip's `--hash=sha256:` continuations, see scripts/pin_requirements.py):
+hash options are artifact-integrity data, not pins or markers — their shape
+is validated, they are stripped, and the pin/marker check then runs on the
+requirement itself; a malformed --hash token is a loud usage error.
 
 Targets are derived from the `python-version` matrix in
 .github/workflows/tests.yml (override with repeated --python flags), so
@@ -247,6 +251,23 @@ def derive_targets(path):
 
 def parse_line(raw, where):
     line = re.split(r"\s+#", raw.strip(), maxsplit=1)[0].strip()
+    if not line or line.startswith("#"):
+        return None
+    # Hash-locked line: pip auto-enables --require-hashes as soon as any
+    # requirement carries a --hash, so pins are emitted as
+    # `name==ver ; marker \` + indented `--hash=sha256:<hex>` lines.
+    # Validate the hash shapes (loud on malformed), strip them plus any
+    # line-continuation backslash, then check the pin/marker below —
+    # integrity data must not blind the interpreter-coverage check.
+    if "--hash=" in line:
+        for token in re.findall(r"--hash=\S+", line):
+            if not re.fullmatch(r"--hash=sha256:[0-9a-fA-F]{64}", token.rstrip("\\")):
+                raise UsageError(
+                    "%s: malformed hash option %r (expected "
+                    "--hash=sha256:<64 hex chars>)" % (where, token)
+                )
+        line = re.sub(r"\s*--hash=\S+", "", line).strip()
+    line = line.rstrip("\\").strip()
     if not line or line.startswith("#"):
         return None
     req, sep, marker = line.partition(";")
