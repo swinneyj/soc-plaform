@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# scripts/sbom — regenerate, validate, and audit docs/SBOM.json in one command.
+#
+# Why this exists: docs/SBOM.json (CycloneDX 1.6) must track the production
+# venv (.venv314) plus the three CDN frontend libs, and docs/SBOM-AUDIT.md's
+# findings only hold if the SBOM is regenerated after every dependency change.
+# The recipe previously lived only as prose in the audit doc and tool venvs
+# sat ad hoc in /tmp — this script is the canonical entry point (used by
+# humans today, CI tomorrow).
+#
+# What it does, in order:
+#   1. snapshot  — cyclonedx-py over .venv314, reproducible output (no timestamp)
+#   2. post-process — root component, repo provenance properties, and the three
+#      frontend CDN components (there is no npm toolchain to snapshot them;
+#      versions mirror web/index.modular.html)
+#   3. validate  — strict check against the official CycloneDX 1.6 JSON schema
+#   4. audit     — pip-audit against (a) the exact installed freeze and
+#      (b) the declared pins in requirements.txt
+#
+# Tooling (cyclonedx-bom, jsonschema, pip-audit — all version-pinned) lives in
+# a throwaway tool venv under $TMPDIR, created on first run. Nothing is ever
+# installed into the project venvs (SBOM-AUDIT finding F1), and steps 3-4 need
+# network; step 1 alone works offline once the tool venv exists.
+#
+# Usage: scripts/sbom [--no-validate] [--no-audit]
+# Exit:  0 = every executed step passed; non-zero = first failing step.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+VENV=".venv314"
+OUT="docs/SBOM.json"
+TOOL="${TMPDIR:-/tmp}/soc-sbom-tool"
+TOOL_PY="$TOOL/bin/python"
+TOOL_PACKAGES=(cyclonedx-bom==7.5.0 jsonschema==4.25.1 pip-audit==2.10.1)
+
+DO_VALIDATE=1
+DO_AUDIT=1
+for arg in "$@"; do
+    case "$arg" in
+        --no-validate) DO_VALIDATE=0 ;;
+        --no-audit)    DO_AUDIT=0 ;;
+        -h|--help)
+            sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0 ;;
+        *)
+            echo "FAIL: unknown flag '$arg' (see --help)" >&2
+            exit 2 ;;
+    esac
+done
+
+if [ ! -x "$VENV/bin/python" ]; then
+    echo "FAIL: $VENV/bin/python not found — create the production venv first" >&2
+    exit 1
+fi
+
+# --- tool venv bootstrap (idempotent; installs only if imports are missing) ---
+if [ ! -x "$TOOL_PY" ]; then
+    BOOT_PY="${PYTHON314:-$(command -v python3.14 || true)}"
+    if [ -z "$BOOT_PY" ]; then
+        echo "FAIL: python3.14 not found — needed to create the tool venv at $TOOL" >&2
+        exit 1
+    fi
+    "$BOOT_PY" -m venv "$TOOL"
+fi
+if ! "$TOOL_PY" -c "import cyclonedx_py, jsonschema, pip_audit" 2>/dev/null; then
+    echo "── installing pinned tool packages into $TOOL ──"
+    "$TOOL_PY" -m pip install -q "${TOOL_PACKAGES[@]}"
+fi
+
+# --- 1. snapshot the production venv (reproducible: no timestamp) ---
+RAW="$(mktemp "${TMPDIR:-/tmp}/sbom-raw.XXXXXX")"
+trap 'rm -f "$RAW"' EXIT
+echo "── 1/4 snapshot: cyclonedx-py over $VENV ──"
+"$TOOL/bin/cyclonedx-py" environment "$VENV/bin/python" \
+    --of json -o "$RAW" --output-reproducible --sv 1.6
+
+# --- 2. post-process: provenance + frontend components ---
+echo "── 2/4 post-process: root component, provenance, frontend CDNs ──"
+export SBOM_RAW="$RAW" SBOM_OUT="$OUT" SBOM_VENV="$VENV/bin/python"
+export SBOM_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+export SBOM_COMMIT="$(git rev-parse --short HEAD)"
+"$TOOL_PY" <<'PY'
+import json
+import os
+import subprocess
+
+doc = json.load(open(os.environ["SBOM_RAW"]))
+
+pyver = subprocess.check_output(
+    [os.environ["SBOM_VENV"], "-V"], text=True
+).strip().replace("Python ", "")
+
+doc.setdefault("metadata", {})
+doc["metadata"]["component"] = {
+    "bom-ref": "soc-plaform",
+    "type": "application",
+    "name": "soc-plaform",
+    "version": "v1.1.0",
+    "description": (
+        "SOC Platform — local-first Splunk notable triage, AI analysis, "
+        "and closure-note workflow"
+    ),
+    "externalReferences": [
+        {"type": "vcs", "url": "https://github.com/swinneyj/soc-plaform"}
+    ],
+}
+doc["metadata"]["properties"] = [
+    {"name": "repo:branch", "value": os.environ["SBOM_BRANCH"]},
+    {"name": "repo:commit", "value": os.environ["SBOM_COMMIT"]},
+    {
+        "name": "generated:from",
+        "value": (
+            "cyclonedx-py environment (.venv314 = production/3.14 branch, "
+            f"Python {pyver})"
+        ),
+    },
+    {
+        "name": "scope:note",
+        "value": (
+            "venv snapshot is lean: runtime pins (requirements.txt) + declared "
+            "dev tooling (pytest, hypothesis, pyflakes); ad-hoc audit tooling "
+            "(pip-audit, cyclonedx-python-lib) and unused strays were removed "
+            "2026-10-09 — audits run from a throwaway tool venv instead; "
+            "dual 3.9/3.14 branches documented in requirements.txt"
+        ),
+    },
+    {
+        "name": "frontend:note",
+        "value": (
+            "frontend has no npm toolchain; Vue/axios/Tailwind load from CDNs "
+            "in web/index.modular.html (all three version-pinned 2026-10-09) "
+            "— components appended below"
+        ),
+    },
+]
+
+# Keep in sync with the <script src> pins in web/index.modular.html.
+frontend = [
+    {
+        "bom-ref": "npm:vue@3.5.43",
+        "type": "library",
+        "name": "vue",
+        "version": "3.5.43",
+        "purl": "pkg:npm/vue@3.5.43",
+        "description": (
+            "Vue 3 global build; version-pinned in web/index.modular.html at "
+            "the previously live 3.5.43 (sha256-verified byte-identical to the "
+            "former floating @3 tag, 2026-10-09)"
+        ),
+        "externalReferences": [
+            {
+                "type": "distribution",
+                "url": "https://cdn.jsdelivr.net/npm/vue@3.5.43/dist/vue.global.js",
+            }
+        ],
+    },
+    {
+        "bom-ref": "npm:axios@1.6.0",
+        "type": "library",
+        "name": "axios",
+        "version": "1.6.0",
+        "purl": "pkg:npm/axios@1.6.0",
+        "description": "HTTP client; version-pinned in web/index.modular.html",
+        "externalReferences": [
+            {
+                "type": "distribution",
+                "url": "https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js",
+            }
+        ],
+    },
+    {
+        "bom-ref": "npm:tailwindcss@3.4.17",
+        "type": "library",
+        "name": "tailwindcss",
+        "version": "3.4.17",
+        "purl": "pkg:npm/tailwindcss@3.4.17",
+        "description": (
+            "Tailwind Play CDN (runtime JIT build); version-pinned in "
+            "web/index.modular.html at the previously live 3.4.17 "
+            "(sha256-verified, 2026-10-09)"
+        ),
+        "externalReferences": [
+            {"type": "distribution", "url": "https://cdn.tailwindcss.com/3.4.17"}
+        ],
+    },
+]
+existing = {c["name"] for c in doc.get("components", [])}
+for c in frontend:
+    if c["name"] not in existing:
+        doc["components"].append(c)
+
+with open(os.environ["SBOM_OUT"], "w") as f:
+    json.dump(doc, f, indent=2, sort_keys=True)
+    f.write("\n")
+print(f"     {len(doc['components'])} components written to {os.environ['SBOM_OUT']}")
+PY
+
+# --- 3. validate against the official CycloneDX 1.6 schema ---
+if [ "$DO_VALIDATE" = "1" ]; then
+    echo "── 3/4 validate: official CycloneDX 1.6 schema ──"
+    "$TOOL_PY" - "$OUT" <<'PY'
+import json
+import sys
+import urllib.request
+
+import jsonschema
+
+SCHEMA_URL = (
+    "https://raw.githubusercontent.com/CycloneDX/specification/master/"
+    "schema/bom-1.6.schema.json"
+)
+schema = json.load(urllib.request.urlopen(SCHEMA_URL, timeout=30))
+doc = json.load(open(sys.argv[1]))
+errors = sorted(
+    jsonschema.Draft7Validator(schema).iter_errors(doc),
+    key=lambda e: list(e.path),
+)
+for e in errors[:10]:
+    print(f"SCHEMA ERROR: {list(e.path)} — {e.message[:200]}", file=sys.stderr)
+if errors:
+    sys.exit(1)
+print(f"     VALID: {sys.argv[1]} conforms to CycloneDX 1.6")
+PY
+else
+    echo "── 3/4 validate: skipped (--no-validate) ──"
+fi
+
+# --- 4. audit: exact installed set + declared pins ---
+if [ "$DO_AUDIT" = "1" ]; then
+    FREEZE="$(mktemp "${TMPDIR:-/tmp}/sbom-freeze.XXXXXX")"
+    "$VENV/bin/python" -m pip freeze --all > "$FREEZE"
+    echo "── 4/4 audit: pip-audit (installed freeze, then requirements.txt) ──"
+    "$TOOL/bin/pip-audit" -r "$FREEZE"
+    "$TOOL/bin/pip-audit" -r requirements.txt
+    rm -f "$FREEZE"
+else
+    echo "── 4/4 audit: skipped (--no-audit) ──"
+fi
+
+echo "OK: $OUT regenerated — review the diff:"
+git --no-pager diff --stat -- "$OUT" || true

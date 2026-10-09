@@ -120,7 +120,11 @@ stdlib `tomllib` on 3.14.)*
 |---|---|---|
 | pip | 26.2.1 | The venv's own installer — part of the environment cyclonedx-py snapshots; not an application dependency. |
 
-## Post-cleanup tool workflow (throwaway venvs, nothing installed in the project venv)
+## Tool workflow — `scripts/sbom` (one command)
+
+`scripts/sbom` runs the whole pipeline below: snapshot → post-process → schema-validate → double
+pip-audit, from a pinned throwaway tool venv under `$TMPDIR` (nothing is ever installed in the project
+venvs — finding F1 stays resolved). Flags: `--no-validate`, `--no-audit`. The underlying recipe:
 
 ```bash
 # SBOM regeneration (jsonschema lives here too, for validation)
@@ -140,5 +144,5 @@ python3.14 -m venv /tmp/audit-tool314 && /tmp/audit-tool314/bin/pip install pip-
 1. **Hash-pin** (`pip-compile --generate-hashes`): pip-audit's own output recommends it, and it closes the
    "same version, different artifact" gap that version pins alone leave open.
 2. Regenerate the SBOM in CI on every push to `dev-dalton` and diff it — dependency drift becomes a
-   reviewable event instead of a surprise. (No repo script references pip-audit/cyclonedx today, so the
-   commands above are the canonical recipe until one exists.)
+   reviewable event instead of a surprise. `scripts/sbom` is the canonical entry point to wire into CI;
+   regenerate on push and diff the result.
