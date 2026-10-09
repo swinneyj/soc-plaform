@@ -288,20 +288,87 @@
                 return;
             }
 
+            // Captured at click time: the checkbox could change while the
+            // request is in flight, and auto-promote must never fire for a
+            // historical (closed-record) paste.
+            const historicalPaste = this.notableHistorical;
             this.notablePasteSaving = true;
+            let pasteResult = null;
             try {
-                this.notablePasteResult = await API.pasteNotable({
+                pasteResult = await API.pasteNotable({
                     raw_text: this.notablePasteText,
                     redaction_enabled: this.notableRedactionEnabled,
-                    historical: this.notableHistorical
+                    historical: historicalPaste
                 });
+                this.notablePasteResult = pasteResult;
                 this.notablePasteText = '';
                 this.loadRecentNotables();
                 this.loadDbStats();
             } catch (err) {
                 console.error('Failed to save pasted notable:', err.response?.data?.detail || err.message);
+                return;
             } finally {
                 this.notablePasteSaving = false;
+            }
+
+            // Auto-promote-on-save: after the save UI settles, send exactly
+            // the events this paste just created straight to triage.
+            if (this.notableAutoPromote && historicalPaste) {
+                this.bulkPromoteSummary = 'Auto-promote skipped: historical pastes are closed records.';
+            } else if (this.notableAutoPromote) {
+                await this.autoPromotePastedEvents((pasteResult && pasteResult.events) || []);
+            }
+        },
+
+        // Auto-promote-on-save: promote exactly the events this paste created
+        // (never dedup-skipped segments) with the same per-item outcome chips
+        // and refresh fan-out as bulk promote. The paste response's events[]
+        // carry { event_id, deduplicated } per segment.
+        async autoPromotePastedEvents(events) {
+            if (this.bulkPromoteNotablesRunning) {
+                return;
+            }
+
+            const candidates = (Array.isArray(events) ? events : [])
+                .filter(seg => seg && seg.event_id != null && !seg.deduplicated);
+            if (!candidates.length) {
+                this.bulkPromoteSummary = 'Auto-promote: no new notables to promote (all segments were duplicates).';
+                return;
+            }
+
+            this.bulkPromoteNotablesRunning = true;
+            this.bulkPromoteSummary = '';
+            this.bulkPromoteOutcome = {};
+            this.bulkPromoteProgress = { done: 0, total: candidates.length };
+            const outcome = {};
+            let done = 0;
+            try {
+                for (const seg of candidates) {
+                    try {
+                        await API.promoteNotable(seg.event_id);
+                        outcome[seg.event_id] = { state: 'promoted' };
+                    } catch (err) {
+                        const detail = (err.response && err.response.data && err.response.data.detail) || err.message || 'promote failed';
+                        outcome[seg.event_id] = { state: 'failed', detail };
+                        console.error('Auto-promote failed for notable', seg.event_id, ':', detail);
+                    }
+                    done += 1;
+                    this.bulkPromoteOutcome = { ...outcome };
+                    this.bulkPromoteProgress = { done, total: candidates.length };
+                }
+
+                const ok = candidates.filter(s => outcome[s.event_id] && outcome[s.event_id].state === 'promoted').length;
+                const failed = candidates.length - ok;
+                this.bulkPromoteSummary = 'Auto-promoted ' + ok + ' of ' + candidates.length + ' saved notable(s) to triage'
+                    + (failed ? ' (' + failed + ' failed)' : '') + '.';
+
+                await this.loadRecentNotables();
+                await this.loadTriageData();
+                await this.loadAnalysisCases();
+                await this.loadDbStats();
+            } finally {
+                this.bulkPromoteNotablesRunning = false;
+                this.bulkPromoteProgress = null;
             }
         },
 

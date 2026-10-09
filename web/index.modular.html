@@ -59,6 +59,7 @@
                 :notable-paste-segment-estimate="notablePasteSegmentEstimate"
                 :notable-redaction-enabled="notableRedactionEnabled"
                 :notable-historical="notableHistorical"
+                :notable-auto-promote="notableAutoPromote"
                 :notable-paste-saving="notablePasteSaving"
                 :notable-paste-result="notablePasteResult"
                 :show-open-notables-only="showOpenNotablesOnly"
@@ -86,6 +87,7 @@
                 @update:notable-paste-text="notablePasteText = $event"
                 @update:notable-redaction-enabled="notableRedactionEnabled = $event"
                 @update:notable-historical="notableHistorical = $event"
+                @update:notable-auto-promote="notableAutoPromote = $event"
                 @save-pasted-notable="savePastedNotable"
                 @load-historical-notables="loadHistoricalNotables"
                 @update:historical-notables-visible="historicalNotablesVisible = $event"
@@ -343,7 +345,7 @@
 
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=13"></script>
-    <script src="modules/database.js?v=20"></script>
+    <script src="modules/database.js?v=21"></script>
     <script src="modules/analysis.js?v=20"></script>
     <script src="modules/tools.js?v=12"></script>
     <script src="modules/closure.js?v=10"></script>
@@ -354,7 +356,7 @@
     <script src="components/LoginModal.js?v=1"></script>
     <script src="components/SplunkBoundaryWidget.js?v=2"></script>
     <script src="components/ToolsTab.js?v=12"></script>
-    <script src="components/DatabaseTab.js?v=28"></script>
+    <script src="components/DatabaseTab.js?v=30"></script>
     <script src="components/AnalysisTab.js?v=20"></script>
     <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=17"></script>
@@ -362,6 +364,6 @@
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=22"></script>
+    <script src="app.modular.js?v=25"></script>
 </body>
 </html>

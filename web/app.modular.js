@@ -59,6 +59,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                     notablePasteText: '',
                     notableRedactionEnabled: true,
                     notableHistorical: false,
+                    notableAutoPromote: false,
                     notablePasteSaving: false,
                     notablePasteResult: null,
                     notablePromotingId: null,
@@ -456,17 +457,86 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 ...(window.ToolsMethods || {}),
                 ...(window.ClosureMethods || {}),
                 ...(window.CodeReviewMethods || {}),
-            },
-            watch: {
-                dbStats: {
-                    handler(newVal) {
-                        if (newVal && typeof newVal.triage_cases === 'number' && newVal.triage_cases !== this.triageData.length) {
-                            this.loadTriageData();
-                            this.loadRecentNotables();
-                            this.loadAnalysisCases();
+
+                // ------------------------------------------------------------------
+                // Polling scheduler: ONE ticker for every background refresh.
+                // Replaces the nine independent setInterval calls that used to live
+                // in mounted(). Each job keeps its own cadence, skips a beat while
+                // its previous run is still in flight (in-flight dedupe), and
+                // pauses while the tab is hidden (draft autosave opts out so
+                // unsaved analysis work keeps landing). Returning to the tab
+                // catches every job up immediately.
+                // ------------------------------------------------------------------
+                startPolling() {
+                    const now = Date.now();
+                    const jobs = [
+                        { name: 'jobs', every: 5000, run: () => this.loadJobs() },
+                        { name: 'reports', every: 10000, run: () => this.loadReports() },
+                        { name: 'health', every: 15000, run: () => this.checkHealth() },
+                        { name: 'ollama', every: 30000, run: () => this.checkOllama() },
+                        { name: 'rules', every: 30000, run: () => this.loadRules() },
+                        { name: 'triage', every: 30000, run: () => this.loadTriageData() },
+                        { name: 'notables', every: 30000, run: () => this.loadRecentNotables() },
+                        {
+                            name: 'stats',
+                            every: 30000,
+                            run: async () => {
+                                const before = this.dbStats && this.dbStats.triage_cases;
+                                await this.loadDbStats();
+                                const after = this.dbStats && this.dbStats.triage_cases;
+                                // Case count actually changed (external write):
+                                // refresh the case lists now. This replaces the old
+                                // dbStats watcher, whose `triage_cases !==
+                                // triageData.length` guard was wrong whenever a
+                                // filter or the 50-row cap applied — i.e. it fired
+                                // three redundant reloads on every stats tick.
+                                if (typeof after === 'number' && after !== before) {
+                                    await Promise.all([this.loadTriageData(), this.loadAnalysisCases()]);
+                                }
+                            }
+                        },
+                        {
+                            name: 'draft',
+                            every: 15000,
+                            whenHidden: true,
+                            run: () => {
+                                if (this.analysisCaseId && !this.analysisRunning && this.persistAnalysisDraft) {
+                                    this.persistAnalysisDraft();
+                                }
+                            }
                         }
-                    },
-                    deep: true
+                    ].map(job => ({ ...job, lastRun: now, running: false }));
+
+                    this._pollJobs = jobs;
+                    this._pollTimer = setInterval(() => this._pollTick(), 1000);
+                    this._pollVisibility = () => {
+                        if (document.hidden) return;
+                        jobs.forEach(job => { job.lastRun = 0; });
+                        this._pollTick();
+                    };
+                    document.addEventListener('visibilitychange', this._pollVisibility);
+
+                    // Introspection hook for smoke tests / debugging.
+                    // tick(hiddenOverride) exists because Blink seals
+                    // document.hidden (non-configurable) so it cannot be faked.
+                    window.__SOC_POLL__ = { jobs: this._pollJobs, tick: (hiddenOverride) => this._pollTick(hiddenOverride) };
+                },
+                _pollTick(hiddenOverride) {
+                    const hidden = hiddenOverride === undefined
+                        ? (typeof document !== 'undefined' && document.hidden)
+                        : !!hiddenOverride;
+                    const now = Date.now();
+                    for (const job of this._pollJobs || []) {
+                        if (job.running) continue;                                    // in-flight dedupe
+                        if (hidden && !job.whenHidden) continue;                      // paused while hidden
+                        if (job.lastRun && now - job.lastRun < job.every) continue;    // not due yet
+                        job.lastRun = now;                                            // cadence from start
+                        job.running = true;
+                        Promise.resolve()
+                            .then(() => job.run())
+                            .catch(err => console.error('poll[' + job.name + '] failed:', err))
+                            .finally(() => { job.running = false; });
+                    }
                 }
             },
             mounted() {
@@ -486,20 +556,12 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                 // reopens the login modal for every call in the app.
                 window.__SOC_ON_SESSION_EXPIRED__ = () => { this.auth.showLogin = true; };
 
-                // Poll for updates
-                setInterval(() => this.loadJobs(), 5000);
-                setInterval(() => this.loadReports(), 10000);
-                setInterval(() => this.checkHealth(), 15000);
-                setInterval(() => this.checkOllama(), 30000);
-                setInterval(() => this.loadDbStats(), 30000);
-                setInterval(() => this.loadRules(), 30000);
-                setInterval(() => this.loadTriageData(), 30000);
-                setInterval(() => this.loadRecentNotables(), 30000);
-                // Keep unfinished analysis work resumable across browsers.
-                setInterval(() => {
-                    if (this.analysisCaseId && !this.analysisRunning && this.persistAnalysisDraft) {
-                        this.persistAnalysisDraft();
-                    }
-                }, 15000);
+                // Poll for updates — one scheduler (in-flight dedupe +
+                // hidden-tab pause) replaces the nine setInterval timers.
+                this.startPolling();
+            },
+            beforeUnmount() {
+                clearInterval(this._pollTimer);
+                document.removeEventListener('visibilitychange', this._pollVisibility);
             }
         }).mount('#app');
