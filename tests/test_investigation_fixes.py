@@ -838,6 +838,9 @@ class TestUIEvidencePromoteLoadFlows:
     def test_bulk_promote_filters_continues_and_refreshes_once(self):
         self._run("promote_all_open")
 
+    def test_paste_auto_promote_promotes_added_segments_only(self):
+        self._run("paste_auto_promote")
+
     def test_closure_readiness_punchlist_routes_blockers(self):
         self._run("closure_readiness_punchlist")
 

@@ -23,7 +23,7 @@
  *   promote                  promote_historical_guard
  *   promote_failure          promote_all_open
  *   closure_readiness_punchlist   closure_blocked_generate_punchlist
- *   draft_autosave_debounce  evidence_ledger_view
+ *   draft_autosave_debounce  evidence_ledger_view  paste_auto_promote
  *   loop_timeline_panel  snapshot_migration_folds_legacy_maps
  *   api_layer_canonical_fallback  stepper_guards  analyze_stage_models
  * Exit code 0 = all assertions held.
@@ -455,6 +455,82 @@ const scenarios = {
         comp.bulkPromoteNotablesRunning = true;
         await comp.promoteAllOpenPastedNotables();
         assert(attempted.length === 2, 're-entrant bulk promote must not post again');
+    },
+
+    // Auto-promote-on-save: the paste response's events[] drive promote
+    // calls for newly-added segments only (dedup-skipped segments never
+    // promote), historical pastes never promote, and option-off is a
+    // plain save.
+    async paste_auto_promote() {
+        const attempted = [];
+        const posts = spy(async (url) => {
+            if (url === '/api/notables/paste') {
+                return { data: {
+                    success: true,
+                    added: 2,
+                    skipped: 1,
+                    segment_count: 3,
+                    events: [
+                        { event_id: 51, deduplicated: false },
+                        { event_id: 52, deduplicated: true },
+                        { event_id: 53, deduplicated: false },
+                    ],
+                } };
+            }
+            const id = Number(url.split('/notables/')[1].split('/')[0]);
+            attempted.push(id);
+            return { data: {} };
+        });
+        const { ctx, alertCalls, errorCalls } = makeSandbox({ post: posts });
+        const methods = await loadDatabase(ctx);
+        const { comp, counters } = databaseComp(methods, {
+            notablePasteText: 'title: autopromote probe',
+            notableRedactionEnabled: true,
+            notableHistorical: false,
+            notableAutoPromote: true,
+            notablePasteSaving: false,
+            notablePasteResult: null,
+            bulkPromoteSummary: '',
+            bulkPromoteOutcome: {},
+            bulkPromoteProgress: null,
+        });
+
+        await comp.savePastedNotable();
+
+        const pasteCall = posts.calls.find(c => c[0] === '/api/notables/paste');
+        assert(pasteCall, 'save must POST the paste route');
+        assert(pasteCall[1].historical === false && pasteCall[1].redaction_enabled === true,
+            'paste payload contract changed: ' + JSON.stringify(pasteCall[1]));
+        assert(attempted.join(',') === '51,53',
+            'auto-promote must promote added segments only (skip deduplicated), got: ' + attempted.join(','));
+        assert(comp.notablePasteText === '', 'paste text must clear after save');
+        assert(counters.refreshes === 6,
+            'auto-promote must refresh 2x after save + 4x after promotion, got ' + counters.refreshes);
+        assert(comp.bulkPromoteSummary === 'Auto-promoted 2 of 2 saved notable(s) to triage.',
+            'summary must report the auto-promote outcome, got: ' + comp.bulkPromoteSummary);
+        assert(comp.bulkPromoteOutcome[51] && comp.bulkPromoteOutcome[51].state === 'promoted',
+            'per-item outcome must light up added ids: ' + JSON.stringify(comp.bulkPromoteOutcome));
+        assert(comp.bulkPromoteNotablesRunning === false && comp.bulkPromoteProgress === null,
+            'busy/progress state must reset after auto-promote');
+        assert(alertCalls.length === 0, 'auto-promote must not alert: ' + JSON.stringify(alertCalls));
+        assert(errorCalls.length === 0, 'auto-promote logged errors: ' + JSON.stringify(errorCalls));
+
+        // Historical pastes are closed records: auto-promote explains, never POSTs.
+        comp.notableHistorical = true;
+        comp.notablePasteText = 'title: closed record';
+        comp.notablePasteResult = null;
+        comp.bulkPromoteSummary = '';
+        await comp.savePastedNotable();
+        assert(attempted.length === 2, 'historical paste must not promote, got: ' + attempted.join(','));
+        assert(comp.bulkPromoteSummary.includes('historical pastes are closed records'),
+            'historical skip must be explained, got: ' + comp.bulkPromoteSummary);
+
+        // Option off: plain save, no promote traffic at all.
+        comp.notableHistorical = false;
+        comp.notableAutoPromote = false;
+        comp.notablePasteText = 'title: plain save';
+        await comp.savePastedNotable();
+        assert(attempted.length === 2, 'auto-promote off must not promote, got: ' + attempted.join(','));
     },
 
     // S9: closure readiness punch list loads, survives failure, and its
