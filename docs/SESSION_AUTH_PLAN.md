@@ -93,6 +93,16 @@ Roles only bind in `AUTH_MODE=session`. Today's armed-key behavior (key = full a
 reads open) is unchanged until then. (`/api/code-review/zip` accepts uploads and stays
 analyst in v1 — flagged for the C2 hardening review.)
 
+> **Owner decision (Oct 14, 2026 — closes API review F4):** analyst delete
+> powers in the matrix above are intentional, not a missing dependency.
+> Cleanup (stale cases, bad evidence rows, superseded rules) is analyst
+> work — an admin round-trip for every delete would grind investigations
+> to a halt. The genuinely cross-system surfaces stay admin-gated
+> (tool execution/registry, boundary admit+purge, job delete/clear), and
+> retention/backups stay CLI-only. Pinned by `test_role_gate_analyst_403`
+> (analyst 403s on the admin families) plus the session read-gate tests.
+> Revisit only if exposure ever widens beyond localhost/Tailscale.
+
 ---
 
 ## 4. Storage

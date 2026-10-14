@@ -35,7 +35,7 @@ The integration is **substantially hardened** — far past the "no auth" baselin
 ### F4 — MEDIUM (intent-dependent): RBAC covers only 9 endpoints
 
 `require_role("admin")` exists only on the Splunk-boundary (2) and tools/registry (7) endpoints. Every other mutating route — case create/update/**delete**, batch-delete, evidence save/**delete**, notables, promote, closure, rules CRUD, code-review, analyze, paste — enforces only "authenticated + CSRF" in session mode. An **analyst**-role session can delete cases, evidence, and rules.
-**Action:** confirm this matches SESSION_AUTH_PLAN §3's "admin families" intent. If deletion families were meant to be admin-only, the dependency is missing; if analyst-deletes are intended, document the matrix explicitly.
+**Decision (Oct 14, 2026):** analyst deletes retained intentionally (owner) — cleanup is analyst work; the matrix in SESSION_AUTH_PLAN §3 now records this explicitly with the rationale. Admin gate stays on tools/registry/boundary/jobs-delete; no code change.
 
 ### F5 — MEDIUM: login has no brute-force protection and a username-enumeration timing side channel
 
