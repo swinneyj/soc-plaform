@@ -67,7 +67,7 @@ Args are passed as an argv list (no shell — good), but client-controlled argum
 
 ### F11 — LOW (accepted, documented): Python 3.9 branch pins vulnerable starlette/fastapi
 
-`requirements.txt` header records PYSEC-2026-248/2281/2280 and PYSEC-2026-1845 as accepted risk on the `<3.10` pins; the production (≥3.10) branch is clean and pip-audit passed. CI still exercises the 3.9 matrix — retiring 3.9 from the matrix closes the item.
+`requirements.txt` header recorded PYSEC-2026-248/2281/2280 and PYSEC-2026-1845 as accepted risk on the `<3.10` pins; the production (≥3.10) branch is clean and pip-audit passed. **Closed Oct 14, 2026:** the 3.9 leg is out of the CI matrix (owner decision), so the vulnerable pins are unexercised marker-dead branches — retained for local legacy venvs, not extended.
 
 ### F12 — LOW: expired `AuthSession` rows are never vacuumed
 

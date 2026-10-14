@@ -74,8 +74,10 @@ quarantine staging clean.
   (first run Sept 30 ~18:45 opened #1–#7); version bumps need a human merge
   decision, watching the dual-runtime pins
   (Settings → Code security); `dependabot.yml` itself is live.
-- **3.9 accepted-risk pins** — starlette 0.49.3 / pytest 8.4.2 have advisories
-  with no 3.9-compatible fix; retires with the 3.9 CI leg (tracker #9).
+- **3.9 accepted-risk pins — retired Oct 14, 2026** — the 3.9 CI leg is
+  gone (owner decision), so starlette 0.49.3 / pytest 8.4.2 are no longer
+  exercised anywhere; their `<3.10` pins stay marker-dead in
+  `requirements*.txt` for local legacy venvs only.
 - **Live Splunk rehearsal** — blocked on `SPLUNK_URL`/`SPLUNK_TOKEN`
   (`docs/SPLUNK_REHEARSAL.md`).
 - **D3 user-side hygiene** — Safari scrub, thread-deletion decision.

@@ -14,11 +14,13 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        # Dual-runtime matrix: 3.14 is the pinned dev/production runtime
-        # (.python-version, Dockerfile), 3.9 is the legacy venv still
-        # supported by the test suite. Keep both green until 3.9 retires
-        # (security tracker item #9).
-        python-version: ["3.14", "3.9"]
+        # Single-runtime matrix: 3.14 is the pinned dev/production runtime
+        # (.python-version, Dockerfile). The 3.9 leg was retired Oct 14,
+        # 2026 (owner decision) — 3.9 is EOL and its accepted-risk pins
+        # (security tracker item #9, SBOM-AUDIT F4) die with it. The
+        # <"3.10" pin branches stay in requirements*.txt (marker-dead on
+        # 3.14+) for any local 3.9 venv still around; nothing exercises them.
+        python-version: ["3.14"]
     steps:
       - name: Checkout Project Code
         uses: actions/checkout@v7
@@ -30,9 +32,9 @@ jobs:
 
       - name: Check pins vs markers (PyPI requires_python)
         # Fails fast when a python_version branch selects a pin that does not
-        # support that interpreter (e.g. hypothesis==6.149.1, requires >=3.10,
-        # pinned to the <"3.10" branch — it used to kill the 3.9 leg deep in
-        # pip's resolver). Stdlib only; targets are derived from this
+        # support that interpreter (it once caught hypothesis==6.149.1,
+        # requires >=3.10, pinned to the <"3.10" branch — that used to kill
+        # the retired 3.9 leg deep in pip's resolver). Stdlib only; targets
         # workflow's own python-version matrix (no hardcoded copy to drift
         # from), and it runs before any dependency install.
         run: python scripts/check_requirement_markers.py

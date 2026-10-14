@@ -1,10 +1,10 @@
 # Development/test-only dependencies. Runtime deps live in requirements.txt.
 # Install with:  pip install -r requirements-dev.txt
 #
-# Dual-runtime pins (CI matrix: 3.9 + 3.14), selected by python_version
-# marker. pytest 9 (>=9.0.3 fixes PYSEC-2026-1845) and pyflakes 4.x require
-# >=3.10; the 3.9 branch keeps the last supported versions (accepted risk,
-# see requirements.txt header / security tracker item #9).
+# Pins selected by python_version marker; the 3.14 branch is the live one.
+# pytest 9 (>=9.0.3 fixes PYSEC-2026-1845) and pyflakes 4.x require >=3.10;
+# the 3.9 branch keeps the last supported versions (unexercised since the
+# 3.9 CI leg retired Oct 14, 2026 — see requirements.txt header).
 #
 # httpx/httpx2 back starlette's TestClient (used by the API-level tests).
 # The 3.9 runtime's older starlette imports plain httpx; starlette 1.6+

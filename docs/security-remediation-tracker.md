@@ -89,7 +89,7 @@
 ### 9. Python 3.9 venv (EOL) ✅ RESOLVED
 - **What:** Local `.venv` runs Python 3.9.6 (macOS CommandLineTools system Python). 3.9 is end-of-life.
 - **Status Sept 25 (session 2):** resolved. `.python-version` pins `3.14`, Dockerfile stages moved to `python:3.14-slim`, `CONTAINERIZATION.md` aligned (`00c7e69`). `.venv314` (3.14.7) runs the full suite; the old 3.9 venv also still passes, verified both ways. Docker build not verifiable on this machine (no docker CLI) — first `docker compose build` should be watched.
-- **Follow-up:** 3.14 surfaced deprecation warnings (SQLAlchemy/`datetime.utcnow()` call sites ~`api/main.py:3339`; Starlette prefers `httpx2` for TestClient) — small cleanup ticket before a future Python removes them. **utcnow() portion resolved Sept 28, 2026** — see open item #5.
+- **Follow-up:** 3.14 surfaced deprecation warnings (SQLAlchemy/`datetime.utcnow()` call sites ~`api/main.py:3339`; Starlette prefers `httpx2` for TestClient) — small cleanup ticket before a future Python removes them. **Oct 14, 2026: 3.9 retired from the CI matrix (owner decision)** — the `.venv` (3.9) may linger locally but nothing gates on it; the `<3.10` requirement branches and their accepted-risk pins (F11) are unexercised. **utcnow() portion resolved Sept 28, 2026** — see open item #5.
 
 ### 10. Pip is ancient in the venv ✅ RESOLVED
 - **What:** pip 21.2.4 flagged during install.

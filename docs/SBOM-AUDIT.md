@@ -33,7 +33,7 @@ against `requirements*.txt` and the repo's actual imports.
 | ~~F1~~ | ~~`pip-audit` + `cyclonedx-python-lib` (~20 transitives) installed in the production venv, declared nowhere~~ | ~~Low~~ **Resolved 2026-10-09** | Uninstalled from `.venv314`; audits/SBOM generation now run from throwaway tool venvs in `/tmp` |
 | ~~F2~~ | ~~True strays: `redis`, `python-pptx` + `pillow`/`xlsxwriter`~~ | ~~Low~~ **Resolved 2026-10-09** | Uninstalled from both venvs (`.venv` also carried an orphaned `lxml` + `async-timeout`); SBOM regenerated |
 | ~~F3~~ | ~~Frontend supply chain: `vue@3` floating major tag, Tailwind Play CDN unpinned~~ | ~~Medium~~ **Resolved 2026-10-09** | Pinned `vue@3.5.43` + `cdn.tailwindcss.com/3.4.17` in `web/index.modular.html` (sha256-verified identical to prior live bytes); axios already pinned at 1.6.0 |
-| F4 | The Python **3.9 CI leg** intentionally keeps last-3.9 `starlette`/`pytest` with documented accepted risk (PYSEC-2026-248/2281/2280, -1845); the 3.14 production leg is clean | Accepted | Revisit when 3.9 leaves the CI matrix (tracker item #9) |
+| F4 | ~~The Python **3.9 CI leg** intentionally keeps last-3.9 `starlette`/`pytest` with documented accepted risk (PYSEC-2026-248/2281/2280, -1845)~~ | ~~Accepted~~ **Retired Oct 14, 2026** | 3.9 leg removed from the CI matrix (owner decision); the `<3.10` pins stay in `requirements*.txt` marker-dead and unexercised — do not extend. 3.14 production leg clean |
 
 ## A. Frontend runtime (3 components, loaded from CDNs in `web/index.modular.html`)
 

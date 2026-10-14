@@ -30,7 +30,8 @@ specified. `[mechanical after sign-off]` = run only after the named human gate.
 ### Gates (run after every code-touching step, before committing)
 ```bash
 .venv314/bin/python -m pytest 2>&1 | tail -1        # expect: N passed
-.venv/bin/python -m pytest 2>&1 | tail -1           # expect: N passed (same N)
+# (.venv 3.9 retired from CI Oct 14, 2026 — run it only if you touched
+# something 3.9-specific; the <3.10 pin branches are unexercised.)
 bash scripts/check_undefined_names.sh                    # expect: OK (auto-falls back to repo venv)
 bash scripts/check_no_merge_markers.sh              # expect: OK
 node scripts/check_web_option_keys.mjs              # expect: OK (dupe object keys = C1B.3 shadowing)

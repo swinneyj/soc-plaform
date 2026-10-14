@@ -1,11 +1,12 @@
-# Dual-runtime pins (CI matrix: 3.9 + 3.14). Each python_version branch
-# mirrors a locally verified venv exactly; pip selects the right branch.
+# Pins selected by python_version marker; the 3.14 branch is the live one.
 #
 # Security note: the starlette fixes (PYSEC-2026-248/2281/2280 -> >=1.1.0)
 # and the pytest fix (PYSEC-2026-1845 -> >=9.0.3) all require Python >=3.10.
-# The 3.9 branch therefore stays on the last 3.9-supporting (vulnerable)
-# versions as recorded accepted risk until 3.9 retires from the CI matrix
-# (security tracker item #9). The 3.14/production branch is clean.
+# The <"3.10" branch keeps the last 3.9-supporting versions as (formerly
+# accepted, now unexercised) risk: the 3.9 CI leg was retired Oct 14, 2026
+# (owner decision; security tracker item #9), so nothing verifies that
+# branch anymore. It stays for any local 3.9 venv still around — do not
+# extend it. The 3.14/production branch is clean.
 #
 # Hash-locked: every pin AND its transitive closure carry --hash=sha256
 # digests for both marker branches (pip auto-enables --require-hashes as
