@@ -45,6 +45,46 @@ Three services:
     the `libpq`/matching-`postgresql@N` fix. If you restore a Neon dump into the
     compose 16 container, expect a version-mismatch failure, not a silent success.
 
+### Cross-Platform Runtime Scripts
+
+In addition to the Docker Compose path, the repo ships native startup/backup scripts
+written once in PowerShell Core (`#!/usr/bin/env pwsh`) so they run on the same
+code base on Windows, macOS, and Linux without separate per-platform copies.
+
+The bash originals are still present for macOS-only environments; the pwsh versions
+are the cross-platform equivalents.
+
+| Task | Bash (macOS-native) | PowerShell Core (cross-platform) |
+|------|---------------------|----------------------------------|
+| Start the API after Postgres is up | `scripts/start_soc_api.sh` | `scripts/start_soc_api.ps1` |
+| Daily pg_dump backup + gzip + retention | `scripts/backup_db.sh` | `scripts/backup_db.ps1` |
+
+Key differences from the bash originals:
+
+- **No hardcoded Homebrew paths.** `start_soc_api.ps1` probes `ollama` on `PATH`
+  and then checks common install locations across Windows, Homebrew-on-Intel,
+  Homebrew-on-Apple-Silicon, and the macOS app bundle. `backup_db.ps1` finds
+  `gzip` the same way and falls back to system `/usr/bin/gzip` on Linux.
+- **Port probing uses .NET `TcpClient`** instead of `nc -z`, so it works wherever
+  PowerShell Core runs.
+- **`.env` loading** is shared logic between the two scripts (same repo-root-first
+  fallback as the bash originals).
+- **Uvicorn runs as a foreground child process** rather than `exec` — functionally
+  equivalent for interactive use; only the process-tree shape under a Windows
+  service manager differs from the bash `exec` version.
+- **Backup delegates to `scripts/export_postgres_dump.ps1`**, which already handles
+  driver-suffix stripping and the Docker fallback, then adds gzip + retention on top.
+
+Limitations (same as the bash originals, carried forward):
+
+- PostgreSQL must be listening on `127.0.0.1:5432` (the scripts do not start it).
+- A working venv Python must be present for uvicorn.
+- `backup_db.ps1` needs `pg_dump` (or Docker + a running `postgres` service) and
+  `gzip` on PATH.
+- Temp files for the backup pipeline land in `$env:TEMP` (`TEMP` on Windows,
+  `/tmp` on Unix) and are cleaned up on success and in `finally` on error. A
+  `kill -9` between gzip and move can leave a partial `.sql.gz.tmp` — same window
+  as the bash version.
 
 ### Core Libraries (Enhanced)
 
@@ -346,6 +386,8 @@ docker exec soc-api-service python Tools/base64_decoder/base64_decoder.py --targ
 - ✅ **Tools/core_lib/utils.py** — Enhanced for containerization
 - ✅ **api/main.py** — Full FastAPI service (600+ lines)
 - ✅ **api/__init__.py** — Package initialization
+- ✅ **scripts/start_soc_api.ps1** — Cross-platform API starter (PowerShell Core)
+- ✅ **scripts/backup_db.ps1** — Cross-platform daily backup (PowerShell Core)
 
 ---
 
