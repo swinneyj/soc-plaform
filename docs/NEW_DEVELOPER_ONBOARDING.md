@@ -7,10 +7,10 @@ This file is the shortest guided path for a new developer in this repo.
 Read these in order:
 
 1. `OPERATOR_CHEAT_SHEET.md`
-2. `docs\FLOW_SHEETS.md`
-3. `docs\SYSTEM_VISUAL_MAP.md`
-4. `docs\GIT_VISUAL_MAP.md`
-5. `docs\API_DB_VISUAL_MAP.md`
+2. `docs/FLOW_SHEETS.md`
+3. `docs/SYSTEM_VISUAL_MAP.md`
+4. `docs/GIT_VISUAL_MAP.md`
+5. `docs/API_DB_VISUAL_MAP.md`
 
 ## First Mental Models
 
@@ -49,8 +49,8 @@ flowchart TD
 
 Use this order:
 
-1. `docs\FLOW_SHEETS.md`
-2. `docs\SYSTEM_VISUAL_MAP.md`
-3. `docs\GIT_VISUAL_MAP.md`
-4. `docs\API_DB_VISUAL_MAP.md`
+1. `docs/FLOW_SHEETS.md`
+2. `docs/SYSTEM_VISUAL_MAP.md`
+3. `docs/GIT_VISUAL_MAP.md`
+4. `docs/API_DB_VISUAL_MAP.md`
 5. `scripts\troubleshoot_platform.ps1`

@@ -87,11 +87,25 @@ def test_execute_accepted_with_header_key(client, with_api_key):
     assert resp.status_code == 404
 
 
-def test_execute_accepted_with_query_key(client, with_api_key):
+def test_execute_rejected_with_query_key_by_default(client, with_api_key):
+    """F2: ?api_key= is ignored unless AUTH_ALLOW_QUERY_KEY=1 — a
+    query-only request 401s even with the right key (it would otherwise
+    leak via access logs, history, Referer and proxy logs)."""
     resp = client.post(
         "/api/execute?api_key=test-secret-key",
         json={"tool_name": "definitely-not-a-real-tool"},
     )
+    assert resp.status_code == 401
+
+
+def test_execute_accepted_with_query_key_when_flagged(client, with_api_key, monkeypatch):
+    """F2 opt-in: AUTH_ALLOW_QUERY_KEY=1 restores the smoke-test path."""
+    monkeypatch.setenv("AUTH_ALLOW_QUERY_KEY", "1")
+    resp = client.post(
+        "/api/execute?api_key=test-secret-key",
+        json={"tool_name": "definitely-not-a-real-tool"},
+    )
+    # Auth passed; handler runs and 404s on the unknown tool name.
     assert resp.status_code == 404
 
 
@@ -1589,3 +1603,90 @@ def test_indexer_output_dir_header_round_trip(tmp_path, monkeypatch):
     assert by_name["good"]["output_dirs"] == ["Data/Exports", "Data/Reports"]
     assert by_name["bad"]["output_dirs"] == ["Data/Reports"]
     assert "output_dirs" not in by_name["none"]
+
+
+# ---------------------------------------------------------------------------
+# API security review hardening: F9 body cap, F8 limiter bound, F13 headers,
+# F12 session vacuum (F2 covered above; F7 is a launch-time bind default).
+# ---------------------------------------------------------------------------
+
+def test_body_cap_rejects_huge_declared_length(client, with_api_key):
+    """F9: a declared Content-Length over MAX_BODY_BYTES 413s before any
+    parsing or auth work — even with a valid key."""
+    big = 11 * 1024 * 1024
+    resp = client.post(
+        "/api/execute",
+        content=b"x" * 100,  # body small; the declared length is the attack
+        headers={
+            "X-API-Key": "test-secret-key",
+            "Content-Length": str(big),
+        },
+    )
+    assert resp.status_code == 413
+    assert "too large" in resp.json()["detail"].lower()
+
+
+def test_body_cap_allows_normal_mutation(client, with_api_key):
+    """F9 negative control: an ordinary small body passes the cap and
+    reaches the handler (404 = unknown tool, i.e. auth + routing ran)."""
+    resp = client.post(
+        "/api/execute",
+        json={"tool_name": "definitely-not-a-real-tool"},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert resp.status_code == 404
+
+
+def test_rate_limiter_sweeps_fully_stale_ips(client):
+    """F8: any request on a limited path sweeps every fully-stale IP key,
+    so never-again-seen source IPs cannot accumulate without bound."""
+    import time as _time
+
+    api_main._RATE_HITS["9.9.9.9"] = [_time.time() - 120.0]
+    resp = client.post("/api/code-review", json={})
+    assert resp.status_code != 429  # admitted, not throttled
+    assert "9.9.9.9" not in api_main._RATE_HITS
+
+
+def test_security_headers_on_api_and_ui(client):
+    """F13: nosniff everywhere; no-store on /api/* but not on static UI."""
+    api_resp = client.get("/api/health")
+    assert api_resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert api_resp.headers.get("Cache-Control") == "no-store"
+    ui_resp = client.get("/index.modular.html")
+    assert ui_resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert ui_resp.headers.get("Cache-Control") != "no-store"
+
+
+def test_successful_login_vacuums_expired_sessions(session_client):
+    """F12: a successful login deletes expired AuthSession rows (bounded
+    table without a scheduler); live sessions survive."""
+    from datetime import timedelta
+
+    from db.models import AuthSession
+    from db.util import utcnow_naive
+
+    db = session_client.test_session()
+    user = _make_user(db, username="vacuum", password="pw123")
+    stale = AuthSession(
+        token_hash="0" * 64,
+        csrf_token="c" * 32,
+        user_id=user.id,
+        expires_at=utcnow_naive() - timedelta(hours=1),
+    )
+    live = AuthSession(
+        token_hash="1" * 64,
+        csrf_token="c" * 32,
+        user_id=user.id,
+        expires_at=utcnow_naive() + timedelta(hours=11),
+    )
+    db.add_all([stale, live])
+    db.commit()
+
+    resp = session_client.post(
+        "/api/auth/login", json={"username": "vacuum", "password": "pw123"}
+    )
+    assert resp.status_code == 200
+    remaining = {r.token_hash for r in db.query(AuthSession).all()}
+    assert "0" * 64 not in remaining  # expired row vacuumed
+    assert "1" * 64 in remaining  # live row untouched

@@ -110,7 +110,8 @@ def _issue_session(response: Response, user) -> dict:
 
 @router.post("/api/auth/login")
 def login(payload: LoginRequest, request: Request, response: Response):
-    from db.models import SessionLocal, User
+    from db.models import AuthSession, SessionLocal, User
+    from db.util import utcnow_naive
 
     client_ip = request.client.host if request.client else "?"
     if _login_throttled(client_ip, payload.username):
@@ -129,6 +130,13 @@ def login(payload: LoginRequest, request: Request, response: Response):
             _record_login_failure(client_ip, payload.username)
             raise HTTPException(status_code=401, detail="Invalid credentials")
         _clear_login_failures(client_ip, payload.username)
+        # F12: vacuum expired sessions on each successful login — logins
+        # are infrequent, so one indexed range delete per login bounds the
+        # table without a scheduler (which this repo deliberately avoids).
+        db.query(AuthSession).filter(
+            AuthSession.expires_at <= utcnow_naive()
+        ).delete(synchronize_session=False)
+        db.commit()
         return _issue_session(response, user)
     finally:
         db.close()

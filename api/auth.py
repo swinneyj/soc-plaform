@@ -6,8 +6,10 @@ dangerous routes — tests patch exactly one point (``api.auth._API_KEY``).
 
 Setting API_KEY activates gating; leaving it unset keeps local development
 friction free (localhost-only exposure). The frontend stamps X-API-Key on
-every axios request (web/utils/auth.js), and ``?api_key=`` is accepted as a
-query parameter for smoke tests.
+every axios request (web/utils/auth.js). ``?api_key=`` is accepted as a
+query parameter ONLY when AUTH_ALLOW_QUERY_KEY=1 is set (dev-only smoke
+tests) — query-param credentials leak into access logs, browser history,
+Referer headers and proxy logs, so the default is fail-closed (F2).
 """
 import hashlib
 import hmac
@@ -28,19 +30,30 @@ _API_KEY = os.environ.get("API_KEY", "").strip()
 _SESSION_MODE = os.environ.get("AUTH_MODE", "").strip().lower() == "session"
 
 
+def query_key_allowed() -> bool:
+    """True only when AUTH_ALLOW_QUERY_KEY=1 (dev-only smoke tests).
+
+    Read live (not at import) so tests can flip it with monkeypatch.setenv
+    and operators can toggle it without a code change. Default off: F2."""
+    return os.environ.get("AUTH_ALLOW_QUERY_KEY", "").strip() == "1"
+
+
 def require_api_key(
     x_api_key: Optional[str] = Header(default=None),
     api_key: Optional[str] = Query(default=None),
 ) -> None:
     """FastAPI dependency: reject requests unless they present the API key.
 
-    Accepts the key as either the X-API-Key header or an ?api_key= query
-    parameter — either one passes. When API_KEY is unset the dependency is a
-    no-op so local dev and existing tests keep working unchanged.
+    The X-API-Key header always passes. The ?api_key= query parameter
+    passes only when query_key_allowed() (AUTH_ALLOW_QUERY_KEY=1) —
+    otherwise it is ignored and a query-only request 401s. When API_KEY
+    is unset the dependency is a no-op so local dev keeps working.
     """
     if not _API_KEY:
         return
-    if x_api_key == _API_KEY or api_key == _API_KEY:
+    if x_api_key == _API_KEY:
+        return
+    if api_key == _API_KEY and query_key_allowed():
         return
     raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
@@ -66,10 +79,14 @@ def mutation_gate_rejects(request) -> bool:
 
 
 def request_has_api_key(request) -> bool:
-    """True when the request presents the armed API key (header or query)."""
-    header = request.headers.get("X-API-Key")
-    query = request.query_params.get("api_key")
-    return header == _API_KEY or query == _API_KEY
+    """True when the request presents the armed API key.
+
+    Header always counts; the ?api_key= query parameter counts only when
+    query_key_allowed() (AUTH_ALLOW_QUERY_KEY=1). Mirrors require_api_key
+    so the middleware gate and the dependency can never disagree (F2)."""
+    if request.headers.get("X-API-Key") == _API_KEY:
+        return True
+    return request.query_params.get("api_key") == _API_KEY and query_key_allowed()
 
 
 # ---------------------------------------------------------------------------

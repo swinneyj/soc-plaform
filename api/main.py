@@ -179,6 +179,13 @@ async def _request_id(request, call_next):
     request.state.request_id = rid
     response = await call_next(request)
     response.headers["X-Request-Id"] = rid
+    # F13: baseline security headers. nosniff is safe everywhere (the UI
+    # serves no sniff-dependent content); no-store is scoped to /api/* so
+    # static-asset caching is untouched while authenticated JSON (case
+    # data included) is never written to the browser cache.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    if request.url.path.startswith("/api/"):
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -236,6 +243,10 @@ app.add_middleware(CanonicalPathRewriter)
 # sees the request's PRE-REWRITE path; the list carries both spellings anyway.
 _RATE_HITS: dict = {}  # client ip -> [timestamps]
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
+# F9: global request-body backstop (env bytes, default 10 MiB). The paste
+# endpoint keeps its own tighter 5 MiB gate inside; this caps every other
+# JSON endpoint (evidence-batch, notables, rules-import, ...) before parsing.
+MAX_BODY_BYTES = int(os.environ.get("MAX_BODY_BYTES", str(10 * 1024 * 1024)))
 _RATE_PATHS = (
     "/api/db/analyze", "/api/analyses",
     "/api/splunk/search-one",
@@ -245,10 +256,64 @@ _RATE_PATHS = (
 
 
 @app.middleware("http")
+async def _body_size_cap(request, call_next):
+    """F9: reject bodies over MAX_BODY_BYTES with 413 before parsing.
+
+    A declared Content-Length is checked before reading a single byte.
+    Chunked (undeclared) bodies are drained through the raw ASGI receive
+    channel with a running total and replayed, so an unbounded stream
+    fails at the cap instead of exhausting worker memory. Defined after
+    _ollama_rate_limit so it runs outermost (rejects first, cheapest).
+    """
+    if request.method in ("POST", "PUT", "PATCH"):
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared.strip()) > MAX_BODY_BYTES:
+                    return JSONResponse(
+                        {"detail": "Request body too large"}, status_code=413)
+            except (ValueError, AttributeError):
+                pass  # malformed header: fall through to the bounded drain
+        else:
+            buffered = []
+            total = 0
+            receive = request._receive  # raw ASGI channel, as stream() does
+            while True:
+                message = await receive()
+                buffered.append(message)
+                if message["type"] == "http.request":
+                    total += len(message.get("body", b""))
+                    if total > MAX_BODY_BYTES:
+                        return JSONResponse(
+                            {"detail": "Request body too large"}, status_code=413)
+                    if not message.get("more_body"):
+                        break
+                elif message["type"] == "http.disconnect":
+                    break
+            messages = list(buffered)
+
+            async def _replay():
+                if messages:
+                    return messages.pop(0)
+                return {"type": "http.disconnect"}
+
+            request._receive = _replay
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def _ollama_rate_limit(request, call_next):
     if request.method == "POST" and any(request.url.path.startswith(p) for p in _RATE_PATHS):
         ip = request.client.host if request.client else "?"
         now = time.time()
+        # F8: opportunistic global sweep — drop every IP whose window is
+        # fully stale on each limited request. Dict size is then capped at
+        # the distinct IPs seen in the last 60 s, so rotating source IPs
+        # cannot grow it without bound (a per-IP pop alone would leave
+        # one stale entry per never-again-seen IP forever).
+        for key in [k for k, v in _RATE_HITS.items()
+                    if not any(now - t < 60.0 for t in v)]:
+            del _RATE_HITS[key]
         hits = [t for t in _RATE_HITS.get(ip, []) if now - t < 60.0]
         if len(hits) >= RATE_LIMIT_PER_MIN:
             _RATE_HITS[ip] = hits
@@ -362,4 +427,12 @@ if os.path.exists(web_dir):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # F7: loopback by default — LAN/Tailscale exposure must be a deliberate
+    # API_BIND=0.0.0.0 choice, never a forgotten default. scripts/dev
+    # already launches on 127.0.0.1; the Dockerfile keeps an explicit
+    # 0.0.0.0 because container port-mapping requires it there.
+    uvicorn.run(
+        app,
+        host=os.environ.get("API_BIND", "127.0.0.1"),
+        port=int(os.environ.get("SOC_PORT", "8000")),
+    )

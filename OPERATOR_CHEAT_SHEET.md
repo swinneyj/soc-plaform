@@ -4,11 +4,13 @@
 
 If you need the step-by-step operator decision flows, read:
 
-`docs\FLOW_SHEETS.md`
+`docs/FLOW_SHEETS.md`
 
 If you need the visual architecture and mental model map, read:
 
-`docs\SYSTEM_VISUAL_MAP.md`
+`docs/SYSTEM_VISUAL_MAP.md`
+
+If you are a new developer (not just operating), start with [docs/NEW_DEVELOPER_ONBOARDING.md](docs/NEW_DEVELOPER_ONBOARDING.md) instead — it points back here once the guided path is done.
 
 If you want the full visual dashboard in the browser, run:
 

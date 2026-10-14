@@ -1123,9 +1123,10 @@ class TestAnalysisRetentionPrune:
 
 class TestApiKeyActivation:
     """Phase 5 auth groundwork: with API_KEY set, every mutating /api/*
-    request needs the key (X-API-Key header or ?api_key=); reads and
-    /api/health stay open. Unset API_KEY keeps local dev open — that mode is
-    what every other test exercises."""
+    request needs the key (X-API-Key header, or ?api_key= only when
+    AUTH_ALLOW_QUERY_KEY=1 — F2); reads and /api/health stay open.
+    Unset API_KEY keeps local dev open — that mode is what every other
+    test exercises."""
 
     def _evidence_body(self):
         return {
@@ -1157,9 +1158,20 @@ class TestApiKeyActivation:
         )
         assert resp.status_code == 200, resp.text
 
-    def test_query_param_key_allows_mutation(self, api_client, monkeypatch):
+    def test_query_param_key_rejected_by_default(self, api_client, monkeypatch):
+        """F2: query-only auth 401s without AUTH_ALLOW_QUERY_KEY=1."""
         monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-3")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence?api_key=sekret",
+            json=self._evidence_body(),
+        )
+        assert resp.status_code == 401
+
+    def test_query_param_key_allows_mutation_when_flagged(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        monkeypatch.setenv("AUTH_ALLOW_QUERY_KEY", "1")
+        case_id = seed_case(api_client, "AUTH-3b")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence?api_key=sekret",
             json=self._evidence_body(),
