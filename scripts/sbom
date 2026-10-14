@@ -121,7 +121,8 @@ doc["metadata"]["properties"] = [
             "dev tooling (pytest, hypothesis, pyflakes); ad-hoc audit tooling "
             "(pip-audit, cyclonedx-python-lib) and unused strays were removed "
             "2026-10-09 — audits run from a throwaway tool venv instead; "
-            "dual 3.9/3.14 branches documented in requirements.txt"
+            "3.14 branch fresh + frozen 3.9 lines documented in requirements.txt "
+            "(3.9 retired from CI Oct 14, 2026)"
         ),
     },
     {

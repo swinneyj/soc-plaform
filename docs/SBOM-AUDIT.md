@@ -1,7 +1,7 @@
 # SBOM Audit — 2026-10-09
 
 Companion to `docs/SBOM.json` (CycloneDX 1.6; root = `soc-plaform v1.1.0` @ `e9b26f4`, branch `dev-dalton`;
-**42 components** = 39 PyPI + 3 frontend CDN libs).
+**43 components** = 40 PyPI + 3 frontend CDN libs).
 Scope: the production Python environment (`.venv314`, Python 3.14.7) plus the three CDN libraries the web
 shell loads. Method: `cyclonedx-py environment` snapshot from a throwaway tool venv → strict CycloneDX 1.6
 schema validation → `pip-audit` from a separate throwaway 3.14 tool venv, run against both the exact
@@ -18,6 +18,15 @@ against `requirements*.txt` and the repo's actual imports.
 > unpinned; the live redirect target that day). Both pins were sha256-verified byte-identical to what
 > served before, so behavior is unchanged — the page was re-verified live (full Vue mount, Tailwind
 > styling, API 200s, no console errors).
+>
+> **2026-10-14 dependabot batch**: five patch bumps merged properly (pin +
+> `PIN_ONLY314=1` hash regen, never raw) — `sqlalchemy` 2.1.2→2.1.3,
+> `fastapi` 0.141.1→0.142.2, `cryptography` 50.0.1→50.0.2, `pyflakes`
+> 4.0.0→4.0.2, `python-dotenv` 1.2.3→1.2.4 — plus re-resolution drift
+> (`opentelemetry-api` 1.45.1 newly pulled by fastapi, `truststore`
+> 0.10.4→0.10.5). `<3.10` branches frozen byte-identical. SBOM
+> regenerated via `scripts/sbom`: schema VALID, `pip-audit` clean on both
+> passes, 399-test suite green on the synced venv.
 
 ## Verdict
 
@@ -47,19 +56,20 @@ against `requirements*.txt` and the repo's actual imports.
 
 | Component | Version | Role |
 |---|---|---|
-| fastapi | 0.141.1 | The API surface (`api/main.py`, `api/routes/*`) — routing, OpenAPI, dependency injection. |
+| fastapi | 0.142.2 | The API surface (`api/main.py`, `api/routes/*`) — routing, OpenAPI, dependency injection. |
 | starlette | 1.7.0 | ASGI framework underneath FastAPI — middleware, CORS, TestClient base. Fixed branch of PYSEC-2026-248/2281/2280. |
 | uvicorn | 0.54.0 | ASGI server the API runs on (`scripts/dev` / `scripts/start`, port 8000). |
 | click | 8.5.0 | Transitive: uvicorn's CLI. |
 | h11 | 0.16.0 | Transitive: zero-dependency HTTP/1.1 implementation used by uvicorn/httpcore. |
 | python-multipart | 0.0.32 | Transitive (also direct pin): form/file uploads parsed by FastAPI/Starlette. |
 | annotated-doc | 0.0.5 | Transitive: docstring annotation helper pulled by this FastAPI version. |
+| opentelemetry-api | 1.45.1 | Transitive (new Oct 14, 2026): tracing API pulled by fastapi 0.142.2; unused by this app, carried as its dependency. |
 
 ## C. Data layer
 
 | Component | Version | Role |
 |---|---|---|
-| SQLAlchemy | 2.1.2 | ORM for all persistence (`db/models.py` — SplunkEvent, TriageResult, investigation state, etc.). |
+| SQLAlchemy | 2.1.3 | ORM for all persistence (`db/models.py` — SplunkEvent, TriageResult, investigation state, etc.). |
 | psycopg | 3.3.6 | PostgreSQL driver (Neon) — pinned as `psycopg[binary]`. |
 | psycopg-binary | 3.3.6 | Transitive: the compiled libpq bundle that comes with the `[binary]` extra. |
 
@@ -72,7 +82,7 @@ against `requirements*.txt` and the repo's actual imports.
 | annotated-types | 0.8.0 | Transitive: shared constraint annotations for pydantic. |
 | typing-inspection | 0.4.4 | Transitive: runtime introspection of type hints for pydantic. |
 | typing_extensions | 4.16.0 | Transitive: backports of newer typing features across the stack. |
-| python-dotenv | 1.2.3 | Loads `.env` bootstrap (BWS token + local-only keys) at API start. |
+| python-dotenv | 1.2.4 | Loads `.env` bootstrap (BWS token + local-only keys) at API start. |
 
 ## E. Outbound HTTP clients
 
@@ -87,14 +97,14 @@ against `requirements*.txt` and the repo's actual imports.
 | httpcore | 1.0.9 | Transitive: HTTP/1.1 transport for httpx. |
 | httpx2 | 2.13.1 | Dev: starlette 1.6+ imports httpx2 natively; pinned explicitly so the 3.14 leg stops warning. |
 | httpcore2 | 2.13.1 | Transitive: transport for httpx2. |
-| truststore | 0.10.4 | Transitive: system-cert TLS integration required by httpcore2/httpx2 (kept after F1 cleanup — it is their dependency, not pip-audit's). |
+| truststore | 0.10.5 | Transitive: system-cert TLS integration required by httpcore2/httpx2 (kept after F1 cleanup — it is their dependency, not pip-audit's). |
 | anyio | 4.15.1 | Transitive: async compatibility layer under starlette/httpx/psycopg-async. |
 
 ## F. Cryptography
 
 | Component | Version | Role |
 |---|---|---|
-| cryptography | 50.0.1 | X.509 parsing for `Tools/pki_cert_decoder` (a CLI tool, not the API). |
+| cryptography | 50.0.2 | X.509 parsing for `Tools/pki_cert_decoder` (a CLI tool, not the API). |
 | cffi | 2.1.1 | Transitive: Python↔C bindings for cryptography. |
 | pycparser | 3.0 | Transitive: C header parser used by cffi. |
 
@@ -109,7 +119,7 @@ against `requirements*.txt` and the repo's actual imports.
 | Pygments | 2.21.0 | Transitive: syntax highlighting in pytest tracebacks. |
 | hypothesis | 6.168.4 | Property-based fuzz layer for the boundary ingest engines (`test_boundary_ingest_properties.py`). |
 | sortedcontainers | 2.4.0 | Transitive: interval/ordering structures used internally by hypothesis. |
-| pyflakes | 4.0.0 | The `scripts/check_undefined_names.sh` CI import lint (F821 gate). |
+| pyflakes | 4.0.2 | The `scripts/check_undefined_names.sh` CI import lint (F821 gate). |
 
 *(Removed in the F1 cleanup: `tomli`, which only pip-audit needed — pytest reads `pyproject.toml` via the
 stdlib `tomllib` on 3.14.)*

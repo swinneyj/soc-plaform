@@ -35,6 +35,15 @@ How it works:
 Stdlib + `packaging` (present in every venv that has the test deps; a
 sys.path fallback into .venv314/.venv covers a bare system python3). Needs
 network (pip resolver + PyPI). Overrides: PIN_PY314, PIN_PY39.
+
+PIN_ONLY314=1 (canonical since the 3.9 CI leg retired Oct 14, 2026):
+regenerate the python_version >= "3.10" branch only, without any Python 3.9
+interpreter on the machine. The < "3.10" lines are frozen in place — their
+versions AND hashes are carried over verbatim from the existing files (hash
+completeness needs no interpreter: digests come straight from PyPI), while
+only the 3.14 branch is re-resolved and coverage-checked. A 3.9 install
+from the result is structurally complete but its version *selection* is
+unverified — retired, documented in the requirements headers, do not extend.
 Exit 0 = files rewritten and coverage-checked; anything else = loud failure.
 """
 
@@ -223,6 +232,33 @@ def expand_linux_only(py, resolved, python_version):
     die("linux-only dependency expansion did not converge")
 
 
+def frozen_branch(path):
+    """Reconstruct the retired 3.9 branch from the existing file (PIN_ONLY314).
+
+    {canon(name): {name, version}} for every pin line the 3.9 interpreter
+    would select: < "3.10"-marked direct + transitive lines, plus unmarked
+    lines as fallback (a bump that changes the 3.14 version splits an
+    unmarked transitive into >=3.10 fresh + <3.10 frozen). Direct-pin names
+    are harmless here — the synthesis set excludes them. No interpreter
+    needed: versions come from the file, hashes from PyPI."""
+    frozen = {}
+    for raw in path.read_text().splitlines():
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or HASH_LINE_RE.match(raw):
+            continue
+        base = stripped.partition("#")[0].rstrip("\\").strip()
+        match = PIN_EXPR_RE.match(base)
+        if not match:
+            continue
+        if marker_selects_branch((match.group("marker") or "").strip(), "3.9"):
+            frozen.setdefault(canon(match.group("name")), {
+                "name": match.group("name"),
+                "version": match.group("version"),
+                "yanked": False,
+            })
+    return frozen
+
+
 def marker_selects_branch(marker, branch):
     if not marker:
         return True
@@ -275,20 +311,46 @@ def emit_pin(out, base, hashes):
 
 def main():
     os.chdir(ROOT)
-    py14, py09 = py314(), py39()
-    print("branches: 3.14 <- %s | 3.9 <- %s" % (py14, py09))
+    only314 = os.environ.get("PIN_ONLY314", "").strip() == "1"
+    py14 = py314()
+    py09 = None if only314 else py39()
+    if only314:
+        print("PIN_ONLY314=1: 3.14 <- %s; <3.10 lines frozen from files "
+              "(3.9 retired from CI)" % py14)
+    else:
+        print("branches: 3.14 <- %s | 3.9 <- %s" % (py14, py09))
 
     for filename in FILES:
         path = ROOT / filename
         print("── %s ──" % filename)
         lines, pins, direct = parse_file(path)
 
-        r14 = resolve(py14, ["-r", str(path)])
-        r09 = resolve(py09, ["-r", str(path)])
-        print("     resolved: %d pkgs (3.14 branch), %d pkgs (3.9 branch)"
-              % (len(r14), len(r09)))
+        # Resolve from a hash-free projection of the pins: the file's
+        # --hash lines constrain verification, not selection — but after a
+        # version bump the stale hashes would fail the new artifacts before
+        # the resolver finishes (pip hash-checks downloads even on
+        # --dry-run). Selection is identical with or without hashes; the
+        # fresh digests are fetched from PyPI below and written back here.
+        # (Same reason dependabot's raw one-line bumps can never merge
+        # as-is under --require-hashes.)
+        tmp = Path(os.environ.get("TMPDIR", "/tmp")) / (
+            "pin-naked-%d-%d.txt" % (os.getpid(), time.time_ns()))
+        tmp.write_text("\n".join(p["base"] for p in pins) + "\n")
+        try:
+            r14 = resolve(py14, ["-r", str(tmp)])
+            if only314:
+                r09 = frozen_branch(path)
+                print("     resolved: %d pkgs (3.14 branch), %d frozen (<3.10)"
+                      % (len(r14), len(r09)))
+            else:
+                r09 = resolve(py09, ["-r", str(tmp)])
+                print("     resolved: %d pkgs (3.14 branch), %d pkgs (3.9 branch)"
+                      % (len(r14), len(r09)))
+        finally:
+            tmp.unlink(missing_ok=True)
         expand_linux_only(py14, r14, "3.14")
-        expand_linux_only(py09, r09, "3.9")
+        if not only314:
+            expand_linux_only(py09, r09, "3.9")
 
         # union of (name, version) needing hashes
         versions = {}
@@ -335,8 +397,12 @@ def main():
                          % (name, v09), hash_map[(key, v09)])
                 coverage["3.9"].add(key)
 
-        # coverage: every resolved pkg must have a branch-active pin line
-        for branch_name, resolved in (("3.14", r14), ("3.9", r09)):
+        # coverage: every resolved pkg must have a branch-active pin line.
+        # PIN_ONLY314 checks 3.14 only — the frozen branch is carried over
+        # verbatim and its selection is unverifiable without a 3.9
+        # interpreter (retired; documented in the requirements headers).
+        coverage_branches = (("3.14", r14),) if only314 else (("3.14", r14), ("3.9", r09))
+        for branch_name, resolved in coverage_branches:
             active_directs = {
                 p["name"] for p in pins
                 if marker_selects_branch(p["marker"], branch_name)
@@ -377,9 +443,15 @@ def main():
             out.pop()
         out.append("")
         out.append(TRANSMARK + " ---")
-        out.append("# Full closure of the pins above, hash-locked for both marker")
-        out.append("# branches (sdist + every platform wheel). Regenerate with:")
-        out.append("#     scripts/pin_requirements.py")
+        if only314:
+            out.append("# Full 3.14 closure of the pins above, hash-locked (sdist + every")
+            out.append("# platform wheel); <3.10 lines carried over frozen (3.9 retired")
+            out.append("# from CI — unverified, do not extend). Regenerate with:")
+            out.append("#     PIN_ONLY314=1 scripts/pin_requirements.py")
+        else:
+            out.append("# Full closure of the pins above, hash-locked for both marker")
+            out.append("# branches (sdist + every platform wheel). Regenerate with:")
+            out.append("#     scripts/pin_requirements.py")
         out.extend(trans_lines)
 
         path.write_text("\n".join(out) + "\n")
@@ -387,7 +459,11 @@ def main():
         print("     wrote %s: %d pins hashed, %d transitive pins, %d digests"
               % (filename, len(pins), len(transitive), total_hashes))
 
-    print("OK: requirements files hash-locked (full closure, both branches)")
+    if only314:
+        print("OK: requirements files hash-locked (3.14 closure fresh; "
+              "<3.10 lines frozen from files, unverified)")
+    else:
+        print("OK: requirements files hash-locked (full closure, both branches)")
 
 
 if __name__ == "__main__":
