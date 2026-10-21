@@ -287,6 +287,14 @@ Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the sour
 
 ---
 
+### T4 — log-forwarding manifest + audit file output (task 4) ✅ LANDED (2026-10-21)
+- **What:** the security list's task 4 asked strictly for *a Kubernetes Deployment YAML: FastAPI container + Fluent Bit sidecar, shared emptyDir, sidecar tails the app's JSON log file, forwards over HTTPS with a bearer token to an external webhook*. Delivered exactly that as apply-able `k8s/soc-api-deployment.yaml` (ConfigMap with fluent-bit.conf + parsers.conf, Deployment with api + fluent-bit, emptyDir `/var/log/soc`, `SOC_LOG_WEBHOOK_*` env, bearer token from Secret, secrets never committed), plus the honest prerequisite: `AUDIT_LOG_FILE` env makes `soc.audit` ALSO write its JSON lines to a file (dual sink, stdout unchanged, unwritable path degrades to stdout-only — never blocks startup).
+- **Verification (no cluster on this Mac — recorded in the manifest header):** kubeconform `-strict` **2/2 resources schema-valid**; `tests/test_k8s_manifest.py` pins the invariants (2 containers, shared-volume consistency, tail path == AUDIT_LOG_FILE, every `${VAR}` supplied, tls On + verify On, bearer from Secret, no embedded secret material) — zero new deps by design (hash-locked requirements untouched); the config was **executed with real fluent-bit 5.1.5**: loads clean, env expansion resolves, tails the app's real audit file, and delivered payload + `Authorization: Bearer` end-to-end to a local HTTPS sink (diagnostic copy with tls.verify Off; the artifact's verify On demonstrably refuses an untrusted CA — correct for a real webhook). App-side file output smoke-tested live (nested dirs auto-created, same JSON lines on file + stdout, zero canary leakage). **Not verified:** kubectl apply/scheduling + a real external webhook (need a cluster).
+- **Tools installed for verification:** `kubeconform`, `fluent-bit` (brew, bottled). All test trust-store edits were backup+restored (verified); the macOS trust bundle and fluent-bit rootcert are unchanged.
+- **Docs:** CONTAINERIZATION.md new "K8s + log-forwarding sidecar" section; `.env.example` documents `AUDIT_LOG_FILE`.
+
+---
+
 ## Destructive-path audit — shared production Neon (2026-10-06, not re-verified this session)
 
 Scope: the no-undo paths named in AGENTS.md, each with its guard.

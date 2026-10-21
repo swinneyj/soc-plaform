@@ -297,6 +297,36 @@ spec:
           claimName: soc-playbooks
 ```
 
+### Kubernetes + log-forwarding sidecar (task 4) — `k8s/soc-api-deployment.yaml`
+
+The strict task-4 artifact lives in the repo as an apply-able manifest: the
+FastAPI container plus a **Fluent Bit sidecar** sharing an **emptyDir**
+(`/var/log/soc`). The app writes its `soc.audit` JSON stream to
+`AUDIT_LOG_FILE=/var/log/soc/audit.json` (dual sink: stdout + file), the
+sidecar tails that file and forwards each event **over HTTPS**
+(`tls On`, `tls.verify On`) with an **`Authorization: Bearer …`** header
+to an external webhook (`SOC_LOG_WEBHOOK_HOST/PORT/URI`), with the token
+from a Secret.
+
+```bash
+# secrets (never committed — see the manifest header):
+kubectl create secret generic soc-api-secrets \
+  --from-literal=api-key='…' --from-literal=database-url='…'
+kubectl create secret generic soc-log-forwarder \
+  --from-literal=bearer-token='…'
+# then point SOC_LOG_WEBHOOK_* at your collector and apply:
+kubectl apply --dry-run=server -f k8s/soc-api-deployment.yaml
+```
+
+**Verified (2026-10-21, no cluster on the dev Mac):** kubeconform `-strict`
+2/2 resources valid; the Fluent Bit config was executed with real
+fluent-bit 5.1.5 — parses, `${VAR}` expansion, tails the app's JSON file,
+and delivered payload + bearer header end-to-end to a local HTTPS sink
+(diagnostic run; the artifact's `tls.verify On` demonstrably refuses an
+untrusted CA — correct posture for a real webhook). Pinned by
+`tests/test_k8s_manifest.py`. **Not verified:** actual apply/scheduling and
+a real external webhook — both need a cluster.
+
 ---
 
 ## Improvements Over CLI-Only

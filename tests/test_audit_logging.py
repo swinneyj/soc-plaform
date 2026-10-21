@@ -167,6 +167,52 @@ def test_audit_logger_does_not_propagate():
 
 
 # ---------------------------------------------------------------------------
+# File output (task 4 premise: the K8s sidecar tails a JSON FILE)
+# ---------------------------------------------------------------------------
+
+def test_audit_file_output_writes_same_json_lines(tmp_path):
+    """_attach_file_handler writes identical JSON lines to the file the
+    sidecar will tail; parent dirs are created (fresh pod emptyDir)."""
+    from pathlib import Path
+
+    path = str(tmp_path / "soc" / "audit.json")  # nested on purpose
+    lg = logging.getLogger(audit.AUDIT_LOGGER_NAME)
+    saved = list(lg.handlers)
+    lg.handlers = []  # isolate: file test must not also hit stdout
+    handler = audit._attach_file_handler(lg, path)
+    assert handler is not None, "file handler failed to open"
+    try:
+        audit.audit_event("file_probe", username="alice", status=200)
+        handler.flush()
+        lines = [l for l in Path(path).read_text(encoding="utf-8").splitlines() if l.strip()]
+        (entry,) = [json.loads(l) for l in lines]
+        assert entry["event"] == "file_probe"
+        assert entry["username"] == "alice"
+        assert entry["ts"].endswith("Z")  # same formatter as stdout
+    finally:
+        lg.removeHandler(handler)
+        handler.close()
+        lg.handlers = saved
+
+
+def test_audit_file_failure_is_nonfatal(tmp_path):
+    """An unwritable AUDIT_LOG_FILE degrades to None + stderr warning —
+    audit must never block startup."""
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x")  # exists as a FILE -> makedirs below must fail
+    lg = logging.getLogger(audit.AUDIT_LOGGER_NAME)
+    saved = list(lg.handlers)
+    lg.handlers = []
+    try:
+        handler = audit._attach_file_handler(
+            lg, str(blocker / "audit.json"))
+        assert handler is None
+        assert not lg.handlers  # nothing half-attached
+    finally:
+        lg.handlers = saved
+
+
+# ---------------------------------------------------------------------------
 # Login events (api.routes.auth)
 # ---------------------------------------------------------------------------
 

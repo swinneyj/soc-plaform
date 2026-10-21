@@ -23,6 +23,14 @@ Two design decisions worth knowing:
   String values are also truncated, so an attacker-controlled username
   cannot bloat or flood the stream.
 
+* **Optional file output** (``AUDIT_LOG_FILE=/var/log/soc/audit.json``):
+  the same JSON lines are ALSO written to a file — this is the premise
+  of the task-4 K8s sidecar pattern (k8s/soc-api-deployment.yaml),
+  whose Fluent Bit sidecar tails exactly this path off a shared
+  emptyDir. stdout output stays on either way; a file that cannot be
+  opened degrades to stdout-only with a stderr warning (audit must
+  never block startup).
+
 Event vocabulary (kept small and stable):
 
 * ``login_success`` / ``login_failure`` / ``login_throttled`` — api.routes.auth
@@ -95,6 +103,28 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str, separators=(",", ":"))
 
 
+def _attach_file_handler(lg: logging.Logger, path: str):
+    """Also write the audit stream to ``path`` (task 4).
+
+    Creates parent dirs (the K8s emptyDir mountpoint may be empty on a
+    fresh pod). Never raises — returns the handler, or None after a
+    stderr warning when the path is unwritable, because audit output
+    must not block application startup.
+    """
+    try:
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(JsonFormatter())
+        lg.addHandler(handler)
+        return handler
+    except OSError as exc:
+        sys.stderr.write(
+            "audit: AUDIT_LOG_FILE unavailable (%s): %s\n" % (path, exc))
+        return None
+
+
 def _build_logger() -> logging.Logger:
     lg = logging.getLogger(AUDIT_LOGGER_NAME)
     lg.setLevel(_LEVEL)
@@ -104,6 +134,13 @@ def _build_logger() -> logging.Logger:
         lg.addHandler(handler)
     # Never bubble into root handlers (uvicorn access log, lastResort).
     lg.propagate = False
+    # File output for the task-4 sidecar pattern: same JSON lines, both
+    # sinks. The isinstance guard keeps a re-import/reload from doubling
+    # file handlers.
+    file_path = os.environ.get("AUDIT_LOG_FILE", "").strip()
+    if file_path and not any(
+            isinstance(h, logging.FileHandler) for h in lg.handlers):
+        _attach_file_handler(lg, file_path)
     return lg
 
 
