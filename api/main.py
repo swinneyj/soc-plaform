@@ -15,6 +15,7 @@ from api.helpers.errors import (
     log_internal_error,
     request_id,
 )
+from api.helpers.audit import audit_event
 import json
 import logging
 import os
@@ -189,6 +190,29 @@ async def _request_id(request, call_next):
     return response
 
 
+def _gate_reject(request, status: int, detail: str, reason: str, actor=None):
+    """Audit a gate rejection and answer it (task 3 security log).
+
+    This middleware is registered AFTER _request_id, so on this path
+    (which returns without calling downstream) request.state.request_id
+    does not exist yet: stamp it here and echo it in X-Request-Id so a
+    rejected client can still correlate with the audit line.
+    """
+    rid = request.headers.get("X-Request-Id") or secrets.token_hex(8)
+    request.state.request_id = rid
+    audit_event(
+        "auth_rejected", request, level=logging.WARNING,
+        status=status, reason=reason,
+        actor=actor.kind if actor else "anonymous",
+        actor_role=(actor.role or None) if actor else None,
+        username=getattr(actor.user, "username", None) if actor else None,
+    )
+    return JSONResponse(
+        {"detail": detail}, status_code=status,
+        headers={"X-Request-Id": rid},
+    )
+
+
 @app.middleware("http")
 async def _api_key_mutation_gate(request, call_next):
     """Gate /api/* requests per AUTH_MODE (SESSION_AUTH_PLAN.md).
@@ -199,21 +223,50 @@ async def _api_key_mutation_gate(request, call_next):
     (session cookie, or the API key as the admin machine actor); cookie-backed
     mutations additionally need X-CSRF-Token. /health, /api/health and the
     /api/auth/* endpoints themselves stay reachable for health checks/login.
+
+    Task 3 (security audit stream): every rejection is audited
+    (auth_rejected), and every SUCCESSFUL mutating /api/* request is
+    audited as a state_change attributed to its actor — see the tail of
+    this function. /api/auth/* are EXEMPT_PATHS: login/logout carry
+    their own dedicated events in api.routes.auth instead.
     """
     path = request.url.path
     if auth.session_mode():
         actor = auth.resolve_actor(request)
         is_api = path.startswith("/api/")
         if is_api and path not in auth.EXEMPT_PATHS and actor.kind == "anonymous":
-            return JSONResponse({"detail": "Authentication required"}, status_code=401)
+            return _gate_reject(request, 401, "Authentication required", "anonymous")
         if auth.mutation_gate_rejects(request) and path not in auth.EXEMPT_PATHS:
             if actor.kind == "anonymous":
-                return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
+                return _gate_reject(request, 401, "Invalid or missing API key", "anonymous")
             if actor.kind == "session" and not actor.csrf_ok:
-                return JSONResponse({"detail": "CSRF token missing or invalid"}, status_code=403)
+                return _gate_reject(
+                    request, 403, "CSRF token missing or invalid", "csrf", actor=actor)
     elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
-        return JSONResponse({"detail": "Invalid or missing API key"}, status_code=401)
-    return await call_next(request)
+        return _gate_reject(request, 401, "Invalid or missing API key", "missing_api_key")
+    response = await call_next(request)
+    # Task 3: attribute every successful state-changing /api/* request
+    # to its actor (session user or API-key machine actor). resolve_actor
+    # is cached in session mode (30 s TTL), so the second resolution
+    # after the gate's own is cheap; in API-key mode it is a header
+    # comparison. Never let auditing break the request itself.
+    if (
+        auth.mutation_gate_rejects(request)
+        and path not in auth.EXEMPT_PATHS
+        and response.status_code < 400
+    ):
+        try:
+            actor = auth.resolve_actor(request)
+        except Exception:
+            actor = None
+        audit_event(
+            "state_change", request,
+            status=response.status_code,
+            actor=actor.kind if actor else "unknown",
+            actor_role=(actor.role or None) if actor else None,
+            username=getattr(actor.user, "username", None) if actor else None,
+        )
+    return response
 
 # The hosted branch preview can call a locally running API through a secure
 # HTTPS tunnel. Keep the allowlist explicit; do not enable wildcard CORS for
@@ -370,6 +423,24 @@ async def _http_exception_handler(request, exc):
             status_code=500,
             content={"detail": INTERNAL_ERROR_DETAIL},
             headers={**(exc.headers or {}), "X-Request-Id": request_id(request)},
+        )
+    # Task 3: route-level 401/403 (require_api_key / require_role and any
+    # explicit raise) are authorization failures — audit them. Gate
+    # rejections never reach this handler (the gate answers directly),
+    # so there is no double-log. EXEMPT_PATHS excluded: /api/auth/login
+    # raises 401 for every bad password and is audited there with more
+    # detail; /api/auth/session 401s on every logged-out UI poll.
+    if exc.status_code in (401, 403) and request.url.path not in auth.EXEMPT_PATHS:
+        try:
+            actor = auth.resolve_actor(request)
+            actor_kind, actor_role = actor.kind, (actor.role or None)
+            username = getattr(actor.user, "username", None)
+        except Exception:
+            actor_kind, actor_role, username = "unknown", None, None
+        audit_event(
+            "auth_rejected", request, level=logging.WARNING,
+            status=exc.status_code, reason="route_authorization",
+            actor=actor_kind, actor_role=actor_role, username=username,
         )
     return await _default_http_exception_handler(request, exc)
 

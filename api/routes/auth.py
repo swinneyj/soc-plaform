@@ -6,6 +6,7 @@ info echoes the actor for the UI to bootstrap from. Only active in
 AUTH_MODE=session (the routes exist regardless so the doc-drift guard sees
 them; flag-off the middleware never consults them).
 """
+import logging
 import os
 import secrets
 import time
@@ -14,6 +15,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from api import auth
+from api.helpers.audit import audit_event
 
 router = APIRouter()
 
@@ -115,6 +117,13 @@ def login(payload: LoginRequest, request: Request, response: Response):
 
     client_ip = request.client.host if request.client else "?"
     if _login_throttled(client_ip, payload.username):
+        # Task 3 audit stream: throttled attempts are security events too
+        # (they are the observable signal of a brute-force attempt).
+        audit_event(
+            "login_throttled", request, level=logging.WARNING,
+            username=payload.username, ip=client_ip, status=429,
+            reason="throttled",
+        )
         raise HTTPException(status_code=429, detail="Too many login attempts")
 
     db = SessionLocal()
@@ -128,8 +137,20 @@ def login(payload: LoginRequest, request: Request, response: Response):
         password_ok = auth.verify_password(payload.password, encoded)
         if not active_user or not password_ok:
             _record_login_failure(client_ip, payload.username)
+            # Same reason for unknown/inactive user and wrong password:
+            # never let the audit stream distinguish the two either.
+            audit_event(
+                "login_failure", request, level=logging.WARNING,
+                username=payload.username, ip=client_ip, status=401,
+                reason="invalid_credentials",
+            )
             raise HTTPException(status_code=401, detail="Invalid credentials")
         _clear_login_failures(client_ip, payload.username)
+        audit_event(
+            "login_success", request,
+            username=user.username, ip=client_ip, status=200,
+            actor="session", actor_role=user.role,
+        )
         # F12: vacuum expired sessions on each successful login — logins
         # are infrequent, so one indexed range delete per login bounds the
         # table without a scheduler (which this repo deliberately avoids).
@@ -144,6 +165,17 @@ def login(payload: LoginRequest, request: Request, response: Response):
 
 @router.post("/api/auth/logout")
 def logout(request: Request, response: Response):
+    # Audit BEFORE destroy_session so the actor still resolves.
+    try:
+        actor = auth.resolve_actor(request)
+        audit_event(
+            "logout", request,
+            actor=actor.kind or "unknown",
+            actor_role=actor.role or None,
+            username=getattr(actor.user, "username", None),
+        )
+    except Exception:  # audit must never break the logout itself
+        audit_event("logout", request, actor="unknown")
     auth.destroy_session(request)
     response.delete_cookie(auth.SESSION_COOKIE)
     return {"ok": True}
