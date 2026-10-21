@@ -39,6 +39,28 @@ Use this repo's **root folder** (where this file lives) for day-to-day work. On 
 .\scripts\stop_platform.ps1
 ```
 
+## Login & Roles (session auth — active since 2026-10-21)
+
+`AUTH_MODE=session` is set in `.env`, so every `/api/*` call needs an
+authenticated actor: a session cookie (log in through the UI's login modal)
+or the armed `X-API-Key` (the UI stamps it automatically). The API-key gate is
+unchanged — the key still satisfies every check as the admin machine actor.
+
+- **Accounts** (shared Neon): `dalton` (admin), `analyst-demo` (analyst).
+- **Passwords live in the macOS keychain, never in chat or files:**
+  `scripts/secrets-keychain get SOC_ADMIN_PASSWORD` (or `SOC_ANALYST_PASSWORD`).
+- **Manage accounts:** `eval "$(scripts/secrets-keychain inject)"` then
+  `.venv314/bin/python scripts/manage_users.py list|create|set-role|set-password|deactivate`
+  (create/set-password take `--password-env VAR` or a getpass prompt —
+  never the password on argv).
+- **Roles:** analyst = investigation work incl. case/evidence/notable/rule
+  deletes (owner decision Oct 14, 2026); admin = tools/registry/jobs-delete/
+  boundary admit. Matrix: `docs/SESSION_AUTH_PLAN.md` §3.
+- **Audit:** every login, 401/403 and state change is a JSON line on stdout
+  (see `tail -f /tmp/soc-api.log`, logger `soc.audit`).
+- **Rollback:** remove the `AUTH_MODE=session` line from `.env`, then
+  `scripts/start --stop && scripts/start`.
+
 ## Safe Pull
 
 Check first:

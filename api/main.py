@@ -244,27 +244,29 @@ async def _api_key_mutation_gate(request, call_next):
                     request, 403, "CSRF token missing or invalid", "csrf", actor=actor)
     elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
         return _gate_reject(request, 401, "Invalid or missing API key", "missing_api_key")
-    response = await call_next(request)
     # Task 3: attribute every successful state-changing /api/* request
-    # to its actor (session user or API-key machine actor). resolve_actor
-    # is cached in session mode (30 s TTL), so the second resolution
-    # after the gate's own is cheap; in API-key mode it is a header
-    # comparison. Never let auditing break the request itself.
-    if (
+    # to its actor. Resolve BEFORE call_next — at request time — because
+    # the handler can end the very session it runs under (logout), which
+    # would otherwise audit as anonymous. resolve_actor is cached in
+    # session mode (30 s TTL); in API-key mode it is a header comparison.
+    will_audit = (
         auth.mutation_gate_rejects(request)
         and path not in auth.EXEMPT_PATHS
-        and response.status_code < 400
-    ):
+    )
+    state_actor = None
+    if will_audit:
         try:
-            actor = auth.resolve_actor(request)
+            state_actor = auth.resolve_actor(request)
         except Exception:
-            actor = None
+            state_actor = None
+    response = await call_next(request)
+    if will_audit and response.status_code < 400:
         audit_event(
             "state_change", request,
             status=response.status_code,
-            actor=actor.kind if actor else "unknown",
-            actor_role=(actor.role or None) if actor else None,
-            username=getattr(actor.user, "username", None) if actor else None,
+            actor=state_actor.kind if state_actor else "unknown",
+            actor_role=(state_actor.role or None) if state_actor else None,
+            username=getattr(state_actor.user, "username", None) if state_actor else None,
         )
     return response
 

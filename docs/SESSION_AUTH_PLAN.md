@@ -8,6 +8,14 @@ flag unset); the `AUTH_MODE=session` matrix is green; zero new dependencies — 
 scrypt KDF falls back to stdlib PBKDF2-SHA256 on runtimes whose Python build lacks
 OpenSSL scrypt (verify dispatches on the stored scheme prefix). This is a *historical
 plan doc*; the auth seam it describes is the current seam.
+**Activated locally 2026-10-21:** `AUTH_MODE=session` now lives in `.env` (picked up
+by `scripts/dev`/`scripts/start`); accounts were provisioned with
+`scripts/manage_users.py` (passwords in the macOS keychain — `SOC_ADMIN_PASSWORD`,
+`SOC_ANALYST_PASSWORD`); live-verified against shared Neon: anonymous read → 401,
+analyst → 403 on admin routes (registry, jobs-delete), admin → allowed, key-only
+requests keep working, CSRF gate enforced — every event captured by the T3
+`soc.audit` stream. Rollback remains: remove the `AUTH_MODE` line from `.env`,
+restart (`scripts/start --stop && scripts/start`).
 **Goal:** same treatment as `docs/FRONTEND_MODULARIZATION.md` / `docs/BACKEND_MODULARIZATION_PLAN.md` —
 extend the existing `api/auth.py` seam with per-user session auth and an analyst/admin
 role split, additively, with the current API-key behavior byte-identical until a feature
@@ -83,15 +91,28 @@ Role→family matrix (families per `docs/API_ENDPOINTS.md`):
 | `/api/db/rules`, `/supportive-queries*`, `/placeholder-aliases*` | analyst | analyst |
 | `/api/code-review*`, `/api/code-reviews*` | analyst | analyst |
 | `/api/reports*`, `/api/tool-artifacts/*` | analyst | — |
-| `/api/splunk/search-one` | analyst | — |
+| `/api/splunk/search-one` | analyst | key (`POST` runs a search — `require_api_key`, no role gate; matrix column previously said “—”, corrected 2026-10-21 in the doc-drift sweep) |
 | `/api/splunk-boundary/status` | analyst | admin (`/admit`, batch release/delete) |
 | `/api/tools*`, `/api/execute`, `/api/registry*`, `/api/tools/regression` | admin | admin |
 | `/api/jobs*` | analyst | admin (delete one / clear all) |
+| `/api/auth/login` | open | — |
+| `/api/auth/session` | open | — |
+| `/api/auth/logout` | any session | any session (own logout only; carries its own audit event) |
 | retention apply, backups | — | CLI only (`scripts/prune_analysis_results.py --apply`, `scripts/start --backup`) |
 
 Roles only bind in `AUTH_MODE=session`. Today's armed-key behavior (key = full access,
 reads open) is unchanged until then. (`/api/code-review/zip` accepts uploads and stays
 analyst in v1 — flagged for the C2 hardening review.)
+
+> **Dual-gate routes (observed live 2026-10-21):** several admin routes
+> carry `require_api_key` AND `require_role("admin")` as defense in depth
+> (`/api/jobs` delete/clear, `/api/execute`, `/api/tools/regression`,
+> boundary admit/release). `require_api_key` runs first, so a session
+> cookie WITHOUT the `X-API-Key` header answers **401** before the role
+> check ever fires; the UI never hits this because its axios interceptor
+> always stamps the injected `SOC_CONFIG.apiKey`. Cookie-only clients
+> (curl) must send the header too. Role-only routes (`/api/registry*`)
+> answer **403** directly on role failure — verified live both ways.
 
 > **Owner decision (Oct 14, 2026 — closes API review F4):** analyst delete
 > powers in the matrix above are intentional, not a missing dependency.

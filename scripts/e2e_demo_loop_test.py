@@ -7,11 +7,17 @@ Runs against the live local API without touching existing cases:
 """
 
 import json
+import os
 import sys
 import time
 import urllib.request
 
 BASE = "http://127.0.0.1:8000"
+# AUTH_MODE=session + armed API_KEY: the mutation gate and the route-level
+# require_api_key dependencies want X-API-Key even for a session actor
+# (the UI's axios interceptor stamps it the same way). Read from the env —
+# never argv — and omit when unset (flag-off / keyless dev mode).
+_API_KEY = os.environ.get("API_KEY", "").strip()
 MODEL = "llama3.1:latest"
 MARKER = "E2E-DEMO-LOOP"
 
@@ -20,6 +26,8 @@ def call(method, path, payload=None, timeout=240):
     data = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(BASE + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
+    if _API_KEY:
+        req.add_header("X-API-Key", _API_KEY)
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
