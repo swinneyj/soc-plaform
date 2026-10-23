@@ -978,6 +978,135 @@ class TestPlaybookFamilyGuard:
         ]
 
 
+class TestCatalogAnchorFallback:
+    """BUG-02: the catalog fuzzy-matcher must survive notables whose usable
+    fields live under `raw_fields`.
+
+    The matcher built its anchor from `case.rule_name` plus
+    `payload.get("fields")` only, while the paste/store path records the
+    originals under `raw_fields`. An imported notable with a sanitized or
+    empty rule name therefore matched nothing and silently produced no query
+    cards — the loop looked like it had converged when it had not.
+
+    Precedence is deliberate: sanitized `fields` win per key, `raw_fields`
+    only fill gaps, and the raw values are matcher-only — they must never
+    reach the model prompt.
+    """
+
+    @staticmethod
+    def _seed_case(client, case_id, rule_name, rule_id="custom_uuid_0001"):
+        db = client.test_session()
+        db.add(db_models.TriageResult(
+            case_id=case_id,
+            rule_name=rule_name,
+            rule_id=rule_id,
+            verdict="suspicious",
+            confidence_score=0.8,
+            analysis_summary="Synthetic imported-notable case.",
+        ))
+        db.commit()
+        db.close()
+
+    @staticmethod
+    def _attach_promoted_notable(client, case_id, payload):
+        db = client.test_session()
+        db.add(db_models.SplunkEvent(
+            source="pasted",
+            sourcetype="splunk:notable:pasted",
+            host="unused",
+            raw=json.dumps({**payload, "promoted_case_id": case_id}),
+        ))
+        db.commit()
+        db.close()
+
+    def _install_catalog(self, monkeypatch, tmp_path):
+        TestPlaybookFamilyGuard._install_catalog(
+            monkeypatch, tmp_path, [TestPlaybookFamilyGuard._hijack_catalog_entry()]
+        )
+
+    def test_raw_fields_drive_the_match_when_fields_are_absent(self, api_client, monkeypatch, tmp_path):
+        self._seed_case(api_client, "RAW-1", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-1", {
+            "raw_fields": {
+                "rule_name": "Certutil Staging Rule",
+                "title": "Certutil Staging",
+                "correlation_search": "certutil_staging",
+            },
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-1", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "catalog_rule_stealer"
+        assert [q["title"] for q in data["supportive_queries"]] == ["certutil staging check"]
+
+    def test_sanitized_rule_name_falls_back_to_raw_fields(self, api_client, monkeypatch, tmp_path):
+        self._seed_case(
+            api_client, "RAW-2", rule_name="Endpoint - [REDACTED_HOST] - Rule"
+        )
+        self._attach_promoted_notable(api_client, "RAW-2", {
+            "raw_fields": {"rule_name": "Certutil Staging Rule"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-2", 2)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["supportive_rule_id"] == "catalog_rule_stealer"
+
+    def test_sanitized_fields_win_over_raw_fields(self, api_client, monkeypatch, tmp_path):
+        """`raw_fields` fills gaps; it never overrides a usable sanitized field."""
+        self._seed_case(api_client, "RAW-3", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-3", {
+            "fields": {
+                "title": "Certutil Staging",
+                "correlation_search": "certutil_staging",
+            },
+            "raw_fields": {"title": "totally unrelated wording"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-3", 2)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["supportive_rule_id"] == "catalog_rule_stealer"
+
+    def test_no_usable_anchor_adopts_nothing(self, api_client, monkeypatch, tmp_path):
+        """Malformed or irrelevant fallbacks must not invent a catalog family."""
+        self._seed_case(api_client, "RAW-4", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-4", {
+            "raw_fields": {"title": "totally unrelated wording"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-4", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "custom_uuid_0001"
+        assert "certutil staging check" not in [q["title"] for q in data["supportive_queries"]]
+
+    def test_raw_fields_never_reach_the_prompt(self, api_client, monkeypatch, tmp_path):
+        """The fallback is a matcher input only: raw values stay local."""
+        marker = "RAW-ONLY-MARKER-9f3"
+        self._seed_case(api_client, "RAW-5", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-5", {
+            "raw_fields": {
+                "rule_name": "Certutil Staging Rule",
+                "description": marker,
+            },
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-5", 2)
+        assert resp.status_code == 200, resp.text
+        prompts = "\n".join(api_client.fake_ollama.calls)
+        assert marker not in prompts, "raw_fields leaked into the model prompt"
+
+
 class TestPromoteJudgmentFlow:
     """Phase 4 (judgment-flow audit): the pasted ES disposition is the
     referring analyst's conclusion — recorded on the notable for context,
