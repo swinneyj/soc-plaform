@@ -1314,5 +1314,109 @@ class TestPasteBoundaryBatch:
         assert manifest["source"] == "paste-box"
 
 
+class TestHostnameRedactionScope:
+    """BUG-01: the hostname pattern must redact network names, not every
+    hyphenated token. It used to be `\\b([A-Za-z0-9]+[-][A-Za-z0-9-]+)\\b`,
+    which ate ISO-8601 timestamps (`2026-10-23T18` out of
+    `2026-10-23T18:28:43Z`) and ordinary application tags
+    (`win-update-rollup`) as if they were hosts — corrupting the text the
+    model reasons over and the evidence stored beside it.
+
+    Scope: dotted names (3+ labels, or 2 labels with an internal suffix) and
+    bare machine names that carry letters *and* digits. Everything else is
+    left byte-identical.
+    """
+
+    @staticmethod
+    def _run(text):
+        from text_sanitizer_pipeline.text_sanitizer_pipeline import (
+            sanitize_logs_with_tokens,
+        )
+
+        return sanitize_logs_with_tokens(text)
+
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "fs-01.corp.local",   # 3 labels
+            "dc01.example.com",   # 3 labels, public suffix
+            "server-01.local",    # 2 labels, internal suffix
+            "jump.corp",          # 2 labels, internal suffix
+        ],
+    )
+    def test_dotted_hostnames_are_tokenized(self, host):
+        sanitized, mapping = self._run(f"connection from {host} accepted")
+        assert "HOST_1" in sanitized, sanitized
+        assert host not in sanitized
+        assert mapping["HOST_1"] == host
+
+    @pytest.mark.parametrize(
+        "host",
+        ["srv-app01", "win10-lab", "ndc32-28", "FS-01", "ns-lb-01"],
+    )
+    def test_bare_machine_names_still_redacted(self, host):
+        """The shapes the old comment promised must keep working."""
+        sanitized, mapping = self._run(f"{host} rebooted")
+        assert sanitized.startswith("HOST_1 "), sanitized
+        assert mapping["HOST_1"] == host
+
+    @pytest.mark.parametrize(
+        "tag",
+        [
+            "win-update-rollup",
+            "user-profile-service",
+            "feature-flag-a",
+            "release-2026-10",
+        ],
+    )
+    def test_hyphenated_application_tags_survive(self, tag):
+        line = f"tag {tag} applied"
+        sanitized, mapping = self._run(line)
+        assert sanitized == line
+        assert mapping == {}
+
+    @pytest.mark.parametrize(
+        "stamp",
+        [
+            "2026-10-23T18:28:43",
+            "2026-10-23T18:28:43Z",
+            "2026-10-23",
+            "2026-10-23T18:28:43.123456+00:00",
+        ],
+    )
+    def test_iso8601_timestamps_survive(self, stamp):
+        line = f"at {stamp} the agent started"
+        sanitized, mapping = self._run(line)
+        assert sanitized == line, sanitized
+        assert mapping == {}
+
+    def test_filenames_and_bare_domains_are_not_hosts(self):
+        line = "see index.html or example.com and retry"
+        sanitized, mapping = self._run(line)
+        assert sanitized == line
+        assert mapping == {}
+
+    def test_timestamp_beside_a_host_keeps_the_timestamp(self):
+        """The mixed line is the one that actually bit: a log line carries
+        both, and only the host may be tokenized."""
+        sanitized, mapping = self._run(
+            "2026-10-23T18:28:43Z host=fs-01.corp.local user=bob"
+        )
+        assert sanitized == "2026-10-23T18:28:43Z host=HOST_1 user=bob"
+        assert mapping == {"HOST_1": "fs-01.corp.local"}
+
+    def test_ip_and_host_redaction_compose(self):
+        sanitized, mapping = self._run("src=10.0.0.5 dst=FS-01")
+        assert sanitized == "src=IPV4_1 dst=HOST_1"
+        assert mapping == {"IPV4_1": "10.0.0.5", "HOST_1": "FS-01"}
+
+    def test_no_redaction_keys_leak_into_the_text(self):
+        """Tokens only — the originals live in the mapping, which stays local."""
+        sanitized, mapping = self._run("srv-app01 and fs-01.corp.local and FS-01")
+        for original in ("srv-app01", "fs-01.corp.local", "FS-01"):
+            assert original not in sanitized
+        assert sorted(mapping.values()) == ["FS-01", "fs-01.corp.local", "srv-app01"]
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
