@@ -21,6 +21,13 @@ the Splunk side, ever.
 ## 0. Prerequisites (5 min, no credentials needed)
 
 - [ ] Platform healthy: `bash scripts/start --check` → API up on `127.0.0.1:8000`.
+- [ ] Backend posture visible **without running a query** (E.3):
+      `curl -s http://localhost:8000/api/splunk/search-status | python3 -m json.tool`
+      → expect `"backend": "splunk"`, `"ready": true`, `"read_only": true`.
+      Credentials show as booleans only (`splunk_url_configured` /
+      `splunk_token_configured`); the endpoint never echoes the URL or token.
+      `"ready": false` names the missing piece in `problem` — fix that before
+      step 1.
 - [ ] A case with a **source notable** exists (search-one 404s without one — it
       substitutes placeholders from the notable). List cases:
       `curl -s http://localhost:8000/api/db/triage | python3 -m json.tool | head -40`
@@ -123,6 +130,7 @@ listing the tokens — also a pass if it names the missing notable fields.
 | **CSV normalization** | Open the probe row in the Evidence Timeline; compare its `timestamp` against the event time in Splunk | `_time` epoch → naive-UTC ISO string, correct instant |
 | **Stats-row shape** | Re-run Probe A with `"spl": "index=* \| stats count by sourcetype \| head 5"` | Saves fine with no `_raw`; `count`/`sourcetype` fields present, missing keys defaulted to `""` |
 | **`search` prefixing** | `curl -s http://localhost:8000/api/jobs/<job_id>` and read `arguments.spl` | Bare terms got `search ` prepended; `\| makeresults`/`\| stats`/`rest`/`savedsearch` did not |
+| **Saved-search listing (E.3)** | `curl -s http://localhost:8000/api/splunk/saved-searches` | HTTP 200 with `{"success": true, "count": N, "items": [{"name", "description", "search"}]}` — visible searches only, sorted by name. `409` while `SEARCH_BACKEND=mock`: that is the wrong-mode guard working, not a failure. |
 | **Bearer on the wire** | In Splunk: `index=_audit sourcetype=audittrail` filtered to your user | `POST /services/search/jobs/export` → HTTP 200, bearer auth |
 | **Boundary-latch interplay** | `curl -s http://localhost:8000/api/splunk-boundary/status` | `"mode": "quarantined"` **while probes succeeded** — the latch gates HTTP *admission* only (code: only the admit endpoints check `current_mode()`); read-only search-one never consults it. Do **not** flip the latch for this rehearsal |
 | **Concurrency guard** | Fire two Probe A POSTs back-to-back for the same case | Second returns HTTP 409 ("per-case concurrency cap is 1"); no duplicate ledger row |

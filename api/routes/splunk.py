@@ -3,7 +3,10 @@
 The boundary (\"the latch\") is the single doorway for Splunk data — see the
 banner above the routes. search-one runs one supportive query end-to-end and
 ledgers the outcome as `splunk_auto` evidence, with per-case inflight
-de-duplication and a hard timeout.
+de-duplication and a hard timeout. The tail of the file adds read-only
+search-backend introspection (`/api/splunk/search-status`,
+`/api/splunk/saved-searches`) so backend readiness and live saved searches are
+inspectable without executing a query.
 """
 import concurrent.futures
 import json
@@ -325,5 +328,93 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
                 db.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Read-only search-backend introspection (E.3)
+#
+# The backend choice is configuration (`SEARCH_BACKEND`), and misconfiguration
+# used to be discoverable only by running a real query. These two endpoints
+# make the posture inspectable without executing anything: `status` reports
+# which backend is active, whether it is ready, and the SPL subset the mock
+# accepts; `saved-searches` lists the live instance's visible saved searches
+# (a convenience for picking an existing SPL). Both are read-only, both sit
+# behind the API-key dependency, and neither ever echoes a credential value.
+# ---------------------------------------------------------------------------
+
+_SEARCH_SUBSET = (
+    "base free-text and key=value terms",
+    "| search k=v",
+    "| where k OP v (==, =, !=, >, <, >=, <=)",
+    "| stats count by field",
+    "| head N",
+)
+
+
+def _search_backend_choice() -> str:
+    return (os.environ.get("SEARCH_BACKEND", "mock") or "mock").strip().lower()
+
+
+@router.get(
+    "/api/splunk/search-status",
+    tags=["Splunk"],
+    dependencies=[Depends(require_api_key)],
+)
+def splunk_search_status():
+    """Describe the active search backend: readiness, scope, never the secret."""
+    chosen = _search_backend_choice()
+    url_configured = bool((os.environ.get("SPLUNK_URL") or "").strip())
+    token_configured = bool((os.environ.get("SPLUNK_TOKEN") or "").strip())
+    if chosen == "mock":
+        ready, problem = True, ""
+    elif chosen == "splunk":
+        ready = url_configured and token_configured
+        problem = (
+            "" if ready
+            else "SEARCH_BACKEND=splunk requires SPLUNK_URL and SPLUNK_TOKEN"
+        )
+    else:
+        ready = False
+        problem = f"Unknown SEARCH_BACKEND '{chosen}' (expected 'mock' or 'splunk')"
+    return {
+        "backend": chosen,
+        "ready": ready,
+        "problem": problem,
+        "read_only": True,
+        # Booleans only — never the URL or token themselves.
+        "credentials": {
+            "splunk_url_configured": url_configured,
+            "splunk_token_configured": token_configured,
+        },
+        "timeout_seconds": _SEARCH_ONE_TIMEOUT_SECONDS,
+        "supported_spl_subset": list(_SEARCH_SUBSET),
+        "scope": "Search jobs only — no notables, no writes, no configuration endpoints.",
+    }
+
+
+@router.get(
+    "/api/splunk/saved-searches",
+    tags=["Splunk"],
+    dependencies=[Depends(require_api_key)],
+)
+def splunk_saved_searches():
+    """List visible saved searches on the live Splunk instance (read-only)."""
+    from services.search_backend import SplunkSearchError, get_search_backend
+
+    chosen = _search_backend_choice()
+    if chosen != "splunk":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Live saved-search listing needs SEARCH_BACKEND=splunk plus "
+                f"SPLUNK_URL/SPLUNK_TOKEN (active backend: '{chosen}')."
+            ),
+        )
+    try:
+        backend = get_search_backend()
+        items = backend.list_saved_searches()
+    except SplunkSearchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"success": True, "count": len(items), "items": items}
 
 

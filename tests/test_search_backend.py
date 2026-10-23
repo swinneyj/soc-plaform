@@ -315,9 +315,15 @@ def test_embedded_qualifiers_survive_pipe_ops(backend):
 # ---------------------------------------------------------------------------
 
 class FakeSplunkResponse:
-    def __init__(self, text="", status_code=200):
+    def __init__(self, text="", status_code=200, json_data=None):
         self.text = text
         self.status_code = status_code
+        self._json_data = json_data
+
+    def json(self):
+        if self._json_data is None:
+            raise ValueError("response body is not JSON")
+        return self._json_data
 
 
 class FakeSplunkSession:
@@ -330,6 +336,14 @@ class FakeSplunkSession:
 
     def post(self, url, headers=None, data=None, timeout=None):
         self.calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
+        if self._error is not None:
+            raise self._error
+        return self._response
+
+    def get(self, url, headers=None, params=None, timeout=None):
+        self.calls.append(
+            {"url": url, "headers": headers, "params": params, "timeout": timeout}
+        )
         if self._error is not None:
             raise self._error
         return self._response
@@ -451,3 +465,239 @@ def test_factory_selects_real_backend_when_configured(monkeypatch):
     backend = get_search_backend()
     assert isinstance(backend, RealSplunkBackend)
     assert backend._base_url == "https://splunk.example.com:8089"
+
+
+# ---------------------------------------------------------------------------
+# E.3: read-only saved-search listing (RealSplunkBackend.list_saved_searches)
+# ---------------------------------------------------------------------------
+
+_SAVED_SEARCH_PAYLOAD = {
+    "entry": [
+        {
+            "name": "Zeta Failed Logins",
+            "content": {
+                "description": "failure spike",
+                "search": "index=secure action=failure",
+                "isvisible": True,
+            },
+        },
+        {
+            "name": "Alpha Windows Logons",
+            "content": {
+                "description": "",
+                "search": "index=wineventlog EventCode=4624",
+                "isvisible": True,
+            },
+        },
+        {
+            "name": "Hidden Search",
+            "content": {
+                "description": "internal only",
+                "search": "index=internal",
+                "isvisible": False,
+            },
+        },
+        {
+            "name": "Stringly Visible",
+            "content": {"description": "", "search": "index=s", "isvisible": "0"},
+        },
+    ]
+}
+
+
+def test_saved_search_listing_request_shape():
+    session = FakeSplunkSession(FakeSplunkResponse(json_data=_SAVED_SEARCH_PAYLOAD))
+    backend = _real_backend(session)
+    backend.list_saved_searches()
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["url"] == "https://splunk.example.com:8089/services/saved/searches"
+    assert call["headers"] == {"Authorization": "Bearer test-token"}
+    assert call["params"] == {"count": "-1", "output_mode": "json"}
+    assert call["timeout"] == 42.0
+
+
+def test_saved_search_listing_filters_invisible_and_sorts():
+    backend = _real_backend(
+        FakeSplunkSession(FakeSplunkResponse(json_data=_SAVED_SEARCH_PAYLOAD))
+    )
+    items = backend.list_saved_searches()
+
+    assert [item["name"] for item in items] == [
+        "Alpha Windows Logons",
+        "Zeta Failed Logins",
+    ]
+    assert items[1]["description"] == "failure spike"
+    assert items[0]["search"] == "index=wineventlog EventCode=4624"
+
+
+def test_saved_search_listing_caps_at_limit():
+    backend = _real_backend(
+        FakeSplunkSession(FakeSplunkResponse(json_data=_SAVED_SEARCH_PAYLOAD))
+    )
+    assert len(backend.list_saved_searches(limit=1)) == 1
+
+
+def test_saved_search_listing_http_error_fails_loudly():
+    backend = _real_backend(
+        FakeSplunkSession(FakeSplunkResponse("In handler: forbidden", status_code=403))
+    )
+    with pytest.raises(SplunkSearchError, match="HTTP 403"):
+        backend.list_saved_searches()
+
+
+def test_saved_search_listing_rejects_non_json():
+    backend = _real_backend(FakeSplunkSession(FakeSplunkResponse("<html>nope</html>")))
+    with pytest.raises(SplunkSearchError, match="non-JSON"):
+        backend.list_saved_searches()
+
+
+# ---------------------------------------------------------------------------
+# E.3: read-only backend introspection endpoints (api/routes/splunk.py)
+# ---------------------------------------------------------------------------
+
+
+def _mock_search_status(monkeypatch, **env):
+    from api.routes.splunk import splunk_search_status
+
+    for key in ("SEARCH_BACKEND", "SPLUNK_URL", "SPLUNK_TOKEN"):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in env.items():
+        monkeypatch.setenv(key, value)
+    return splunk_search_status()
+
+
+def test_search_status_mock_is_ready(monkeypatch):
+    status = _mock_search_status(monkeypatch)
+    assert status["backend"] == "mock"
+    assert status["ready"] is True
+    assert status["read_only"] is True
+    assert status["problem"] == ""
+    assert status["credentials"] == {
+        "splunk_url_configured": False,
+        "splunk_token_configured": False,
+    }
+    assert status["supported_spl_subset"]
+
+
+def test_search_status_flags_unconfigured_splunk(monkeypatch):
+    status = _mock_search_status(monkeypatch, SEARCH_BACKEND="splunk")
+    assert status["ready"] is False
+    assert "SPLUNK_URL" in status["problem"]
+
+
+def test_search_status_reports_ready_when_configured(monkeypatch):
+    status = _mock_search_status(
+        monkeypatch,
+        SEARCH_BACKEND="splunk",
+        SPLUNK_URL="https://splunk.example.com:8089",
+        SPLUNK_TOKEN="test-token",
+    )
+    assert status["ready"] is True
+    assert status["problem"] == ""
+    assert status["credentials"] == {
+        "splunk_url_configured": True,
+        "splunk_token_configured": True,
+    }
+
+
+def test_search_status_never_echoes_credential_values(monkeypatch):
+    status = _mock_search_status(
+        monkeypatch,
+        SEARCH_BACKEND="splunk",
+        SPLUNK_URL="https://very-secret-host.example:8089",
+        SPLUNK_TOKEN="super-secret-bearer-value",
+    )
+    body = json.dumps(status)
+    assert "very-secret-host" not in body
+    assert "super-secret-bearer-value" not in body
+
+
+def test_search_status_rejects_unknown_backend(monkeypatch):
+    status = _mock_search_status(monkeypatch, SEARCH_BACKEND="elastic")
+    assert status["ready"] is False
+    assert "Unknown SEARCH_BACKEND" in status["problem"]
+
+
+def test_saved_searches_endpoint_requires_real_backend(monkeypatch):
+    from fastapi import HTTPException
+
+    from api.routes.splunk import splunk_saved_searches
+
+    monkeypatch.setenv("SEARCH_BACKEND", "mock")
+    with pytest.raises(HTTPException) as excinfo:
+        splunk_saved_searches()
+    assert excinfo.value.status_code == 409
+    assert "SEARCH_BACKEND=splunk" in excinfo.value.detail
+
+
+def test_saved_searches_endpoint_unconfigured_is_503(monkeypatch):
+    from fastapi import HTTPException
+
+    from api.routes.splunk import splunk_saved_searches
+
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.delenv("SPLUNK_URL", raising=False)
+    monkeypatch.delenv("SPLUNK_TOKEN", raising=False)
+    with pytest.raises(HTTPException) as excinfo:
+        splunk_saved_searches()
+    assert excinfo.value.status_code == 503
+    assert "SPLUNK_URL" in excinfo.value.detail
+
+
+def test_saved_searches_endpoint_returns_filtered_items(monkeypatch):
+    from api.routes.splunk import splunk_saved_searches
+
+    backend = _real_backend(
+        FakeSplunkSession(FakeSplunkResponse(json_data=_SAVED_SEARCH_PAYLOAD))
+    )
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    # The route imports the factory at call time, so patching the module
+    # attribute is enough (no need to touch the router wiring).
+    monkeypatch.setattr("services.search_backend.get_search_backend", lambda: backend)
+
+    result = splunk_saved_searches()
+    assert result["success"] is True
+    assert result["count"] == 2
+    assert [item["name"] for item in result["items"]] == [
+        "Alpha Windows Logons",
+        "Zeta Failed Logins",
+    ]
+
+
+def test_search_status_serves_over_http(monkeypatch):
+    """End-to-end proof the new route is wired into the app (not just a fn)."""
+    from fastapi.testclient import TestClient
+
+    from api import auth
+    from api.main import app
+
+    # Disarm the key gate for this request only (tests run without .env), and
+    # keep the app in API-key mode rather than session mode.
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.delenv("SEARCH_BACKEND", raising=False)
+    # No context manager: skip lifespan (no DB needed for this route).
+    response = TestClient(app).get("/api/splunk/search-status")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["backend"] == "mock"
+    assert payload["ready"] is True
+    assert payload["read_only"] is True
+
+
+def test_saved_searches_rejects_mock_over_http(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from api import auth
+    from api.main import app
+
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.setenv("SEARCH_BACKEND", "mock")
+    response = TestClient(app).get("/api/splunk/saved-searches")
+
+    assert response.status_code == 409
+    assert "SEARCH_BACKEND=splunk" in response.json()["detail"]

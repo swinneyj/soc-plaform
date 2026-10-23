@@ -151,6 +151,8 @@ Readiness evaluation lives under the cases family above
 | POST | — | `/api/splunk-boundary/admit` | Key (middleware + pinned) | Admit a batch through the boundary latch. |
 | DELETE | — | `/api/splunk-boundary/batches/{batch_id}` | Key (middleware + pinned) | Release an admitted batch. |
 | POST | — | `/api/splunk/search-one` | Key (middleware + pinned) | Run one SPL against the configured backend and save `splunk_auto` evidence. |
+| GET | — | `/api/splunk/search-status` | Key when armed (pinned) | Read-only backend introspection: mode, readiness, SPL subset. Booleans only — never echoes the URL or token. |
+| GET | — | `/api/splunk/saved-searches` | Key when armed (pinned) | Read-only listing of visible saved searches on the live Splunk instance (409 unless `SEARCH_BACKEND=splunk`). |
 
 ## Tools, execution & reports
 

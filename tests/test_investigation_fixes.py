@@ -1124,6 +1124,10 @@ class TestRouteSemanticsAudit:
         "/api/tool-artifacts/{artifact_path:path}",
         "/api/tools", "/api/tools/{tool_name}",
         "/api/splunk-boundary/status",
+        # E.3: read-only backend introspection — `search-status` reads env
+        # flags only; `saved-searches` issues a single GET to Splunk. Neither
+        # writes platform state, so both are classified read-only here.
+        "/api/splunk/search-status", "/api/splunk/saved-searches",
         "/index.modular.html",
     }
 
