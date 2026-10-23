@@ -94,4 +94,19 @@ if command -v node >/dev/null 2>&1 && [ -f scripts/check_web_option_keys.mjs ]; 
     exit 1
   fi
 fi
+
+# Live security posture probe. The API is a deliberate on-demand service, so
+# the probe skips cleanly when it is down; when it is up, an ungated server
+# (anonymous 200s, exposed docs, wildcard CORS) blocks the push. This is the
+# runtime half of the gate: static checks cannot see a gate that stopped
+# enforcing.
+if [ -n "${REQ_PY:-}" ] && [ -f scripts/security_smoke.py ]; then
+  if ! "$REQ_PY" scripts/security_smoke.py; then
+    echo ""
+    echo "❌ Security posture probe failed — push BLOCKED."
+    echo "   Fix the regression, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
 exit 0
