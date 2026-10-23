@@ -150,6 +150,17 @@ async def _api_key_mutation_gate(request, call_next):
             if actor.kind == "session" and not actor.csrf_ok:
                 return _gate_reject(
                     request, 403, "CSRF token missing or invalid", "csrf", actor=actor)
+    elif auth.proxy_mode():
+        # SEC-01: the trusted proxy authenticated the human. Every /api/*
+        # request (reads included, like session mode) needs a mapped actor;
+        # health and the /api/auth/* bootstrap stay reachable so a liveness
+        # probe and the UI's mode probe cannot deadlock behind the login.
+        is_api = path.startswith("/api/")
+        if is_api and path not in auth.EXEMPT_PATHS:
+            actor, reason = auth.resolve_proxy_actor(request)
+            if actor.kind == "anonymous":
+                return _gate_reject(
+                    request, 401, "Authentication required", reason or "anonymous")
     elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
         return _gate_reject(request, 401, "Invalid or missing API key", "missing_api_key")
     # Task 3: attribute every successful state-changing /api/* request

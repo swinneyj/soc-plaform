@@ -13,7 +13,9 @@ Referer headers and proxy logs, so the default is fail-closed (F2).
 """
 import hashlib
 import hmac
+import ipaddress
 import os
+import re
 import secrets
 from collections import namedtuple
 from datetime import timedelta
@@ -28,6 +30,13 @@ _API_KEY = os.environ.get("API_KEY", "").strip()
 # byte-identical. Read live via session_mode(); tests monkeypatch this module
 # attribute.
 _SESSION_MODE = os.environ.get("AUTH_MODE", "").strip().lower() == "session"
+
+# Proxy mode (SEC-01): AUTH_MODE=proxy trusts an identity header stamped by a
+# reverse proxy that has ALREADY authenticated the user (nginx auth_request,
+# oauth2-proxy, Pomerium, an ALB with OIDC). Same fail-closed shape as session
+# mode: every /api/* request needs a real actor, reads included. Inert unless
+# the flag is set, so the API-key and session modes are byte-identical.
+_PROXY_MODE = os.environ.get("AUTH_MODE", "").strip().lower() == "proxy"
 
 
 def query_key_allowed() -> bool:
@@ -188,6 +197,135 @@ def session_mode() -> bool:
     return bool(_SESSION_MODE)
 
 
+# ---------------------------------------------------------------------------
+# Proxy mode (SEC-01, decided 2026-10-23) — header auth behind a trusted proxy.
+#
+# The proxy authenticates the human; this deployment trusts ONE header that the
+# proxy stamps and maps its value to a local users.id. Two rules make that safe
+# enough to ship:
+#
+#   1. The header is read ONLY when the TCP peer is inside
+#      SOC_TRUSTED_PROXY_CIDRS. Anywhere else the header is ignored, not
+#      honored-and-logged: an unauthenticated caller must never be able to
+#      assert an identity by sending a header. No CIDR list configured means
+#      nobody is trusted (fail closed) — a half-configured proxy locks people
+#      out, which is the safe direction.
+#   2. The value must be a plain integer that maps to an ACTIVE users row. No
+#      username matching, no auto-provisioning: the proxy cannot mint accounts,
+#      only name ones that already exist here.
+#
+# Residual CSRF note: proxy-header auth on a cookie-less request has no
+# double-submit token, so a cross-site POST that reaches the proxy would carry
+# the proxy's header too. That is the proxy's boundary to defend (strip inbound
+# copies of the header, enforce Origin/SameSite) — K8S-03's ingress draft is
+# where that lands. Recorded here so it is a decision, not an oversight.
+# ---------------------------------------------------------------------------
+
+PROXY_USER_HEADER_DEFAULT = "X-Auth-Request-User"
+_PROXY_USER_ID_RE = re.compile(r"^[0-9]{1,18}$")
+
+
+def proxy_mode() -> bool:
+    """True when AUTH_MODE=proxy (trusted reverse-proxy identity header)."""
+    return bool(_PROXY_MODE)
+
+
+def proxy_header_name() -> str:
+    """Header carrying the authenticated user id (default X-Auth-Request-User)."""
+    return os.environ.get("SOC_PROXY_USER_HEADER", "").strip() or PROXY_USER_HEADER_DEFAULT
+
+
+def trusted_proxy_networks() -> list:
+    """Parsed SOC_TRUSTED_PROXY_CIDRS entries.
+
+    Comma-separated IPs or CIDRs (``10.0.0.0/8``, ``127.0.0.1``). Parsed per
+    call so operators can widen a trusted range without a restart and tests can
+    set it with monkeypatch. Malformed entries are SKIPPED — they never widen
+    trust to "anything".
+    """
+    networks = []
+    for chunk in os.environ.get("SOC_TRUSTED_PROXY_CIDRS", "").split(","):
+        chunk = chunk.strip()
+        if not chunk:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(chunk, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+def _remote_is_trusted_proxy(request) -> bool:
+    """True when the TCP peer address falls inside a trusted proxy CIDR.
+
+    Uses the peer address (``request.client``), never X-Forwarded-For: the
+    forwarding chain is attacker-controlled until a trusted hop says otherwise,
+    and the whole point of this check is to identify that hop. A non-IP peer
+    (e.g. the TestClient default, ``testclient``) is not trusted.
+    """
+    client = getattr(request, "client", None)
+    host = getattr(client, "host", None) if client is not None else None
+    if not host:
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return any(address in network for network in trusted_proxy_networks())
+
+
+def _proxy_user(user_id: int):
+    """Plain (id, username, role, is_active) for a users row, or None."""
+    from db.models import SessionLocal, User
+
+    db = SessionLocal()
+    try:
+        row = db.query(User).filter(User.id == user_id).first()
+        if row is None:
+            return None
+        return (row.id, row.username, row.role, bool(row.is_active))
+    finally:
+        db.close()
+
+
+def resolve_proxy_actor(request):
+    """(Actor, reason) for AUTH_MODE=proxy.
+
+    Success is ``(Actor(kind="proxy"), "")``. Failure returns an anonymous
+    Actor plus the reason the gate should audit: ``proxy_header_missing``,
+    ``proxy_untrusted``, ``proxy_header_malformed``, ``proxy_user_unknown`` or
+    ``proxy_user_inactive``. A valid API key still authenticates as the admin
+    machine actor, so automation and health checks keep working on a
+    proxy-gated deployment.
+    """
+    raw = request.headers.get(proxy_header_name())
+    reason = ""
+    if raw is None:
+        reason = "proxy_header_missing"
+    elif not _remote_is_trusted_proxy(request):
+        # A peer outside the trusted ranges cannot assert an identity. The
+        # header is discarded rather than reported in detail.
+        reason = "proxy_untrusted"
+    else:
+        value = raw.strip()
+        if not _PROXY_USER_ID_RE.match(value):
+            reason = "proxy_header_malformed"
+        else:
+            row = _proxy_user(int(value))
+            if row is None:
+                reason = "proxy_user_unknown"
+            elif not row[3]:
+                reason = "proxy_user_inactive"
+            else:
+                user = CachedUser(id=row[0], username=row[1], role=row[2])
+                # csrf_ok: header auth carries no cookie, so there is nothing
+                # to double-submit. See the residual CSRF note above.
+                return Actor(kind="proxy", role=row[2], user=user, csrf_ok=True, csrf_token=""), ""
+    if _API_KEY and request_has_api_key(request):
+        return Actor(kind="api-key", role="admin", user=None, csrf_ok=True, csrf_token=""), ""
+    return Actor(kind="anonymous", role="", user=None, csrf_ok=False, csrf_token=""), reason
+
+
 def session_expiry():
     """Naive-UTC now + 12h (db.util is the api-side clock)."""
     from db.util import utcnow_naive
@@ -250,6 +388,11 @@ def resolve_actor(request) -> Actor:
     session is never served from the cache.
     """
     token = request.cookies.get(SESSION_COOKIE)
+    if proxy_mode():
+        # Proxy deployments have no session cookie contract: the identity is
+        # the trusted header (or the API key). Delegating here keeps the gate,
+        # the audit stream and require_role reading ONE resolution path.
+        return resolve_proxy_actor(request)[0]
     if token:
         token_hash = hash_token(token)
         if ACTOR_CACHE_TTL > 0:
@@ -305,13 +448,14 @@ def destroy_session(request) -> None:
 
 
 def require_role(role: str):
-    """FastAPI dependency: in session mode require an actor with `role`.
+    """FastAPI dependency: require an authenticated actor with `role`.
 
-    Flag-off this is a no-op — roles only bind in AUTH_MODE=session — which
-    keeps every existing route and test byte-identical until the flag flips.
+    Binds in session AND proxy mode — both resolve a local users row, so both
+    carry a real role. Flag-off this stays a no-op, which keeps every existing
+    route and test byte-identical.
     """
     def _dependency(request: Request) -> None:
-        if not session_mode():
+        if not (session_mode() or proxy_mode()):
             return
         actor = resolve_actor(request)
         if actor.kind == "anonymous":

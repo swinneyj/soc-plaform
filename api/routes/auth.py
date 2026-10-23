@@ -186,12 +186,24 @@ def session_info(request: Request):
     """Actor bootstrap for the UI.
 
     AUTH_MODE=session: 200 {user, role, csrf_token} for a live session, 401
-    otherwise (the UI shows the login modal). Flag off: 200 {mode:'api-key',
-    role:'admin'} — auth is inert and the UI keeps admin controls enabled
-    exactly like today; the constant shape lets app.modular.js branch on
-    `mode` without feature-detecting.
+    otherwise (the UI shows the login modal). AUTH_MODE=proxy: 200
+    {mode:'proxy', user, role} when the trusted header resolved an account (the
+    proxy owns login/logout, so the UI shows no modal and sends no CSRF token),
+    401 otherwise. Flag off: 200 {mode:'api-key', role:'admin'} — auth is inert
+    and the UI keeps admin controls enabled exactly like today; the constant
+    shape lets app.modular.js branch on `mode` without feature-detecting.
     """
     actor = auth.resolve_actor(request)
+    if auth.proxy_mode():
+        if actor.kind == "anonymous":
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        return {
+            "mode": "proxy",
+            "user": getattr(actor.user, "username", ""),
+            "role": actor.role,
+            # Header auth has no cookie, so there is no double-submit token.
+            "csrf_token": "",
+        }
     if not auth.session_mode():
         return {"mode": "api-key", "role": "admin", "user": "", "csrf_token": ""}
     if actor.kind != "session":

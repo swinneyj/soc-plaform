@@ -16,6 +16,32 @@ analyst → 403 on admin routes (registry, jobs-delete), admin → allowed, key-
 requests keep working, CSRF gate enforced — every event captured by the T3
 `soc.audit` stream. Rollback remains: remove the `AUTH_MODE` line from `.env`,
 restart (`scripts/start --stop && scripts/start`).
+**SEC-01 (2026-10-23) — third mode: `AUTH_MODE=proxy`.** For deployments where a
+reverse proxy authenticates the human (nginx `auth_request`, oauth2-proxy, Pomerium,
+an ALB with OIDC) and the app should not run its own login. The proxy stamps one
+header — `X-Auth-Request-User` unless `SOC_PROXY_USER_HEADER` names another — carrying
+the **local** `users.id`. Two gates make that safe:
+
+1. The header is read only when the TCP peer (`request.client`, never
+   `X-Forwarded-For`) is inside `SOC_TRUSTED_PROXY_CIDRS` (comma-separated IPs/CIDRs).
+   Unset, empty or malformed entries trust **nobody** — fail closed. Off-proxy, the
+   header is discarded, so an unauthenticated caller cannot assert an identity.
+2. The value must be a bare integer (`^[0-9]{1,18}$`) resolving to an **active** row.
+   No username matching, no auto-provisioning: the proxy can only name accounts that
+   already exist here.
+
+Semantics: every `/api/*` request needs a mapped actor (reads included, exactly like
+session mode); `EXEMPT_PATHS` (`/health`, `/api/health`, `/api/auth/*`) stay reachable;
+`require_role` binds against the row's role, so an admin-gated route still 403s an
+analyst; a valid `API_KEY` still authenticates as the admin machine actor. `GET
+/api/auth/session` answers `{mode:'proxy', user, role, csrf_token:''}` so the UI can
+skip its login modal. **Residual, deliberate:** header auth has no cookie to
+double-submit, so CSRF defence is the proxy's boundary (strip inbound copies of the
+identity header, enforce `Origin`/`SameSite`) — the K8S-03 ingress draft is where that
+lands. Rejection reasons land in the audit stream as `proxy_header_missing`,
+`proxy_untrusted`, `proxy_header_malformed`, `proxy_user_unknown`,
+`proxy_user_inactive`. Tests: `tests/test_proxy_auth.py` (17).
+
 **Goal:** same treatment as `docs/FRONTEND_MODULARIZATION.md` / `docs/BACKEND_MODULARIZATION_PLAN.md` —
 extend the existing `api/auth.py` seam with per-user session auth and an analyst/admin
 role split, additively, with the current API-key behavior byte-identical until a feature
@@ -64,8 +90,9 @@ multi-tenancy/orgs, per-user audit logging (future), login rate limiting (owned 
   `/api/auth/*` routes themselves. The current key gate deliberately leaves reads open —
   that changes only in session mode.
 - **Feature flag.** `AUTH_MODE` env var: unset or `api-key` → today's behavior exactly;
-  `session` → session + CSRF + role gates active (API key still accepted as admin).
-  Rollback = unset the var and restart.
+  `session` → session + CSRF + role gates active (API key still accepted as admin);
+  `proxy` → trusted-proxy header identity (SEC-01, see the status block above;
+  API key still accepted as admin). Rollback = unset the var and restart.
 
 ---
 
@@ -100,7 +127,8 @@ Role→family matrix (families per `docs/API_ENDPOINTS.md`):
 | `/api/auth/logout` | any session | any session (own logout only; carries its own audit event) |
 | retention apply, backups | — | CLI only (`scripts/prune_analysis_results.py --apply`, `scripts/start --backup`) |
 
-Roles only bind in `AUTH_MODE=session`. Today's armed-key behavior (key = full access,
+Roles bind in `AUTH_MODE=session` and `AUTH_MODE=proxy` (both resolve a local users
+row, so both carry a real role); flag-off they are inert. Today's armed-key behavior (key = full access,
 reads open) is unchanged until then. (`/api/code-review/zip` accepts uploads and stays
 analyst in v1 — flagged for the C2 hardening review.)
 
