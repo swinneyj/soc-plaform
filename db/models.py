@@ -10,6 +10,8 @@ import os
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from db.crypto import EncryptedText
+
 
 def get_default_postgres_url() -> str:
     """URL used when `DATABASE_URL` is unset — the same rule as the launchers.
@@ -205,11 +207,15 @@ class PlaceholderAlias(Base):
 
 
 class CodeReview(Base):
-    """Code review results from Ollama LLM analysis."""
+    """Code review results from Ollama LLM analysis.
+
+    ``code_snippet`` is encrypted at rest (SEC-03, ``db.crypto``) — it is the
+    most sensitive free text this platform stores.
+    """
     __tablename__ = "code_reviews"
 
     id = Column(Integer, primary_key=True, index=True)
-    code_snippet = Column(Text)
+    code_snippet = Column(EncryptedText)
     language = Column(String, default="python")
     review_result = Column(Text)
     model_name = Column(String, default="llama3.1:latest")
@@ -257,7 +263,11 @@ class AuthSession(Base):
 
     id = Column(Integer, primary_key=True)
     token_hash = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex
-    csrf_token = Column(String(64), nullable=False)
+    # SEC-03: encrypted at rest. The ciphertext (~104 chars for a 43-char
+    # token) does not fit the old String(64); the decorator's impl is TEXT, so
+    # fresh databases are fine and existing ones need the ALTER in
+    # docs/COLUMN_ENCRYPTION.md before a key is enabled.
+    csrf_token = Column(EncryptedText, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     expires_at = Column(DateTime, nullable=False)
