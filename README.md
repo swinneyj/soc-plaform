@@ -59,6 +59,8 @@ curl http://127.0.0.1:8000/health
 
 The default Docker database host port is 5433. Keep credentials in .env or a machine-local credential store; never commit them.
 
+**Local Postgres is the primary database** (`127.0.0.1:5432/soc_platform`); the shared Neon project is an optional mirror reached with `scripts/start --shared`. Nothing on the default launch path is metered or network-dependent — see [docs/LOCAL_FIRST_DATABASE.md](docs/LOCAL_FIRST_DATABASE.md), and `scripts/dev --check` to see which target you are actually on.
+
 For native API testing:
 
 ~~~bash

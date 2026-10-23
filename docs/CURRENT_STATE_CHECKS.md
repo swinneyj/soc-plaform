@@ -18,12 +18,18 @@ ls -1 tests/ui_regression/*.mjs | wc -l
 The gating scripts are the source of truth for passing/failing; this file is only
 a pointer so nobody has to remember the commands.
 
-- Test files: `tests/test_*.py` — currently **12** on disk (older docs quote 8;
-  that figure is stale).
+- Test files: `tests/test_*.py` — currently **17** on disk (older docs quote 8 or 12;
+  both are stale). If you add one, update this number in the same commit — the point of
+  counting is that the estate stays countable, not that the number is frozen.
 - UI regression harnesses: `tests/ui_regression/*.mjs` — currently **3** files
   on disk (`harness_core.mjs` is the shared core; the other two are scenarios).
   Older docs quote "23 scenarios"; that figure is stale — re-derive scenario names
   from the two scenario files plus `harness_core.mjs` before assuming a count.
+- Database target: `.venv314/bin/python -m db.target --check` (target, source,
+  redacted host, live ping) and `bash scripts/dev --check` (full launcher banner,
+  starts nothing). Local Postgres is the primary; `SOC_DB_TARGET=shared` without a
+  shared URL must refuse, never fall back — `tests/test_db_target.py` pins that.
+  Policy: `docs/LOCAL_FIRST_DATABASE.md`.
 - Baseline: `bash scripts/baseline --verify` (must be ✅ BASELINE HOLDING before
   any code-touching work; run it before you start and after you finish).
 - Undefined-name gate: `bash scripts/check_undefined_names.sh` (falls back to the

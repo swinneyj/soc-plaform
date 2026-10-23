@@ -4,15 +4,18 @@
 
 ## Schedule
 
-- **launchd:** `scripts/local.soc-platform.backup.plist` runs `scripts/backup_db.sh` daily at **03:30**.
-- **Install** (once per machine):
+**There is no scheduler running today** — no backup LaunchAgent is loaded on this
+Mac (`launchctl list | grep soc` is empty; verified 2026-10-23), and that is the
+owners' decision: boot persistence is deliberately off (`AGENTS.md`).
 
-  ```bash
-  cp scripts/local.soc-platform.backup.plist ~/Library/LaunchAgents/
-  launchctl load ~/Library/LaunchAgents/local.soc-platform.backup.plist
-  ```
-
-- **Manual run:** `set -a; . ./.env; set +a; bash scripts/backup_db.sh` (needs `DATABASE_URL` + `pg_dump` on PATH).
+- **Rides along with platform starts:** every `scripts/start` refreshes the dump
+  when the newest one is more than 20h old (`fresh (7h old) — skipping` in the
+  banner). **Manual / forced:** `scripts/start --backup`.
+- **Standalone run:** `set -a; . ./.env; set +a; bash scripts/backup_db.sh`
+  (needs `DATABASE_URL` + `pg_dump` on PATH).
+- **Optional escape hatch:** `scripts/local.soc-platform.backup.plist` (daily
+  03:30) exists in the repo but is **not installed**; installing it is
+  `cp` + `launchctl load` if a scheduler is ever wanted.
 - **Requirement:** `pg_dump` must be at least the server's major version. Neon runs PostgreSQL 18, so an older client (e.g. Homebrew `postgresql@16`) refuses with a version-mismatch error — install `libpq` (`brew install libpq`) or a matching `postgresql@N` and make sure its `pg_dump` is first on PATH.
 - The Windows side keeps its manual equivalents: `scripts/export_postgres_dump.ps1` / `scripts/restore_postgres_dump.ps1`.
 
@@ -20,7 +23,7 @@
 
 - Dumps land in **`local-backups/`** (gitignored) as `postgres_dump_YYYYmmdd_HHMMSS.sql.gz` — gzipped plain SQL, `pg_dump --no-owner --no-privileges`.
 - **Retention:** the newest `BACKUP_KEEP` dumps are kept (default 14 ≈ two weeks). Override with `BACKUP_KEEP=30 bash scripts/backup_db.sh`.
-- `DATABASE_URL` is read from the environment only (BWS/keychain via `scripts/pull-secrets`) — never committed, never in the dump filenames.
+- `DATABASE_URL` is read from the environment only — never committed, never in the dump filenames. With the launchers it is always set for you (local Postgres by default; `--shared` dumps the Neon mirror instead — see `docs/LOCAL_FIRST_DATABASE.md`), so **run the backup in the same mode as the platform you mean to protect**.
 
 ## Restore
 

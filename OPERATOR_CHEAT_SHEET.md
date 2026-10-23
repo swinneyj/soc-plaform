@@ -46,7 +46,11 @@ authenticated actor: a session cookie (log in through the UI's login modal)
 or the armed `X-API-Key` (the UI stamps it automatically). The API-key gate is
 unchanged — the key still satisfies every check as the admin machine actor.
 
-- **Accounts** (shared Neon): `dalton` (admin), `analyst-demo` (analyst).
+- **Accounts:** `dalton` (admin), `analyst-demo` (analyst). They live in
+  whichever database the API is on — **local Postgres by default** since
+  Oct 23, 2026, so re-create them there if a local DB is fresh
+  (`tests`/`manage_users.py` below). The shared Neon mirror only has them when
+  you launch with `--shared`. Check the launcher's `db target:` line first.
 - **Passwords live in the macOS keychain, never in chat or files:**
   `scripts/secrets-keychain get SOC_ADMIN_PASSWORD` (or `SOC_ANALYST_PASSWORD`).
 - **Manage accounts:** `eval "$(scripts/secrets-keychain inject)"` then
@@ -114,9 +118,11 @@ git push origin HEAD
 ## Database Defaults
 
 - API: `http://127.0.0.1:8000`
-- Postgres host port: `5433`
-- Database: `soc_platform`
-- User: `soc_platform`
+- **Postgres (primary):** `127.0.0.1:5432`, database `soc_platform`, user `soc_platform`
+  (Homebrew `postgresql@16`; the launchers start it if it is down)
+- Shared Neon mirror: opt-in only — `scripts/start --shared` (`docs/LOCAL_FIRST_DATABASE.md`)
+- Compose container host port: `5433` (Docker path only — not the primary)
+- Authoritative answer, any time: `scripts/dev --check` → `db target:`
 
 ## Shared Handoff Notes
 
