@@ -38,7 +38,14 @@ DOC = os.path.join(ROOT, "docs", "ROUTE_ROLE_MATRIX.md")
 BEGIN = "<!-- BEGIN GENERATED ROUTE MATRIX -->"
 END = "<!-- END GENERATED ROUTE MATRIX -->"
 
-PUBLIC_PATHS = ("/health", "/api/health", "/api/auth/login", "/api/auth/session")
+# Reachable before login. /api/auth/dev-login belongs here because the gate
+# exempts it and the handler does its own armed-API-key check (SOC_DEV_LOGIN
+# only) — routing it through a role dependency would make the role switch itself
+# demand a role.
+PUBLIC_PATHS = (
+    "/health", "/api/health", "/api/auth/login", "/api/auth/session",
+    "/api/auth/dev-login",
+)
 ADMIN_PREFIXES = ("/api/tools", "/api/jobs", "/api/splunk-boundary")
 DESTRUCTIVE_MARKERS = ("delete", "wipe", "purge", "execute")
 

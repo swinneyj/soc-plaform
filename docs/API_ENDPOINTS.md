@@ -68,7 +68,8 @@ middleware were removed. Everything else mutating is
 | --- | --- | --- | --- | --- |
 | POST | `/api/auth/login` | — | Open (issues `soc_session` cookie) | Exchange username + password for a session + CSRF token (AUTH_MODE=session). |
 | POST | `/api/auth/logout` | — | Open (destroys the presented session) | Invalidate the server-side session row and clear the cookie. |
-| GET | `/api/auth/session` | — | Session or API key | Echo the signed-in actor: `{user, role, csrf_token}`; 401 when anonymous. |
+| GET | `/api/auth/session` | — | Session or API key | Echo the signed-in actor: `{user, role, csrf_token}`; 401 when anonymous. A key-only caller gets `{user:"api-key", role:"admin"}` so a browser carrying the key can bootstrap. |
+| POST | `/api/auth/dev-login` | — | Armed API key + `SOC_DEV_LOGIN=1` | Mint a session for an existing account (`{account}`) so the local operator can switch roles without a password. 404 when the flag is off; 401 without the key or for unknown/inactive accounts. Only ever downgrades — the key itself is already admin. |
 
 ## Cases (triage) — canonical family `/api/cases`
 

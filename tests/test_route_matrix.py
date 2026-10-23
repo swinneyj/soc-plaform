@@ -33,5 +33,5 @@ def test_matrix_cross_checks_against_openapi():
     import scripts.route_matrix as matrix  # noqa: E402
 
     served, listed, diff = matrix.verify_coverage(matrix._route_objects())
-    assert served == listed == 74, (served, listed)
+    assert served == listed == 75, (served, listed)
     assert diff == [], diff

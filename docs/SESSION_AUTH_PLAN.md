@@ -16,6 +16,44 @@ analyst → 403 on admin routes (registry, jobs-delete), admin → allowed, key-
 requests keep working, CSRF gate enforced — every event captured by the T3
 `soc.audit` stream. Rollback remains: remove the `AUTH_MODE` line from `.env`,
 restart (`scripts/start --stop && scripts/start`).
+**Local access, fixed 2026-10-23 — the accounts did not survive the local-first switch.**
+Activating session mode on Oct 21 provisioned `dalton`/`analyst-demo` on the
+**shared Neon** database. On Oct 23 local Postgres became primary, so the local
+`users` table was empty — and with `AUTH_MODE=session` on, that meant **nobody
+could log in at all**, while the UI's bootstrap (`GET /api/auth/session`) also
+rejected the API key, so every local visit hit a login modal with no account
+that could ever succeed. Live checks that found it: `users` empty, keychain had
+no `SOC_*_PASSWORD`, `/api/auth/session` 401 with and without the key.
+
+What landed:
+
+* **Role-named local accounts**: `soc-admin` (admin) and `soc-analyst` (analyst)
+  in local Postgres, random passwords generated straight into the keychain as
+  `SOC_ADMIN_PASSWORD` / `SOC_ANALYST_PASSWORD` (never printed, never in argv).
+  `scripts/manage_users.py` remains the management path.
+* **Bootstrap accepts the machine key**: in session mode, an API-key caller now
+  gets `{mode:'session', user:'api-key', role:'admin'}` instead of 401. The key
+  is the admin machine actor by design (SESSION_AUTH_PLAN §2); refusing it at
+  the bootstrap only broke the UI.
+* **`SOC_DEV_LOGIN=1` + `POST /api/auth/dev-login`**: mints a real session for an
+  existing, active account when the caller presents the armed API key. This is
+  how the operator switches roles without typing a password — and it can only
+  ever downgrade (the key is admin already; an analyst session has no key, so it
+  cannot mint anything). Unset ⇒ the route 404s like it does not exist.
+* **UI**: `web/utils/dev_login.js` renders a bottom-right switcher only when the
+  bootstrap reports `dev_login: true`; one click re-mints the session and
+  reloads. **CLI**: `scripts/login <account>` writes a cookie jar for curl.
+* **Exempt from CSRF, not from authorization**: `/api/auth/dev-login` is in
+  `EXEMPT_PATHS` so switching works while a session cookie is present; the
+  handler enforces the armed key itself.
+
+Tests: `tests/test_dev_login.py` (13) — disabled flag 404s, missing/absent key
+401s, unknown and inactive accounts refused, the minted session is subject to
+the role gate (analyst 403 on `/api/tools`, admin 200), the bootstrap answers
+for the key, and the audit line carries `reason:dev_login` with no password
+material. Negative controls (removing the flag check, the key check) reproduce
+three failures.
+
 **SEC-01 (2026-10-23) — third mode: `AUTH_MODE=proxy`.** For deployments where a
 reverse proxy authenticates the human (nginx `auth_request`, oauth2-proxy, Pomerium,
 an ALB with OIDC) and the app should not run its own login. The proxy stamps one

@@ -25,6 +25,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class DevLoginRequest(BaseModel):
+    """Which existing account to mint a session for (SOC_DEV_LOGIN only)."""
+
+    account: str
+
+
+DEV_LOGIN_ENV = "SOC_DEV_LOGIN"
+
+
 # ---------------------------------------------------------------------------
 # F5: login throttling + constant-time user resolution.
 #
@@ -181,12 +190,78 @@ def logout(request: Request, response: Response):
     return {"ok": True}
 
 
+def dev_login_enabled() -> bool:
+    """True when SOC_DEV_LOGIN=1 (local one-click role switching).
+
+    Read live, not at import, so a test and an operator can flip it without a
+    code change. Off by default: with it off the endpoint below does not exist
+    as far as a caller can tell (404).
+    """
+    return os.environ.get(DEV_LOGIN_ENV, "").strip() == "1"
+
+
+@router.post("/api/auth/dev-login")
+def dev_login(payload: DevLoginRequest, request: Request, response: Response):
+    """Mint a real session for `payload.account` — local convenience only.
+
+    Why this exists: the human-facing login needs a password, and the operator
+    should not have to remember one. The browser already holds the API key (the
+    served page carries SOC_CONFIG.apiKey), and that key IS the admin machine
+    actor — so minting a *lesser* session from it grants nothing new, it only
+    lets the operator see the analyst experience (admin routes then 403).
+
+    Guards, all of them fail-closed:
+      * SOC_DEV_LOGIN=1 or the endpoint is 404 (indistinguishable from absent)
+      * the armed API key must be presented — an analyst session cannot call
+        its way up to admin here, and nothing works when API_KEY is unset
+      * the account must exist and be active
+    The password is never involved: accounts still have random passwords in the
+    keychain for a real `POST /api/auth/login`.
+    """
+    if not dev_login_enabled():
+        raise HTTPException(status_code=404, detail="Not found")
+    if not auth._API_KEY or not auth.request_has_api_key(request):
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+
+    from db.models import AuthSession, SessionLocal, User
+    from db.util import utcnow_naive
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.username == payload.account).first()
+        if user is None or not user.is_active:
+            audit_event(
+                "login_failure", request, level=logging.WARNING,
+                username=payload.account, status=401,
+                ip=request.client.host if request.client else "?",
+                reason="dev_login_unknown_account",
+            )
+            raise HTTPException(status_code=401, detail="Unknown or inactive account")
+        audit_event(
+            "login_success", request,
+            username=user.username, status=200,
+            ip=request.client.host if request.client else "?",
+            actor="session", actor_role=user.role,
+            reason="dev_login",
+        )
+        db.query(AuthSession).filter(
+            AuthSession.expires_at <= utcnow_naive()
+        ).delete(synchronize_session=False)
+        db.commit()
+        return _issue_session(response, user)
+    finally:
+        db.close()
+
+
 @router.get("/api/auth/session")
 def session_info(request: Request):
     """Actor bootstrap for the UI.
 
-    AUTH_MODE=session: 200 {user, role, csrf_token} for a live session, 401
-    otherwise (the UI shows the login modal). AUTH_MODE=proxy: 200
+    AUTH_MODE=session: 200 {user, role, csrf_token} for a live session. The
+    deployment API key also answers 200 here (user "api-key", role admin): the
+    browser carries that key, and without this branch a key-only deployment —
+    every deployment whose accounts live elsewhere — got 401 and fell into a
+    login modal that could never succeed. Anonymous: 401. AUTH_MODE=proxy: 200
     {mode:'proxy', user, role} when the trusted header resolved an account (the
     proxy owns login/logout, so the UI shows no modal and sends no CSRF token),
     401 otherwise. Flag off: 200 {mode:'api-key', role:'admin'} — auth is inert
@@ -206,6 +281,21 @@ def session_info(request: Request):
         }
     if not auth.session_mode():
         return {"mode": "api-key", "role": "admin", "user": "", "csrf_token": ""}
+    if actor.kind == "api-key":
+        return {
+            "mode": "session",
+            "user": "api-key",
+            "role": "admin",
+            # The key needs no double-submit token; the UI simply sends none.
+            "csrf_token": "",
+            "dev_login": dev_login_enabled(),
+        }
     if actor.kind != "session":
         raise HTTPException(status_code=401, detail="Not signed in")
-    return {"mode": "session", "user": actor.user.username, "role": actor.role, "csrf_token": actor.csrf_token}
+    return {
+        "mode": "session",
+        "user": actor.user.username,
+        "role": actor.role,
+        "csrf_token": actor.csrf_token,
+        "dev_login": dev_login_enabled(),
+    }

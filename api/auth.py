@@ -187,7 +187,14 @@ _actor_cache: dict = {}  # token_hash -> (expires_at, user_id, role, username, c
 # route); id and role ride along for the common cases.
 CachedUser = namedtuple("CachedUser", "id username role")
 
-EXEMPT_PATHS = ("/health", "/api/health", "/api/auth/login", "/api/auth/session")
+# Paths the gate never blocks. /api/auth/dev-login is here for CSRF, not for
+# authorization: it carries its own armed-API-key check, and it must stay
+# callable while a *session* cookie is present (switching roles in the UI), where
+# the gate would otherwise demand a CSRF token for the switch itself.
+EXEMPT_PATHS = (
+    "/health", "/api/health", "/api/auth/login", "/api/auth/session",
+    "/api/auth/dev-login",
+)
 SESSION_COOKIE = "soc_session"
 SESSION_TTL_HOURS = 12
 

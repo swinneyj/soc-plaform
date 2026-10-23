@@ -46,13 +46,29 @@ authenticated actor: a session cookie (log in through the UI's login modal)
 or the armed `X-API-Key` (the UI stamps it automatically). The API-key gate is
 unchanged — the key still satisfies every check as the admin machine actor.
 
-- **Accounts:** `dalton` (admin), `analyst-demo` (analyst). They live in
-  whichever database the API is on — **local Postgres by default** since
-  Oct 23, 2026, so re-create them there if a local DB is fresh
-  (`tests`/`manage_users.py` below). The shared Neon mirror only has them when
-  you launch with `--shared`. Check the launcher's `db target:` line first.
-- **Passwords live in the macOS keychain, never in chat or files:**
-  `scripts/secrets-keychain get SOC_ADMIN_PASSWORD` (or `SOC_ANALYST_PASSWORD`).
+- **Accounts:** `soc-admin` (admin) and `soc-analyst` (analyst) — role-named,
+  not person-named. They live in **local Postgres** (the primary since Oct 23,
+  2026); the shared Neon mirror only has the older accounts when you launch with
+  `--shared`. Check the launcher's `db target:` line first.
+- **You never type a password.** Two ways in:
+  - **In the UI:** the bottom-right **role switcher** (`web/utils/dev_login.js`)
+    shows the current role and switches with one click. It exists only when the
+    API runs with `SOC_DEV_LOGIN=1` (set in `.env` for local work); switching
+    works because the page already carries the API key, which the server treats
+    as the admin machine actor — so it can only ever hand out a *lesser*
+    session. An analyst session cannot switch back; the key can.
+  - **From a terminal:** `scripts/login soc-analyst` mints a session and writes a
+    cookie jar to `~/.soc/sessions/<account>.cookies`, so
+    `curl -b ~/.soc/sessions/soc-analyst.cookies http://127.0.0.1:8000/api/tools`
+    runs as that role. `--show-csrf` prints the token if you need a mutation.
+- **Passwords still exist** (random, in the macOS keychain as
+  `SOC_ADMIN_PASSWORD` / `SOC_ANALYST_PASSWORD`) for a real
+  `POST /api/auth/login` when `SOC_DEV_LOGIN` is off. Never printed, never in
+  argv: `scripts/login` reads them itself.
+- **A key-only caller sees a working UI.** `GET /api/auth/session` answers 200
+  for the API key (`user: "api-key"`, role admin) instead of 401 — before this
+  fix the UI fell into a login modal that could never succeed on a database
+  with no accounts.
 - **Manage accounts:** `eval "$(scripts/secrets-keychain inject)"` then
   `.venv314/bin/python scripts/manage_users.py list|create|set-role|set-password|deactivate`
   (create/set-password take `--password-env VAR` or a getpass prompt —
