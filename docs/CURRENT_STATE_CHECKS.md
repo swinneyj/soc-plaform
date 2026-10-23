@@ -18,8 +18,8 @@ ls -1 tests/ui_regression/*.mjs | wc -l
 The gating scripts are the source of truth for passing/failing; this file is only
 a pointer so nobody has to remember the commands.
 
-- Test files: `tests/test_*.py` — currently **17** on disk (older docs quote 8 or 12;
-  both are stale). If you add one, update this number in the same commit — the point of
+- Test files: `tests/test_*.py` — currently **20** on disk (older docs quote 8, 12 or
+  17; all stale). If you add one, update this number in the same commit — the point of
   counting is that the estate stays countable, not that the number is frozen.
 - UI regression harnesses: `tests/ui_regression/*.mjs` — currently **3** files
   on disk (`harness_core.mjs` is the shared core; the other two are scenarios).
