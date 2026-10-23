@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# scripts/mirror_db — move *from* the shared Neon mirror *to* the local primary.
+#
+# Local Postgres is the runtime database; the shared Neon project is an optional
+# mirror kept for coworker-visible data. This tool is the only path between
+# them, and it is deliberately one-directional:
+#
+#   pull              snapshot the shared database to local-backups/ (read-only
+#                     on the shared side; nothing local is touched)
+#   pull --replace    after a snapshot, truncate the LOCAL database and load the
+#                     snapshot into it. Needs --yes; the local database is
+#                     backed up first. Refuses if the local target is actually
+#                     the shared host.
+#   push              REFUSED by design. The shared dataset is written by the
+#                     owner's flows (and the Splunk-boundary batch purge is the
+#                     undo); a bulk local→shared restore has no undo and could
+#                     overwrite coworker data.
+#
+# Source resolution: --source URL, else SHARED_DATABASE_URL, else the keychain
+# (SHARED_DATABASE_URL, then DATABASE_URL — the historical key name).
+#
+# Version guard: pg_dump cannot dump a newer server. Neon runs PG 18; this Mac
+# currently has the PG 16 client, so `pull` stops with an instruction rather
+# than a cryptic "server version mismatch". Override the binary with PGDMP.
+#
+# Usage:
+#   scripts/mirror_db pull [--out FILE] [--replace --yes] [--source URL]
+#   scripts/mirror_db push      # explains why it will not
+#
+# Exit: 0 ok, 1 refused/failed, 2 usage.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$ROOT"
+
+SRC=""
+OUT=""
+DO_REPLACE=0
+CONFIRM=0
+ACTION="${1:-}"
+[ $# -gt 0 ] && shift
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --out)     OUT="${2:-}"; shift 2 ;;
+        --source)  SRC="${2:-}"; shift 2 ;;
+        --replace) DO_REPLACE=1; shift ;;
+        --yes)     CONFIRM=1; shift ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+done
+
+if [ "$ACTION" = "push" ]; then
+    cat >&2 <<'EOF'
+✗ push is not implemented, deliberately.
+
+  The shared Neon dataset is written by its owner's flows. A bulk
+  local → shared restore has no undo (unlike the Splunk-boundary batch purge)
+  and would overwrite coworker data, so this tool only mirrors downward.
+
+  If shared rows really must change, do it through the API with a clearly
+  marked test title and delete it in the same session — the protocol in
+  AGENTS.md ("One shared production dataset").
+EOF
+    exit 1
+fi
+
+if [ "$ACTION" != "pull" ]; then
+    sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+    exit 2
+fi
+
+die() { echo "✗ $*" >&2; exit 1; }
+
+# ── Resolve the shared source ──────────────────────────────────────────────
+if [ -z "$SRC" ]; then
+    if [ -z "${SHARED_DATABASE_URL:-}" ] && [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
+        SHARED_DATABASE_URL="$("$SCRIPT_DIR/secrets-keychain" get SHARED_DATABASE_URL 2>/dev/null \
+            || "$SCRIPT_DIR/secrets-keychain" get DATABASE_URL 2>/dev/null || true)"
+    fi
+    SRC="${SHARED_DATABASE_URL:-}"
+fi
+[ -n "$SRC" ] || die "no shared source: pass --source URL, or set SHARED_DATABASE_URL / keychain"
+case "$SRC" in
+    *neon.tech*|postgres://*|postgresql://*|postgresql+psycopg://*) ;;
+    *) die "source does not look like a Postgres URL" ;;
+esac
+
+# psql/pg_dump want a plain DSN, not SQLAlchemy's driver suffix.
+DSN="$(printf '%s' "$SRC" | sed -E 's#^(postgres(ql)?)(\+[^:]+):#\1:#')"
+
+# Refuse the obvious mistake: mirroring the local database onto itself.
+if printf '%s' "$DSN" | grep -qE '(@|//)(localhost|127\.0\.0\.1)[:/]'; then
+    if [ "$SRC" != "${MIRROR_ALLOW_LOCAL:-}" ]; then
+        echo "  ⚠ source is a local host — treating this as a dry-run snapshot" >&2
+        echo "    (fine for testing the dump path; not a real mirror)" >&2
+    fi
+fi
+
+# ── Version guard ─────────────────────────────────────────────────────────
+PGDMP="${PGDMP:-pg_dump}"
+command -v "$PGDMP" >/dev/null 2>&1 || die "pg_dump not found (set PGDMP=/path/to/pg_dump)"
+command -v psql >/dev/null 2>&1 || die "psql not found"
+
+SERVER_NUM="$(psql "$DSN" -Atc 'show server_version_num' 2>/dev/null || true)"
+[ -n "$SERVER_NUM" ] || die "cannot reach the shared source (credentials/network?)"
+SERVER_MAJOR=$(( SERVER_NUM / 10000 ))
+CLIENT_MAJOR="$("$PGDMP" --version | sed -E 's/.* ([0-9]+)\..*/\1/')"
+if [ "$CLIENT_MAJOR" -lt "$SERVER_MAJOR" ]; then
+    cat >&2 <<EOF
+✗ pg_dump $CLIENT_MAJOR cannot dump a PostgreSQL $SERVER_MAJOR server.
+
+  Install a matching client (free) and point PGDMP at it, e.g.:
+
+    brew install postgresql@18
+    PGDMP=/opt/homebrew/opt/postgresql@18/bin/pg_dump scripts/mirror_db pull
+
+  (The local server is PG 16 — pg_dump 18 can dump it fine; the reverse is
+  what fails. Nothing was written.)
+EOF
+    exit 1
+fi
+
+mkdir -p local-backups
+OUT="${OUT:-local-backups/shared_snapshot_$(date +%Y%m%d_%H%M%S).sql.gz}"
+
+echo "── snapshot ──────────────────────────────────────────"
+echo "  source:   $(printf '%s' "$DSN" | sed -E 's#//[^@/]*@#//***@#')"
+echo "  output:   $OUT"
+echo "  pg_dump:  $("$PGDMP" --version)"
+if ! "$PGDMP" --no-owner --no-privileges --data-only "$DSN" | gzip > "$OUT"; then
+    rm -f "$OUT"
+    die "dump failed (nothing local was touched)"
+fi
+[ -s "$OUT" ] || { rm -f "$OUT"; die "dump produced no bytes"; }
+echo "  ✓ $(du -h "$OUT" | awk '{print $1}') written"
+
+if [ "$DO_REPLACE" -eq 0 ]; then
+    echo
+    echo "Snapshot only. To load it into the LOCAL database:"
+    echo "  scripts/mirror_db pull --replace --yes"
+    exit 0
+fi
+
+# ── Replace the local database (the only destructive path) ────────────────
+[ "$CONFIRM" -eq 1 ] || die "--replace requires --yes (it truncates the local database)"
+PY=".venv314/bin/python"; [ -x "$PY" ] || PY=".venv/bin/python"
+LOCAL_URL="$("$PY" -m db.target --print)"
+LOCAL_DSN="$(printf '%s' "$LOCAL_URL" | sed -E 's#^(postgres(ql)?)(\+[^:]+):#\1:#')"
+case "$LOCAL_DSN" in
+    *neon.tech*) die "the local target resolves to Neon — refusing to truncate the shared dataset" ;;
+esac
+
+echo
+echo "── replace local ─────────────────────────────────────"
+echo "  target:   $(printf '%s' "$LOCAL_DSN" | sed -E 's#//[^@/]*@#//***@#')"
+BACKUP_LOG="$(mktemp "${TMPDIR:-/tmp}/soc-mirror-backup.XXXXXX")"
+trap 'rm -f "$BACKUP_LOG"' EXIT
+if [ -x "$SCRIPT_DIR/backup_db.sh" ]; then
+    if DATABASE_URL="$LOCAL_URL" bash "$SCRIPT_DIR/backup_db.sh" >"$BACKUP_LOG" 2>&1; then
+        BACKUP_FILE="$(sed -n 's/^backup_db: dumping to //p' "$BACKUP_LOG" | head -1)"
+        echo "  ✓ local backup taken: ${BACKUP_FILE:-$(ls -1t "$ROOT"/local-backups/postgres_dump_*.sql.gz 2>/dev/null | head -1)}"
+    else
+        cat "$BACKUP_LOG" >&2
+        die "local backup failed — aborted before touching data"
+    fi
+else
+    echo "  ⚠ scripts/backup_db.sh missing — replacing without a backup"
+fi
+
+psql "$LOCAL_DSN" -v ON_ERROR_STOP=1 -q -c "
+DO \$\$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+    EXECUTE 'TRUNCATE TABLE ' || quote_ident(r.tablename) || ' RESTART IDENTITY CASCADE';
+  END LOOP;
+END \$\$;" || die "truncate failed"
+
+# -q keeps psql's setval/set_config chatter out of the way; errors still go
+# to stderr. A failed restore leaves truncated tables, so the message names
+# the recovery path explicitly.
+gunzip -c "$OUT" | psql "$LOCAL_DSN" -v ON_ERROR_STOP=1 -q -X >/dev/null \
+    || die "restore failed — local data is truncated; restore the backup printed above with: gunzip -c <backup> | psql \"\$DATABASE_URL\""
+echo "  ✓ local database replaced from the snapshot"
+echo
+echo "The shared side was read-only throughout; nothing was written to Neon."

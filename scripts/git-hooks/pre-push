@@ -19,11 +19,16 @@ fi
 
 # Pin/marker gate: every requirement pin must support the interpreter its
 # python_version branch selects (PyPI requires_python). Stdlib-only script.
-# Resolve an interpreter with a repo-venv fallback so the gate runs in a
-# fresh shell (no venv activation); PYTHON=<path> still forces one.
+# Resolve an interpreter from the repo venvs FIRST, then bare python3, so the
+# gate runs in a fresh shell (no venv activation); PYTHON=<path> still forces
+# one. Order matters: bare python3 on this Mac is 3.9.6, so `python3` first
+# made both gates evaluate the marker-dead `<3.10` branch and fail against a
+# 3.14-shaped docs/SBOM.json — a guaranteed false "push BLOCKED" on every push
+# (witnessed 2026-10-23; `.venv314/bin/python scripts/check_sbom_pins.py` passes
+# on the same tree).
 REQ_PY="${PYTHON:-}"
 if [ -z "$REQ_PY" ] && [ -f scripts/check_requirement_markers.py ]; then
-  for cand in python3 .venv314/bin/python .venv/bin/python; do
+  for cand in .venv314/bin/python .venv/bin/python python3; do
     if "$cand" -c "import sys" >/dev/null 2>&1; then REQ_PY="$cand"; break; fi
   done
 fi

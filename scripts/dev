@@ -1,37 +1,47 @@
 #!/usr/bin/env bash
 # scripts/dev — SOC Platform development launcher.
 #
-# Launches uvicorn with secrets injected from Bitwarden Secrets Manager when
-# available, falling back to plain .env values when not. The app cannot tell
-# the difference: both paths end with the same environment.
+# Launches uvicorn against **local Postgres by default**, with BWS/keychain
+# providing only the secrets a local run needs (API_KEY). The shared Neon
+# mirror is opt-in (`--shared`) so a Neon free-tier storage/egress ceiling can
+# never stop the platform from running.
 #
-# Modes (auto-detected, see --check):
-#   bws       BWS_ACCESS_TOKEN present in .env and `bws` CLI installed
-#             -> `bws run` injects every BWS secret as an env var, on top of
-#                anything in .env (injected values win; local overrides lose)
-#   env-only  no token or no CLI -> plain .env launch (today's behavior)
+# Database target (`python -m db.target` is the single source of truth):
+#   local     default — DATABASE_URL from LOCAL_DATABASE_URL if set, else the
+#             built-in 127.0.0.1:5432 URL. BWS is NOT used for this mode,
+#             because `bws run` would inject its DATABASE_URL (Neon) over it.
+#   shared    `--shared` or SOC_DB_TARGET=shared — SHARED_DATABASE_URL from
+#             env/BWS/keychain; BWS injection is allowed again.
+#   explicit  DATABASE_URL set by the operator always wins; the launcher warns
+#             when that overrides a local target.
 #
 # Usage:
-#   scripts/dev                 # launch on :8000 (auto mode)
-#   scripts/dev --check         # show detected mode + diagnostics, launch nothing
+#   scripts/dev                 # local Postgres (primary), port 8000
+#   scripts/dev --shared        # shared Neon mirror instead
+#   scripts/dev --check         # detect mode + DB target, launch nothing
 #   scripts/dev --port 8001     # custom port
 #   scripts/dev -- --log-level debug   # extra args after -- go to uvicorn
 #
 # Env vars honored:
-#   SOC_PORT           default port (8000)
-#   DATABASE_URL       set in .env (local Postgres or Neon)
-#   BWS_ACCESS_TOKEN   set in .env only when the BWS path is wanted
-#   ENABLE_DOCS=1      keep Swagger UI in local dev (prod has it disabled)
+#   SOC_PORT             default port (8000)
+#   SOC_DB_TARGET        local|shared (default local)
+#   LOCAL_DATABASE_URL   override the local URL (e.g. compose: :5433)
+#   SHARED_DATABASE_URL  the Neon URL for --shared
+#   DATABASE_URL         explicit override — wins over the target
+#   BWS_ACCESS_TOKEN     set in .env only when the shared path is wanted
+#   ENABLE_DOCS=1        keep Swagger UI in local dev (prod has it disabled)
 
 set -euo pipefail
 
 PORT="${SOC_PORT:-8000}"
 EXTRA_ARGS=()
 CHECK_ONLY=0
+SHARED_REQUEST=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --check)   CHECK_ONLY=1; shift ;;
+        --shared)  SHARED_REQUEST=1; shift ;;
         --port)    PORT="$2"; shift 2 ;;
         --)        shift; EXTRA_ARGS=("$@"); break ;;
         *)         EXTRA_ARGS+=("$1"); shift ;;
@@ -68,9 +78,22 @@ else
     echo "⚠ No .env found at $ENV_FILE — continuing with environment only." >&2
 fi
 
+# ── Database target ─────────────────────────────────────────────────────
+# Local Postgres is primary; `--shared` opts into the Neon mirror. Resolution
+# lives in scripts/lib/db_target.sh (shared with scripts/start), and it runs
+# *before* keychain injection so `inject` keeps its hands off DATABASE_URL and
+# only supplies API_KEY.
+TARGET="${SOC_DB_TARGET:-local}"
+[ "$SHARED_REQUEST" -eq 1 ] && TARGET="shared"
+# shellcheck source=scripts/lib/db_target.sh
+. "$SCRIPT_DIR/lib/db_target.sh"
+resolve_db_target "$TARGET"
+TARGET="$DB_TARGET"
+
 # Keychain fallback: fill unset credential keys (DATABASE_URL, API_KEY) from
-# the macOS Keychain (scripts/secrets-keychain). Explicit env values win;
-# bws-injected values still win over everything at launch time.
+# the macOS Keychain (scripts/secrets-keychain). DATABASE_URL is already set
+# above in both target modes, so this supplies API_KEY and leaves the target
+# alone.
 if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
     eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
 fi
@@ -84,20 +107,48 @@ else
     BWS_BIN=""
 fi
 
+# `bws run` injects every vault secret as env, which would override the local
+# DATABASE_URL — so BWS is only usable in shared mode (its purpose there is
+# the Neon URL and the Splunk token).
 MODE="env-only"
-if [ "$HAVE_TOKEN" -eq 1 ] && [ -n "$BWS_BIN" ]; then
+if [ "$TARGET" = "shared" ] && [ "$HAVE_TOKEN" -eq 1 ] && [ -n "$BWS_BIN" ]; then
     MODE="bws"
+fi
+
+# Local schema bootstrap: additive CREATE TABLE only (never a drop/alter), so
+# a local database that predates a model (users/auth_sessions) starts working
+# without a manual migration. Shared is never touched here.
+SCHEMA_NOTE=""
+if [ "$TARGET" = "local" ]; then
+    if ! SCHEMA_NOTE="$($PY -m db.schema 2>&1)"; then
+        echo "✗ local schema bootstrap failed — $SCHEMA_NOTE" >&2
+        exit 1
+    fi
+fi
+
+# Read-only preflight: fail here with a named target instead of deep inside a
+# half-launched server. Shared mode may be slow (Neon wakes compute).
+if ! DB_PING="$($PY -m db.target --ping 2>&1)"; then
+    echo "✗ database unreachable — $DB_PING" >&2
+    echo "  local target: start Postgres (brew services start postgresql@16) or set LOCAL_DATABASE_URL." >&2
+    echo "  shared target: check SHARED_DATABASE_URL / BWS credentials." >&2
+    exit 1
 fi
 
 echo "── SOC Platform launcher ─────────────────────────────"
 echo "  mode:        $MODE"
+echo "  db target:   ${DB_SUMMARY:-$TARGET}"
+echo "  db status:   $DB_PING"
+[ -n "$SCHEMA_NOTE" ] && echo "  schema:      $SCHEMA_NOTE"
 echo "  python:      $($PY --version 2>&1) ($PY)"
 echo "  port:        $PORT"
 if [ "$MODE" = "bws" ]; then
     echo "  bws cli:     $BWS_BIN"
+elif [ "$TARGET" = "shared" ]; then
+    [ "$HAVE_TOKEN" -eq 0 ] && echo "  bws:         no BWS_ACCESS_TOKEN in .env (shared URL must come from keychain/.env)"
+    [ -z "$BWS_BIN" ] && [ "$HAVE_TOKEN" -eq 1 ] && echo "  bws:         token found but bws CLI missing (use the bws installer)"
 else
-    [ "$HAVE_TOKEN" -eq 0 ] && echo "  bws:         no BWS_ACCESS_TOKEN in .env (add it to enable secret injection)"
-    [ -z "$BWS_BIN" ] && [ "$HAVE_TOKEN" -eq 1 ] && echo "  bws:         token found but bws CLI missing (brew install bitwarden-cli is wrong; use the bws installer)"
+    echo "  bws:         skipped for the local target (vault would override DATABASE_URL)"
 fi
 echo "──────────────────────────────────────────────────────"
 

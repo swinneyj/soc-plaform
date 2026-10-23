@@ -25,37 +25,57 @@ else
     echo "        BWS_ACCESS_TOKEN=...  (walkthrough in .env.bws.template)"
 fi
 
-# 2. New Neon URL ---------------------------------------------------------
-# DATABASE_URL lives in the launch environment, .env, or the login
-# keychain (scripts/start injects it; credential keys live in the
-# keychain) — grepping .env alone reported a false "waiting on URL"
-# TODO while the platform was already querying Neon.
-DB_URL_SOURCE=""
-DB_URL_FOREIGN=""
-if [ -n "${DATABASE_URL:-}" ]; then
-    case "$DATABASE_URL" in
-        *neon.tech*) DB_URL_SOURCE="environment" ;;
-        *) DB_URL_FOREIGN=1 ;;
-    esac
-elif grep -qE '^DATABASE_URL=.*neon\.tech' .env 2>/dev/null; then
-    DB_URL_SOURCE=".env"
-else
-    DB_URL_KEY="$(bash scripts/secrets-keychain get DATABASE_URL 2>/dev/null)"
-    case "$DB_URL_KEY" in
-        "") ;;
-        *neon.tech*) DB_URL_SOURCE="login keychain" ;;
-        *) DB_URL_FOREIGN=1 ;;
-    esac
+# 2. Database target -----------------------------------------------------
+# Local Postgres is primary; the shared Neon project is an optional mirror
+# (docs/LOCAL_FIRST_DATABASE.md). Report the resolved target from the same
+# module the launchers use — never re-derive it by grepping .env, which
+# reported a false "waiting on Neon URL" while the platform was fine.
+NEXT_PY=".venv314/bin/python"
+[ -x "$NEXT_PY" ] || NEXT_PY=".venv/bin/python"
+# Mirror the launchers' keychain fallback so a `SOC_DB_TARGET=shared` shell
+# reports the real target instead of a resolution error.
+if [ "${SOC_DB_TARGET:-}" = "shared" ] && [ -z "${SHARED_DATABASE_URL:-}" ]; then
+    SHARED_DATABASE_URL="$(bash scripts/secrets-keychain get SHARED_DATABASE_URL 2>/dev/null \
+        || bash scripts/secrets-keychain get DATABASE_URL 2>/dev/null || true)"
+    [ -n "$SHARED_DATABASE_URL" ] && export SHARED_DATABASE_URL
 fi
-if [ -n "$DB_URL_SOURCE" ]; then
-    echo "${OK}Neon: DATABASE_URL points at Neon ✓ (${DB_URL_SOURCE})"
-elif [ -n "$DB_URL_FOREIGN" ]; then
-    echo "${WAIT}Neon: DATABASE_URL resolves to a non-Neon host — run scripts/start --check to see which DB is active"
-elif grep -qE '^DATABASE_URL=.*neon\.tech' .env.example 2>/dev/null; then
-    echo "${WAIT}Neon: new URL in .env.example? — copy it into .env"
+DB_SUMMARY=""
+DB_ERR=""
+if [ -x "$NEXT_PY" ]; then
+    DB_SUMMARY="$($NEXT_PY -m db.target --summary 2>&1)" || { DB_ERR="$DB_SUMMARY"; DB_SUMMARY=""; }
+fi
+DB_PING=""
+[ -n "$DB_SUMMARY" ] && DB_PING="$($NEXT_PY -m db.target --ping 2>/dev/null)"
+case "$DB_SUMMARY" in
+    shared*|*neon.tech*) SHARED_ACTIVE=1 ;;
+    *) SHARED_ACTIVE=0 ;;
+esac
+if [ -n "$DB_SUMMARY" ] && [ "$SHARED_ACTIVE" -eq 0 ]; then
+    echo "${OK}Database: local-first — ${DB_SUMMARY}"
+    [ -n "$DB_PING" ] && echo "        ${DB_PING}"
+    echo "        shared mirror on demand: scripts/start --shared (snapshot: scripts/mirror_db pull)"
+elif [ -n "$DB_SUMMARY" ]; then
+    echo "${OK}Database: running against the SHARED mirror — ${DB_SUMMARY}"
+    echo "        drop SOC_DB_TARGET/DATABASE_URL to return to local (the primary)"
+elif [ ! -x "$NEXT_PY" ]; then
+    echo "${WAIT}Database: no interpreter found (.venv314/.venv) — run scripts/start --check"
 else
-    echo "${TODO}Neon: when the new URL reaches you (call/Signal/BWS — NOT email/chat):"
-    echo "        echo 'DATABASE_URL=<new url>' >> .env"
+    echo "${WAIT}Database: target unresolved — ${DB_ERR:-see scripts/start --check}"
+    echo "        (shared target needs SHARED_DATABASE_URL; a missing local server means: brew services start postgresql@16)"
+fi
+# The shared URL is a credential: report presence only, never the value.
+SHARED_URL_PRESENT=0
+if [ -n "${SHARED_DATABASE_URL:-}" ]; then
+    SHARED_URL_PRESENT=1
+elif bash scripts/secrets-keychain get SHARED_DATABASE_URL >/dev/null 2>&1 \
+    || bash scripts/secrets-keychain get DATABASE_URL >/dev/null 2>&1; then
+    SHARED_URL_PRESENT=1
+fi
+if [ "$SHARED_URL_PRESENT" -eq 1 ]; then
+    echo "${OK}Mirror credentials: shared URL available (keychain/BWS/env — not printed)"
+else
+    echo "${WAIT}Mirror credentials: no shared URL yet — local-only until one lands"
+    echo "        (call/Signal/BWS — never email/chat; then scripts/secrets-keychain put SHARED_DATABASE_URL)"
 fi
 
 # 3. Vercel retirement (deploy.yml deleted Sept 30, 2026) -----------------
