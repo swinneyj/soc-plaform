@@ -43,6 +43,35 @@ needs nothing (the key is server-injected into `window.SOC_CONFIG`), but every
 `curl` below must add: `-H "X-API-Key: $(scripts/secrets-keychain get API_KEY)"`.
 Examples below omit it; add it if `/api/health`-authenticated routes 401.
 
+### 0.5 Dry run without credentials (fake Splunk) — optional, ~2 min
+
+`scripts/fake_splunk.py` is a stdlib-only stand-in for the Splunk management
+port: search export as CSV (epoch `_time`), a saved-search listing with one
+hidden entry, bearer-token auth (wrong token → 401), and the platform's own
+bounded SPL subset executed via `MockSplunkBackend`. It proves the entire
+*client* path over real HTTP — connector, CSV + epoch normalization, both
+`/api/splunk/*` introspection routes — with zero credentials.
+
+In a second terminal:
+
+```bash
+.venv314/bin/python scripts/fake_splunk.py --port 18089 --token dev-token
+```
+
+Then launch the platform pointed at it (dummy token only — never a real one):
+
+```bash
+SEARCH_BACKEND=splunk SPLUNK_URL=http://127.0.0.1:18089 SPLUNK_TOKEN=dev-token \
+  bash scripts/start
+curl -s http://localhost:8000/api/splunk/search-status | python3 -m json.tool   # ready: true
+curl -s http://localhost:8000/api/splunk/saved-searches | python3 -m json.tool  # 1 visible fixture
+```
+
+**Scope guard:** this cannot satisfy the exit criteria below. It runs the same
+SPL subset as the mock backend against fixture data with a fake auth model —
+it de-risks the live run (proves our stack before real credentials exist), and
+nothing more. The live rehearsal remains required.
+
 ## 1. Land the credentials (BWS → .env → keychain)
 
 1. **BWS UI** (you or whoever holds the vault): org **SSC-Lewis** → project

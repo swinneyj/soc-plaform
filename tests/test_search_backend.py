@@ -701,3 +701,95 @@ def test_saved_searches_rejects_mock_over_http(monkeypatch):
 
     assert response.status_code == 409
     assert "SEARCH_BACKEND=splunk" in response.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Real HTTP, no credentials: the connector against scripts/fake_splunk.py
+#
+# FakeSplunkSession (above) proves the connector's logic with a duck-typed
+# session. These tests prove the same paths over an actual socket: requests
+# serialization, bearer header, CSV parsing, epoch -> naive-UTC normalization,
+# and HTTP error propagation — everything except Splunk's real contract, which
+# only the live rehearsal (docs/SPLUNK_REHEARSAL.md) can verify.
+# ---------------------------------------------------------------------------
+
+
+def _load_fake_splunk_module():
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "fake_splunk.py"
+    spec = importlib.util.spec_from_file_location("soc_fake_splunk", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture()
+def fake_splunk(tmp_path, seed_events):
+    module = _load_fake_splunk_module()
+    server = module.FakeSplunkServer(
+        token="fixture-token",
+        seed_path=_write_seed(tmp_path, seed_events),
+    )
+    server.start()
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+def test_real_backend_over_http_returns_normalized_rows(fake_splunk):
+    backend = RealSplunkBackend(base_url=fake_splunk.base_url, token="fixture-token", timeout=10)
+    rows = backend.search("sourcetype=linux_secure user=bjones", earliest="-7d")
+
+    assert len(rows) == 2
+    assert rows[0]["host"].startswith("VPN-GW")
+    assert "action=" in rows[0]["raw"]
+    # The fake emits epoch seconds; the connector must normalize them back to
+    # a naive-UTC ISO string (the platform's timestamp convention).
+    parsed = datetime.fromisoformat(rows[0]["timestamp"])
+    assert parsed.tzinfo is None
+    assert parsed.year == datetime.now().year
+
+
+def test_real_backend_over_http_rejects_bad_token(fake_splunk):
+    backend = RealSplunkBackend(base_url=fake_splunk.base_url, token="wrong-token", timeout=10)
+    with pytest.raises(SplunkSearchError, match="HTTP 401"):
+        backend.search("sourcetype=linux_secure", earliest="-7d")
+
+
+def test_real_backend_over_http_maps_unsupported_spl_to_http_error(fake_splunk):
+    backend = RealSplunkBackend(base_url=fake_splunk.base_url, token="fixture-token", timeout=10)
+    with pytest.raises(SplunkSearchError, match="HTTP 400"):
+        backend.search("sourcetype=linux_secure | dedup host", earliest="-7d")
+
+
+def test_real_backend_over_http_lists_only_visible_saved_searches(fake_splunk):
+    backend = RealSplunkBackend(base_url=fake_splunk.base_url, token="fixture-token", timeout=10)
+    items = backend.list_saved_searches()
+
+    assert [item["name"] for item in items] == ["Failed Logons (Fake)"]
+    assert "action=failure" in items[0]["search"]
+
+
+def test_saved_searches_route_serves_from_fake_splunk(fake_splunk, monkeypatch):
+    """End-to-end: env -> factory -> real HTTP -> route response."""
+    from fastapi.testclient import TestClient
+
+    from api import auth
+    from api.main import app
+
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.setenv("SPLUNK_URL", fake_splunk.base_url)
+    monkeypatch.setenv("SPLUNK_TOKEN", "fixture-token")
+
+    response = TestClient(app).get("/api/splunk/saved-searches")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["success"] is True
+    assert payload["count"] == 1
+    assert payload["items"][0]["name"] == "Failed Logons (Fake)"
