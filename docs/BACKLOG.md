@@ -9,9 +9,12 @@ line (or move it to `docs/RELEASE_NOTES.md`). Priorities are about *risk and
 blocking*, not excitement. Re-derive any number before trusting it
 (`docs/CURRENT_STATE_CHECKS.md`).
 
-Current baseline: **529 tests**, 3 UI harnesses, 74 endpoints across 14 routers,
-`dev-dalton` at `4437c0e` and in sync with origin, CI green, baseline holding,
-31 dirty paths — all of them another session's in-flight Splunk/SBOM work.
+Current baseline: **562 tests** across 20 test files, 3 UI harnesses, 74 endpoints
+across 14 routers, `dev-dalton` at `24990d1` in sync with origin, CI green,
+baseline re-snapshotted 2026-10-23 (`test_files` 17 → 20). Work-order progress:
+**DEV-01, SEC-01, SEC-02, SEC-03, SEC-06 done but UNCOMMITTED** (owner review
+first, per the batch rules); SEC-04/SEC-05 and K8S-01…04 untouched. 46 dirty
+paths = that work plus another session's in-flight Splunk/SBOM changes.
 
 ---
 
@@ -50,7 +53,7 @@ live-system actions were used.
 
 | ID | Task | Status / evidence |
 |---|---|---|
-| **DEV-01** | Pre-push scanner must use the active venv | ✅ **Landed + pushed** in `d9252a8`: the hook prefers `.venv314` → `.venv` → `python3`, which is what made the gate pass. **Open sub-item:** the order wants a hard failure when no approved venv exists rather than a `python3` fallback — a policy call, because it would block pushes from any clone without a venv (CI unaffected). |
+| **DEV-01** | Pre-push scanner must use the active venv | ✅ **Done** — `d9252a8` made the hook prefer `.venv314` → `.venv`; the sub-item landed 2026-10-23: `python3` is **no longer a fallback**. No approved venv → push blocked with the install command printed, and `PYTHON=` is validated so a typo cannot silently disable the gates. Resolution moved above the baseline step so a bad interpreter is named before any harness output. Verified: bogus `PYTHON` and a venv-less worktree both block (exit 1) with the intended message. |
 | **BUG-01** | Hostname regex over-redacts hyphenated tags and ISO-8601 | ✅ **Fixed + pushed** `279d5c0` (2026-10-23) — 21 regression cases, negative control reproduced 8 failures pre-fix. Was confirmed real, single site: `Tools/text_sanitizer_pipeline/text_sanitizer_pipeline.py:139` — `\b([A-Za-z0-9]+[-][A-Za-z0-9-]+)\b` matches any two alnum runs joined by a hyphen, so `2026-10-23T18` is redacted out of `2026-10-23T18:28:43` and tags like `win-update-rollup` become hosts. Narrow to multi-label hostnames, exclude timestamp shapes first, keep `host=`/`dest=` context intact. Tests belong in `tests/test_investigation_fixes.py` (already covers the sanitizer; no new test file). |
 | **BUG-02** | Catalog fuzzy-matcher `raw_fields` fallback | ✅ **Fixed + pushed** `30ffefa` (2026-10-23) — 5 regression cases, negative control reproduced 2 failures pre-fix. Was confirmed real and pinpointed: `api/routes/analyze.py:220-232` builds its anchor from `case.rule_name` plus `(source_notable_payload or {}).get("fields")` — there is no `raw_fields` path, while the paste/store path writes `raw_fields` (`api/routes/notables.py:1378`). A notable whose fields live only under `raw_fields`, or whose `rule_name` was sanitized away, scores 0-1 tokens and silently generates no cards. Fix: fall back `fields = payload.get("raw_fields") or payload.get("fields") or {}` and fall back the rule name from `raw_fields` (`rule_name`/`search_name`) before matching. Tests: `tests/test_api_analyze_flow.py` (`TestPlaybookFamilyGuard` already exercises this code). |
 
@@ -58,12 +61,12 @@ live-system actions were used.
 
 | ID | Task | Blocker / note |
 |---|---|---|
-| **SEC-01** | `AUTH_MODE=proxy` header authentication | **Needs human input:** header name, the numeric-local-user-id validation rule, and the trusted-proxy boundary. Current modes are API key + session (`api/auth.py`, `api/middleware.py`); the new mode must not alter them. Tests: valid, missing, malformed, unmapped user, disabled mode, existing modes. |
-| **SEC-02** | Read-vs-write role separation on every route | 74 endpoints across 14 routers; RBAC currently covers 9 (`API_SECURITY_REVIEW` F4). Deliverable includes the route/role matrix; expanding the role policy is an owner decision. |
-| **SEC-03** | Column-level encryption (`TypeDecorator`) | **Blocked pending the approved column list** and key-management decisions (injection, rotation, backup/restore, indexing/searchability). Do not guess columns; test-only generated keys. |
+| **SEC-01** | `AUTH_MODE=proxy` header authentication | ✅ **Done** (owner chose `X-Auth-Request-User` + `SOC_TRUSTED_PROXY_CIDRS`). Header honored only from a trusted peer CIDR (unset/malformed = trust nobody), value must be a `users.id` matching an active row, `require_role` now binds in proxy mode, API key still works. `tests/test_proxy_auth.py` (17); negative controls reproduced 5 failures. Docs: `docs/SESSION_AUTH_PLAN.md`, tracker SEC-01. |
+| **SEC-02** | Read-vs-write role separation on every route | ✅ **Matrix delivered, enforcement deliberately not applied** (owner: matrix first). `docs/ROUTE_ROLE_MATRIX.md` — 74 routes, 39 mutating / 35 read, 9 key-gated, **10 role-gated (14 %)**; proposal = 20 admin / 50 analyst / 4 public. Generated + drift-gated by `scripts/route_matrix.py --check` (`tests/test_route_matrix.py`). **Waiting on the owner:** five questions, including whether the 7 destructive routes become admin (conflicts with the Oct 14 "analyst deletes stay" decision). |
+| **SEC-03** | Column-level encryption (`TypeDecorator`) | ✅ **Done** for the owner-approved columns only: `auth_sessions.csrf_token`, `code_reviews.code_snippet` (AES-256-GCM, `db/crypto.py`, key from `SOC_FIELD_KEY`; unset = pass-through so nothing breaks). `scripts/rotate_field_key --check/--backfill/--rotate` verified end-to-end incl. rollback on a wrong old key; `tests/test_column_encryption.py` (14). **Deployment note:** existing DBs need `ALTER TABLE auth_sessions ALTER COLUMN csrf_token TYPE varchar(255)` first — see `docs/COLUMN_ENCRYPTION.md`. |
 | **SEC-04** | Rate-limiter coverage | Extends F8 (keying is per-IP only; coverage is Ollama-backed POSTs). Thresholds only if supplied — otherwise reuse the existing 30/min and say so. |
 | **SEC-05** | Remove or gate unmounted routes | Inventory first: `api/main.py` mounts 12 routers (11 feature routers + auth); `scripts/attic/` holds retired handlers; `API_SECURITY_REVIEW` F14 flags attic endpoints as latent. Removal needs confirmation that no external client depends on them. |
-| **SEC-06** | Disable production source maps | **Probably N/A — needs a decision.** There is no bundler: `web/` is CDN React plus plain JS, no `package.json`, no build step, so no source maps exist to disable. Confirm N/A or define what "production build" means here before changing anything. |
+| **SEC-06** | Disable production source maps | ✅ **Closed as N/A** (owner confirmed): no bundler exists — `web/` is CDN React + plain JS, no `package.json`, no build step, no `.map` files — so there is nothing to disable. Rationale recorded in the tracker; re-open only if a build step is ever introduced. |
 
 ### Phase 3 — Kubernetes drafts (local validation only, never applied)
 
