@@ -5,6 +5,47 @@
 # Runs the platform baseline, then the requirement pin/marker check.
 # Bypass with: git push --no-verify
 cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Interpreter resolution (DEV-01, decided 2026-10-23) — resolves BEFORE the
+# baseline so a typo'd or missing interpreter is named here instead of
+# surfacing as a harness failure further down.
+#
+# The pin/SBOM gates must run under a REPO VENV or not at all. Bare `python3`
+# used to be the last resort, but on this Mac that is 3.9.6, so the SBOM gate
+# evaluated the marker-dead `<3.10` branch against a 3.14-shaped
+# docs/SBOM.json and failed every push (re-verified 2026-10-23:
+# `python3 scripts/check_sbom_pins.py` reports drift and exits 1, while
+# `.venv314/bin/python` passes 42 pins on the same tree). The marker gate is
+# version-agnostic — it targets `.python-version`, not the running runtime —
+# so the SBOM check is the one the interpreter choice actually decides. A
+# fallback that can only produce a false verdict is worse than no fallback — it
+# teaches people to push with --no-verify. So: no approved venv => push
+# blocked, with the install command printed. `PYTHON=` overrides, and is
+# validated (a typo must not silently disable the gates).
+REQ_PY="${PYTHON:-}"
+if [ -n "$REQ_PY" ]; then
+  if ! "$REQ_PY" -c "import sys" >/dev/null 2>&1; then
+    echo "❌ PYTHON=$REQ_PY is not a usable interpreter — push BLOCKED."
+    exit 1
+  fi
+elif [ -f scripts/check_requirement_markers.py ]; then
+  for cand in .venv314/bin/python .venv/bin/python; do
+    if [ -x "$cand" ] && "$cand" -c "import sys" >/dev/null 2>&1; then REQ_PY="$cand"; break; fi
+  done
+fi
+if [ -f scripts/check_requirement_markers.py ] && [ -z "$REQ_PY" ]; then
+  echo ""
+  echo "❌ No usable repo venv (.venv314 or .venv) — push BLOCKED."
+  echo "   The pin, SBOM and security gates must run under a repo interpreter."
+  echo "   Create one, then push again:"
+  echo "     python3 -m venv .venv314"
+  echo "     .venv314/bin/pip install -r requirements.txt -r requirements-dev.txt"
+  echo "   Or name one explicitly: PYTHON=/path/to/python git push …"
+  exit 1
+fi
+
+export PYTHON="$REQ_PY"
+
 if [ -x scripts/baseline ]; then
   echo "── baseline pre-push check ──"
   if ! bash scripts/baseline --verify; then
@@ -19,30 +60,13 @@ fi
 
 # Pin/marker gate: every requirement pin must support the interpreter its
 # python_version branch selects (PyPI requires_python). Stdlib-only script.
-# Resolve an interpreter from the repo venvs FIRST, then bare python3, so the
-# gate runs in a fresh shell (no venv activation); PYTHON=<path> still forces
-# one. Order matters: bare python3 on this Mac is 3.9.6, so `python3` first
-# made both gates evaluate the marker-dead `<3.10` branch and fail against a
-# 3.14-shaped docs/SBOM.json — a guaranteed false "push BLOCKED" on every push
-# (witnessed 2026-10-23; `.venv314/bin/python scripts/check_sbom_pins.py` passes
-# on the same tree).
-REQ_PY="${PYTHON:-}"
-if [ -z "$REQ_PY" ] && [ -f scripts/check_requirement_markers.py ]; then
-  for cand in .venv314/bin/python .venv/bin/python python3; do
-    if "$cand" -c "import sys" >/dev/null 2>&1; then REQ_PY="$cand"; break; fi
-  done
-fi
 if [ -f scripts/check_requirement_markers.py ]; then
-  if [ -z "$REQ_PY" ]; then
-    echo "── requirement pin/marker check: SKIPPED (no python interpreter found) ──"
-  else
-    echo "── requirement pin/marker check ──"
-    if ! "$REQ_PY" scripts/check_requirement_markers.py; then
-      echo ""
-      echo "❌ Requirement pin/marker mismatch — push BLOCKED."
-      echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
-      exit 1
-    fi
+  echo "── requirement pin/marker check ──"
+  if ! "$REQ_PY" scripts/check_requirement_markers.py; then
+    echo ""
+    echo "❌ Requirement pin/marker mismatch — push BLOCKED."
+    echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
+    exit 1
   fi
 fi
 
