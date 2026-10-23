@@ -101,6 +101,7 @@
   - [x] **Done Sept 30 (stage A2):** pip-audit clean on the production (>=3.10) branch; the 3.9-branch advisories are recorded accepted risk (see the requirements.txt header).
   - [x] **Done Sept 30 (~18:45):** Dependabot alerts/config live — first weekly run opened 7 update PRs (#1–#7). Pending human review: merge the pip bumps + action bumps, mind the dual-runtime pins (Dependabot's `
 ` targets the py3.10 line only; verify the `<3.10` pin still satisfies the advisories before merging).
+  - [x] **Done 2026-10-23:** the five open Dependabot PRs reviewed and merged (#19 sqlalchemy 2.1.5, #18 fastapi 0.146.0, #17 starlette 1.9.0, #16 pydantic 2.14.1, #14 pyflakes 4.0.3), then brought onto `dev-dalton` with the hash lock regenerated (`PIN_ONLY314=1 scripts/pin_requirements.py`). The dual-runtime check caught #16: Dependabot's pydantic pin carried no `python_version` marker, so 2.14.1 (`Requires-Python >=3.10`) broke the 3.9 leg at install — the PR branch was amended to the standard marker split (2.14.1 on `>=3.10`, 2.13.5 frozen on `<3.10`) and both legs went green before merge. `pip-audit` after the bump: **live (>=3.10) environment clean**; the frozen `<3.10` lines still carry the previously accepted advisories (`python-multipart 0.0.20` PYSEC-2026-3036/3037/3038/3039/3040, `certifi 2026.7.22` PYSEC-2026-4320) — policy unchanged, branch not extended. Local suite after install: **484 passed**.
 - **Watch list:** `fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`.
 
 ### 12. `triage.db` (SQLite) in working tree
