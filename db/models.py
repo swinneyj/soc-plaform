@@ -12,12 +12,26 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 
 
 def get_default_postgres_url() -> str:
-    if os.path.exists("/app"):
-        return "postgresql+psycopg://soc_platform@postgres:5432/soc_platform"
-    return "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+    """URL used when `DATABASE_URL` is unset — the same rule as the launchers.
+
+    Delegates to `db.target` so a bare process (a one-off script, a manually
+    started uvicorn, `python scripts/manage_users.py`) lands on the **local
+    primary** — 127.0.0.1:5432 — and honours `SOC_DB_TARGET`. It used to
+    hardcode the compose host port 5433, which meant tools run outside the
+    launchers quietly aimed at a port nothing was serving (or, worse, at a
+    second database). `db.target` is stdlib-only, so importing it here costs
+    nothing and cannot recurse (it deliberately does not import this module).
+
+    The container default (`/app` → host `postgres`) is handled inside
+    `db.target.local_url()`; docker-compose always sets `DATABASE_URL` itself,
+    so the exposed host port 5433 is unaffected.
+    """
+    from db.target import resolve
+
+    return resolve()[0]
 
 
-DATABASE_URL = os.environ.get("DATABASE_URL", get_default_postgres_url())
+DATABASE_URL = os.environ.get("DATABASE_URL") or get_default_postgres_url()
 
 
 def _utcnow() -> datetime:
