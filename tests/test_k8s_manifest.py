@@ -122,11 +122,40 @@ def test_configmap_mounted_not_shadowing_image():
     assert text.count("- name: config") == 2  # volumes entry + mount
 
 
+def test_fluentbit_state_not_in_shared_volume():
+    """Fluent Bit's offset DB must NOT live on the shared audit emptyDir.
+
+    The api container's mount creates /var/log/soc 0755 root, so a
+    rootless sidecar cannot create its DB there and crash-loops (observed
+    live on the soc-t4 kind cluster, 2026-10-23). Pin that the DB path is
+    on the sidecar-private volume instead.
+    """
+    text = _text()
+    m = re.search(r"(?m)^\s+DB\s+(\S+)$", text)
+    assert m, "fluent-bit [INPUT] DB missing"
+    db_path = m.group(1)
+    assert not db_path.startswith("/var/log/soc/"), (
+        "fluent-bit DB on the shared audit volume — rootless sidecar "
+        "cannot write there")
+    # The DB lives on a volume only the sidecar mounts.
+    state = re.search(r"(?m)^\s+mountPath: (\S*)/fluentbit\s*$", text)
+    assert state, "sidecar-private state volume missing"
+    assert db_path.startswith(state.group(1)), (db_path, state.group(1))
+    # api container must NOT mount the state volume (keeps it private).
+    assert text.count("- name: fluentbit-state") == 2, (
+        "state volume should be defined once and mounted once")
+
+
 def test_api_container_health_and_auth_env():
     """The pod runs the same posture as local: health probe, session
     auth, key+DB from secrets."""
     text = _text()
     assert re.search(r"(?m)^\s+path: /health$", text)
+    # Rollout "ready" must mean "serving", not merely "started": a
+    # container that has only *started* once failed the very first
+    # request (observed live on soc-t4 — curl to a not-yet-bound uvicorn
+    # returned connection-refused after a green rollout).
+    assert "readinessProbe:" in text, "api readinessProbe missing"
     assert re.search(r"- name: AUTH_MODE\n\s+value: session", text)
     for key in ("api-key", "database-url"):
         assert re.search(rf"(?m)^\s+key: {key}$", text)

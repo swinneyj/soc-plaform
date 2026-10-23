@@ -12,12 +12,26 @@
 #     --from-literal=bearer-token='...'
 # Point SOC_LOG_WEBHOOK_* at your external collector before applying.
 #
-# Verification status (recorded honestly — no cluster exists on this dev Mac):
+# Verification status (recorded honestly):
 #   - schema: VALIDATED — kubeconform -strict, 2/2 resources against official
 #     Kubernetes schemas (2026-10-21)
 #   - structure/consistency: pinned by tests/test_k8s_manifest.py (container
 #     count, shared emptyDir, tail path == AUDIT_LOG_FILE, env vars supplied,
-#     tls On + verify On, bearer from Secret, no embedded secrets)
+#     tls On + verify On, bearer from Secret, readiness probe, no embedded
+#     secrets)
+#   - LIVE CLUSTER — VERIFIED end-to-end 2026-10-23 on a local kind cluster
+#     (podman provider, macOS) via scripts/task4_cluster_verify.py:
+#       [ok] apply + rollout green (readiness probe gates on /health)
+#       [ok] app wrote the JSON audit file the sidecar tails
+#       [ok] ungated mutation produced the 401 auth_rejected security event
+#       [ok] Fluent Bit delivered it over TLS (private CA, tls.verify On)
+#           to an EXTERNAL host-side sink outside the cluster
+#       [ok] Authorization: Bearer matched the Secret value at the sink
+#       [ok] payload path intact end-to-end
+#     Re-run: python scripts/task4_cluster_verify.py (--teardown removes
+#     the cluster). The sink CA is injected at render time only (ConfigMap
+#     + tls.ca_file); this checked-in file keeps no custom CA so a real
+#     webhook with a publicly-trusted CA applies as-is.
 #   - Fluent Bit config: EXECUTED with real fluent-bit 5.1.5 — loads clean,
 #     ${VAR} expansion works, tails the app's JSON audit file, builds chunks,
 #     connects to the configured endpoint, and payload + bearer header were
@@ -28,8 +42,9 @@
 #     store this brew fluent-bit build reads (root-owned /etc/ssl/certs);
 #     a real cluster's external webhook uses a publicly-trusted CA, so
 #     verify On applies as-is there
-#   - NOT verified: actual kubectl apply/scheduling and a real external
-#     webhook. First apply on a cluster: kubectl apply --dry-run=server -f .
+#   - Still NOT verified here: delivery to a webhook presenting a
+#     publicly-trusted CA (cluster runs used a private-CA sink), and
+#     `kubectl apply --dry-run=server` against production admission chain.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -48,7 +63,7 @@ data:
         Name              tail
         Tag               soc.audit
         Path              /var/log/soc/audit.json
-        DB                /var/log/soc/fluent-bit.db
+        DB                /var/fluentbit/state.db
         Parser            json
         Read_From_Head    On
         Refresh_Interval  5
@@ -92,12 +107,21 @@ spec:
       volumes:
         - name: audit-logs
           emptyDir: {}
+        # Fluent Bit keeps its offset DB on a sidecar-private volume: the
+        # shared audit emptyDir is created 0755 root by the api container's
+        # mount, so a rootless sidecar cannot create its DB there. State is
+        # per-pod and disposable, so an emptyDir is correct.
+        - name: fluentbit-state
+          emptyDir: {}
         - name: config
           configMap:
             name: soc-fluent-bit-config
       containers:
         - name: api
           image: soc-platform:latest
+          # The platform image is side-loaded into the node (ctr import),
+          # not served by a registry — kubelet must use the local copy.
+          imagePullPolicy: Never
           ports:
             - containerPort: 8000
           env:
@@ -126,6 +150,16 @@ spec:
               port: 8000
             initialDelaySeconds: 5
             periodSeconds: 10
+          # Readiness is distinct from liveness: a container that has
+          # merely *started* is not yet serving (uvicorn binds a beat
+          # later). Without this, a rollout goes green while the app is
+          # unreachable and the first requests race a refused socket.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
         - name: fluent-bit
           image: fluent/fluent-bit:3.2
           args:
@@ -147,6 +181,8 @@ spec:
             - name: audit-logs
               mountPath: /var/log/soc
               readOnly: true
+            - name: fluentbit-state
+              mountPath: /var/fluentbit
             - name: config
               mountPath: /fluent-bit/config
               readOnly: true

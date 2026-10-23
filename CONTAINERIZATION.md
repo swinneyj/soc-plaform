@@ -324,8 +324,20 @@ fluent-bit 5.1.5 — parses, `${VAR}` expansion, tails the app's JSON file,
 and delivered payload + bearer header end-to-end to a local HTTPS sink
 (diagnostic run; the artifact's `tls.verify On` demonstrably refuses an
 untrusted CA — correct posture for a real webhook). Pinned by
-`tests/test_k8s_manifest.py`. **Not verified:** actual apply/scheduling and
-a real external webhook — both need a cluster.
+`tests/test_k8s_manifest.py`.
+
+**Verified live on a cluster (2026-10-23):** `scripts/task4_cluster_verify.py`
+stands up a local kind cluster (podman provider), applies the manifest and
+proves the whole path end-to-end: rollout green behind the readiness probe;
+the app wrote the `AUDIT_LOG_FILE` the sidecar tails; an ungated mutation
+produced the `401 auth_rejected` security event; Fluent Bit delivered it
+over **HTTPS with `tls.verify On`** (private CA injected at render time
+only — the checked-in manifest keeps no custom CA) to an **external
+host-side sink outside the cluster**; the sink saw the `Authorization:
+Bearer` value matching the Secret and the payload intact. **Still not
+verified:** delivery to a webhook presenting a publicly-trusted CA (the
+cluster runs used a private-CA sink) and `kubectl apply --dry-run=server`
+against the production admission chain.
 
 ---
 
