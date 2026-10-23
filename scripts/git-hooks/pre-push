@@ -41,6 +41,19 @@ if [ -f scripts/check_requirement_markers.py ]; then
   fi
 fi
 
+# Syntax compile gate (mirrors the CI "Syntax compile gate" step): every
+# api/services/db module must at least compile, so a merge-broken file that no
+# test imports cannot slip through a green suite. Compile only — nothing runs.
+if [ -n "${REQ_PY:-}" ] && [ -f api/main.py ]; then
+  echo "── syntax compile gate ──"
+  if ! "$REQ_PY" -m py_compile api/*.py api/helpers/*.py api/routes/*.py services/*.py db/*.py; then
+    echo ""
+    echo "❌ Syntax compile gate failed — push BLOCKED."
+    echo "   Fix the broken module, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
 # Hygiene assertions (mirrors the CI "Hygiene assertions" step).
 # These are invariant checks that must not silently drift: the test-file
 # count must be a positive integer, and delete_case_id must be absent from

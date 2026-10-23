@@ -33,11 +33,11 @@ If you are new to this repo, read in this order:
 ### Runtime and App Surface
 
 - `api\`
-  FastAPI service layer — `api/main.py` (thin app shell: lifespan, API-key middleware, canonical-path rewriter (S13: `/api/cases|notables|evidence|analyses` alias the `/api/db/*` routes at the ASGI layer), router registration, static mount) + focused routers in `api/routes\` (`system`, `promote`, `analyze`, `evidence`, `closure`, `notables`, `triage`, `splunk`, `rules`, `tools`, `code_review`), shared payload models in `api/schemas.py`, pure helpers in `api/helpers\`, auth seam in `api/auth.py`
+  FastAPI service layer — `api/main.py` (thin app shell only: lifespan, router registration, exception handlers, UI mount. The HTTP middleware stack lives in `api/middleware.py` (request-id, API-key/session gate, CORS, canonical-path rewriter — S13: `/api/cases|notables|evidence|analyses` alias the `/api/db/*` routes at the ASGI layer — body cap, per-IP rate limiter), and UI serving (SOC_CONFIG bootstrap + static mount) in `api/routes/ui.py` + focused routers in `api/routes\` (`system`, `promote`, `analyze`, `evidence`, `closure`, `notables`, `triage`, `splunk`, `rules`, `tools`, `code_review`), shared payload models in `api/schemas.py`, pure helpers in `api/helpers\`, auth seam in `api/auth.py`
 - `db\`
   SQLAlchemy models and DB wiring
 - `services\`
-  External service clients such as Ollama
+  External service clients: Ollama (`ollama_service.py`), the pluggable search backends (facade `search_backend.py` re-exporting `splunk_mock_backend.py` / `splunk_real_backend.py`), and the Splunk boundary latch (`splunk_boundary.py`)
 - `web\`
   Browser dashboard UI
 
@@ -98,42 +98,42 @@ Live entry is now a thin shell: `web/index.html` (≈30 KB) → `web/app.modular
 - **Tools Tab**
   - UI: `web/components/ToolsTab.js` (+ `HeaderNav.js`); shell: `web/index.html`
   - Logic: `web/modules/tools.js` (execute, poll jobs, registry) + `web/modules/api.js`
-  - API: `/api/tools`, `/api/execute`, `/api/jobs` in `api/main.py` (+ `api/routes/system.py`)
+  - API: `/api/tools`, `/api/execute`, `/api/jobs` in `api/routes/tools.py`
 
 - **Database Tab (Triage / Notables / Stats)**
   - UI: `web/components/DatabaseTab.js`
   - Logic: `web/modules/database.js` (+ `web/utils/pocSummary.js`, `selection.js`)
-  - API: `/api/db/triage`, `/api/db/notables` in `api/main.py`; `/api/db/notables/{event_id}/promote` in `api/routes/promote.py`; `/api/db/stats` in `api/routes/system.py`
+  - API: `/api/db/triage` in `api/routes/triage.py`; `/api/db/notables` in `api/routes/notables.py`; `/api/db/notables/{event_id}/promote` in `api/routes/promote.py`; `/api/db/stats` in `api/routes/system.py`
   - Models: `TriageResult`, `SplunkEvent` in `db/models.py`
 
 - **AI Analysis Tab**
   - UI: `web/components/AnalysisTab.js`
   - Logic: `web/modules/analysis.js` (phase1/phase2/supportive/aliases/evidence) + `web/utils/queryRender.js`, `keys.js`
-  - API: `/api/db/analyze` in `api/routes/analyze.py`; `/api/db/triage/{id}/evidence` + `/api/db/triage/{id}/investigation-state` in `api/routes/evidence.py`; `/api/db/placeholder-aliases`, `/api/db/supportive-queries` in `api/main.py`
+  - API: `/api/db/analyze` in `api/routes/analyze.py`; `/api/db/triage/{id}/evidence` + `/api/db/triage/{id}/investigation-state` in `api/routes/evidence.py`; `/api/db/placeholder-aliases`, `/api/db/supportive-queries` in `api/routes/rules.py`
   - Models: `AnalysisResult`, `SupportiveQuery`, `SupportiveQueryResult`, `InvestigationState` in `db/models.py`
   - Ollama: `services/ollama_service.py` + `services/investigation_state.py` / `evidence_service.py`
 
 - **Closure Notes Tab**
   - UI: `web/components/ClosureTab.js`
   - Logic: `web/modules/closure.js`
-  - API: `/api/db/closure-note` + `/api/db/triage/{id}/closure-readiness` in `api/routes/closure.py`; `/api/db/rules` in `api/main.py`
+  - API: `/api/db/closure-note` + `/api/db/triage/{id}/closure-readiness` in `api/routes/closure.py`; `/api/db/rules` in `api/routes/rules.py`
   - Models: `ClosureNote`, `ESCorrelationRule` in `db/models.py`; `services/closure_service.py`
 
 - **Jobs Tab**
   - UI: `web/components/JobsTab.js`
   - Logic: `web/modules/tools.js`
-  - API: `/api/jobs` in `api/main.py`
+  - API: `/api/jobs` in `api/routes/tools.py`
 
 - **Reports Tab**
   - UI: `web/components/ReportsTab.js`
   - Logic: `web/modules/tools.js`
-  - API: `/api/reports` in `api/main.py`
+  - API: `/api/reports` in `api/routes/tools.py`
   - Files: `Data/Reports/`
 
 - **Code Review Tab**
   - UI: `web/components/CodeReviewTab.js`
   - Logic: `web/modules/codeReview.js` + `web/utils/codeSections.js`
-  - API: `/api/code-review`, `/api/code-review/zip`, `/api/code-reviews/*` in `api/main.py`
+  - API: `/api/code-review`, `/api/code-review/zip`, `/api/code-reviews/*` in `api/routes/code_review.py`
   - Models: `CodeReview` in `db/models.py`
 
 Root wiring: `web/app.modular.js` (data, computed, spreads, mounted, intervals — see `docs/FRONTEND_MODULARIZATION.md` load order). When you want to modify a feature, start from the tab above and open that component + its module before touching `api/`.

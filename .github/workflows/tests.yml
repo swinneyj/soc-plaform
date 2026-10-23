@@ -50,6 +50,14 @@ jobs:
         # missing typing imports locally (see scripts/check_undefined_names.sh).
         run: bash scripts/check_undefined_names.sh
 
+      - name: Syntax compile gate (py_compile)
+        # E.5: every api/services/db module must at least compile. This catches
+        # a merge-broken file that no test imports (a green suite once hid
+        # exactly that class of damage). Compile only — nothing is executed.
+        run: |
+          python -m py_compile api/*.py api/helpers/*.py api/routes/*.py services/*.py db/*.py
+          echo "OK: py_compile clean (api/**, helpers, routes, services, db)"
+
       - name: Shell lint (bash -n on repo bash scripts)
         # GAP_AUDIT F7: CI previously covered Python only. Add a basic syntax
         # gate on the repo's bash scripts so a merge marker, broken quoting, or a

@@ -931,7 +931,9 @@ def test_rate_limit_429(client, monkeypatch):
     """C2.1.5: Ollama-backed POSTs are limited to RATE_LIMIT_PER_MIN per IP.
     The limiter counts requests before handlers run, so handler outcomes
     (500 without a DB here) do not matter."""
-    monkeypatch.setattr(api_main, "RATE_LIMIT_PER_MIN", 2)
+    # E.5: the limiter reads its config from api.middleware (api.main only
+    # re-exports the value), so patch the module that runs it.
+    monkeypatch.setattr("api.middleware.RATE_LIMIT_PER_MIN", 2)
     api_main._RATE_HITS.clear()
     try:
         for _ in range(2):
