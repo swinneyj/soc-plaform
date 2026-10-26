@@ -1,0 +1,51 @@
+# GitGuardian / ggshield config — test dummy allowlist.
+#
+# Context: PR #20 (v1.0.0-rc1-hardened) got 4 GitGuardian "Username Password"
+# findings, all in tests/test_api_key_gate.py and tests/test_audit_logging.py.
+# All were dummy fixtures, not real credentials (verified Oct 2026):
+# real DATABASE_URL lives in BWS / Keychain, real API_KEY in the macOS
+# Keychain — neither appears in this repo.
+#
+# What this file does: tells ggshield (local CLI / pre-push / CI) to stop
+# flagging these KNOWN-FAKE values. Deliberately scoped to specific dummy
+# strings (ignored_matches), NOT to tests/**/* — test files must still be
+# scanned so a real secret pasted into a test still alerts.
+#
+# What this file does NOT do: the GitHub PR scanner ("GitGuardian has
+# uncovered 4 secrets" email) is driven by the GitGuardian dashboard, not by
+# this file. To silence the PR scanner too, EITHER triage the 4 incidents as
+# False positive in the dashboard, OR add a dashboard exclusion there:
+#   Settings → Secrets detection → Filepath exclusions (e.g. tests/**),
+#   and/or Secret pattern exclusions for the dummy strings below.
+# Newly created dashboard exclusions apply retroactively to existing incidents.
+#
+# To extend: add the plaintext dummy below (preferred — self-documenting),
+# or the SHA256 ggshield prints for the occurrence.
+
+version: 2
+
+secret:
+  ignored_matches:
+    # API-key gate fixture (with_api_key, X-API-Key headers, ?api_key= query tests)
+    - name: test-api-key-fixture
+      match: test-secret-key
+    # Default test-user password (_make_user password="pw123" across both files)
+    - name: test-user-default-password
+      match: pw123
+    # scrypt / pbkdf2 hashing fixtures (test_api_key_gate.py round-trip tests)
+    - name: scrypt-fixture-xkcd
+      match: correct horse battery staple
+    - name: scrypt-fixture-hunter2
+      match: hunter2
+    - name: scrypt-fixture-swordfish
+      match: swordfish
+    # Audit canary: proves the attempted password never reaches the audit stream
+    - name: audit-canary-password
+      match: CANARY_PW_9f3a
+    # Minimal-env test canaries: prove tool subprocesses CANNOT see the API env
+    - name: minimal-env-canary-database-url
+      match: postgres://leak:leak@db/neon
+    - name: minimal-env-canary-api-key
+      match: leaked-api-key
+    - name: minimal-env-canary-ollama-key
+      match: leaked-ollama-key
