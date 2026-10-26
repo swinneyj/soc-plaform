@@ -13,7 +13,8 @@ import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import require_role
 
 from api import deps
 from api.helpers.errors import InternalError, raise_internal
@@ -1223,7 +1224,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
 
 
 
-@router.post("/api/db/notables/generate-fetch-spl", tags=["Database"])
+@router.post("/api/db/notables/generate-fetch-spl", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def generate_notable_fetch_spl(request: NotableFetchSplRequest):
     """Generate SPL to pull clean notable fields from Splunk.
 
@@ -1247,7 +1248,7 @@ def generate_notable_fetch_spl(request: NotableFetchSplRequest):
         raise_internal(e, context="notables")
 
 
-@router.get("/api/db/notables/generate-fetch-spl", tags=["Database"])
+@router.get("/api/db/notables/generate-fetch-spl", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def generate_notable_fetch_spl_get(
     correlation_search: Optional[str] = Query(None),
     rule_name: Optional[str] = Query(None),
@@ -1305,7 +1306,7 @@ def _purge_failed_paste_batch(
         )
 
 
-@router.post("/api/db/notables/paste", tags=["Database"])
+@router.post("/api/db/notables/paste", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
     # The cap is a BYTE budget: measure the UTF-8 encoding, not the
@@ -1633,7 +1634,7 @@ def paste_notable(request: PastedNotableRequest):
             pass
 
 
-@router.get("/api/db/notables", tags=["Database"])
+@router.get("/api/db/notables", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def list_recent_notables(
     limit: int = Query(20, ge=1, le=200),
     delete_event_id: Optional[int] = Query(None, description="If provided, delete this pasted notable before listing"),
@@ -1696,7 +1697,7 @@ def list_recent_notables(
             pass
 
 
-@router.get("/api/db/notables/historical", tags=["Database"])
+@router.get("/api/db/notables/historical", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def list_historical_notables(
     limit: int = Query(20, ge=1, le=500),
 ):
@@ -1756,7 +1757,7 @@ def list_historical_notables(
             pass
 
 
-@router.post("/api/db/notables/backfill-closure-notes", tags=["Database"])
+@router.post("/api/db/notables/backfill-closure-notes", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def backfill_historical_closure_notes():
     """Create concise closure summaries for historical notables missing one.
 
@@ -1836,7 +1837,7 @@ def backfill_historical_closure_notes():
             pass
 
 
-@router.get("/api/db/notables/{event_id}", tags=["Database"])
+@router.get("/api/db/notables/{event_id}", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_pasted_notable_details(event_id: int):
     """Return full parsed and sanitized details for a closed pasted notable."""
     try:
@@ -1869,7 +1870,7 @@ def get_pasted_notable_details(event_id: int):
             pass
 
 
-@router.delete("/api/db/notables/{event_id}", tags=["Database"])
+@router.delete("/api/db/notables/{event_id}", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_pasted_notable(event_id: int):
     """Delete a pasted Splunk notable from the database.
 
@@ -1937,7 +1938,7 @@ def delete_pasted_notable(event_id: int):
             pass
 
 
-@router.post("/api/db/notables/{event_id}/delete", tags=["Database"])
+@router.post("/api/db/notables/{event_id}/delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_pasted_notable_post(event_id: int):
     """Compatibility endpoint to delete a pasted notable via POST.
 
@@ -1948,7 +1949,7 @@ def delete_pasted_notable_post(event_id: int):
     return delete_pasted_notable(event_id)
 
 
-@router.post("/api/db/notables/batch-delete", tags=["Database"])
+@router.post("/api/db/notables/batch-delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def batch_delete_pasted_notables(payload: Dict[str, Any]):
     """Delete multiple pasted notables in one call.
 
@@ -2020,7 +2021,7 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
         raise_internal(e, context="notables")
 
 
-@router.get("/api/db/triage/{case_id}/notable", tags=["Database"])
+@router.get("/api/db/triage/{case_id}/notable", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_triage_source_notable(case_id: str):
     """Return the source pasted notable details for a promoted triage case."""
     try:

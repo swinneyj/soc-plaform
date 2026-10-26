@@ -74,6 +74,59 @@ def backend(tmp_path, seed_events):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Index metadata + wildcard field terms
+# ---------------------------------------------------------------------------
+
+def _indexed_seed(tmp_path):
+    now = datetime.now()
+    return _write_seed(tmp_path, [
+        {"index": "auth", "source": "/var/log/secure", "sourcetype": "vpn:auth",
+         "host": "VPN-GW-01", "timestamp": (now - timedelta(minutes=10)).isoformat(),
+         "raw": "action=success user=bjones geo=Ashburn"},
+        {"index": "edr", "source": "EDR", "sourcetype": "edr:process",
+         "host": "FINWS07", "timestamp": (now - timedelta(minutes=8)).isoformat(),
+         "raw": "process=powershell.exe user=bjones"},
+        {"index": "notable", "source": "ES", "sourcetype": "notable",
+         "host": "FINWS07", "timestamp": (now - timedelta(minutes=5)).isoformat(),
+         "raw": "search_name=Demo rule_id=DEMO"},
+    ])
+
+
+def test_index_term_filters_on_event_metadata(tmp_path):
+    backend = MockSplunkBackend(seed_path=_indexed_seed(tmp_path))
+
+    assert len(backend.search("index=edr", earliest="all")) == 1
+    assert len(backend.search("index=*", earliest="all")) == 3
+    assert backend.search("index=proxy", earliest="all") == []
+    # Events without an explicit index default to `main`, like Splunk.
+    assert backend.search("index=main", earliest="all") == []
+
+    by_index = backend.search("index=* | stats count by index", earliest="all")
+    assert {row["index"]: row["count"] for row in by_index} == {
+        "auth": 1, "edr": 1, "notable": 1,
+    }
+
+
+def test_wildcard_field_values_match(tmp_path):
+    backend = MockSplunkBackend(seed_path=_indexed_seed(tmp_path))
+
+    assert len(backend.search("index=e*", earliest="all")) == 1        # edr
+    assert len(backend.search("host=FIN*", earliest="all")) == 2
+    assert len(backend.search("host=FINWS0?", earliest="all")) == 2
+    assert len(backend.search("sourcetype=edr:*", earliest="all")) == 1
+    assert len(backend.search("host=VPN-*", earliest="all")) == 1
+    # A wildcard still matches nothing when the field is absent.
+    assert backend.search("index=* category=*", earliest="all") == []
+
+
+def test_newest_event_at_reports_corpus_anchor(tmp_path):
+    backend = MockSplunkBackend(seed_path=_indexed_seed(tmp_path))
+    newest = backend.newest_event_at()
+    assert newest is not None
+    assert abs((datetime.now() - newest).total_seconds()) < 60 * 11
+
+
 def test_base_kv_filtering(backend):
     rows = backend.search("sourcetype=linux_secure user=bjones", earliest="all")
     assert len(rows) == 3  # includes the 30-day-old event
@@ -153,8 +206,17 @@ def test_rows_are_newest_first(backend):
 
 
 def test_row_shape_matches_splunk_event_columns(backend):
+    """SplunkEvent columns plus `index` — the metadata Splunk itself returns.
+
+    Nothing constructs an ORM row from these dicts (verified: every
+    SplunkEvent(...) call site passes explicit columns), so carrying index is
+    additive: it lets the evidence payload show which index a row came from.
+    """
     row = backend.search("sourcetype=linux_secure user=asmith", earliest="all")[0]
-    assert set(row.keys()) == {"source", "sourcetype", "host", "timestamp", "raw"}
+    assert set(row.keys()) == {
+        "index", "source", "sourcetype", "host", "timestamp", "raw",
+    }
+    assert row["index"] == "main"  # seeded rows without metadata default here
 
 
 def test_unsupported_operator_raises(backend):
@@ -334,15 +396,18 @@ class FakeSplunkSession:
         self._error = error
         self.calls = []
 
-    def post(self, url, headers=None, data=None, timeout=None):
-        self.calls.append({"url": url, "headers": headers, "data": data, "timeout": timeout})
+    def post(self, url, headers=None, data=None, timeout=None, verify=None):
+        self.calls.append(
+            {"url": url, "headers": headers, "data": data, "timeout": timeout, "verify": verify}
+        )
         if self._error is not None:
             raise self._error
         return self._response
 
-    def get(self, url, headers=None, params=None, timeout=None):
+    def get(self, url, headers=None, params=None, timeout=None, verify=None):
         self.calls.append(
-            {"url": url, "headers": headers, "params": params, "timeout": timeout}
+            {"url": url, "headers": headers, "params": params, "timeout": timeout,
+             "verify": verify}
         )
         if self._error is not None:
             raise self._error
@@ -366,6 +431,8 @@ def test_real_backend_export_request_shape():
     assert call["url"] == "https://splunk.example.com:8089/services/search/jobs/export"
     assert call["headers"] == {"Authorization": "Bearer test-token"}
     assert call["timeout"] == 42.0
+    # Verification is on by default — never silently off.
+    assert call["verify"] is True
     assert call["data"] == {
         "search": "search sourcetype=linux_secure user=bjones",
         "earliest_time": "-15m",
@@ -793,3 +860,599 @@ def test_saved_searches_route_serves_from_fake_splunk(fake_splunk, monkeypatch):
     assert payload["success"] is True
     assert payload["count"] == 1
     assert payload["items"][0]["name"] == "Failed Logons (Fake)"
+
+
+def test_connector_is_read_only_at_the_wire(fake_splunk):
+    """`read_only` in /api/splunk/search-status is a claim; this proves it.
+
+    The fake records every request it served, so a future connector change
+    that reached for job creation, saved-search editing, or a DELETE would
+    fail here even if it never appeared in a code review.
+    """
+    backend = RealSplunkBackend(base_url=fake_splunk.base_url, token="fixture-token", timeout=10)
+    backend.search("sourcetype=linux_secure", earliest="-7d")
+    backend.list_saved_searches()
+
+    seen = [(r["method"], r["path"]) for r in fake_splunk.requests]
+    assert seen == [
+        ("POST", "/services/search/jobs/export"),
+        ("GET", "/services/saved/searches"),
+    ]
+    # Nothing mutating and nothing outside the two read paths, even if the
+    # connector grows a call later: the wire log is the whole story.
+    assert all(method == "GET" or path.endswith("/jobs/export") for method, path in seen)
+    assert {path for _, path in seen} <= {
+        "/services/search/jobs/export",
+        "/services/saved/searches",
+    }
+
+
+def test_csv_quoting_and_embedded_newlines_survive_the_wire(tmp_path):
+    """Real Splunk CSV export quotes multi-line events; the connector reads
+    them with `csv.DictReader`, not line splitting. This is the seam most
+    likely to break on live data, so it runs over a real socket."""
+    module = _load_fake_splunk_module()
+    multi_line = (
+        'sshd: action=failure user=bjones,\n    "quoted path", tail=1, host=VPN-GW-01'
+    )
+    seed = _write_seed(tmp_path, [{
+        "source": "/var/log/secure",
+        "sourcetype": "linux_secure",
+        "host": "VPN-GW-01",
+        "timestamp": (datetime.now() - timedelta(minutes=5)).isoformat(),
+        "raw": multi_line,
+    }])
+    server = module.FakeSplunkServer(token="fixture-token", seed_path=seed).start()
+    try:
+        backend = RealSplunkBackend(base_url=server.base_url, token="fixture-token", timeout=10)
+        rows = backend.search("sourcetype=linux_secure", earliest="-7d")
+    finally:
+        server.stop()
+
+    assert len(rows) == 1
+    assert rows[0]["raw"] == multi_line  # commas, quotes and the newline intact
+    assert "\n" in rows[0]["raw"]
+    # Epoch -> naive-UTC ISO, same instant the fixture described.
+    parsed = datetime.fromisoformat(rows[0]["timestamp"])
+    assert parsed.tzinfo is None
+    assert abs((datetime.now() - parsed).total_seconds()) < 60 * 60
+
+
+def test_connector_times_out_against_a_slow_splunk(tmp_path, seed_events):
+    """A hanging Splunk must surface as a loud failure, not a stuck request."""
+    module = _load_fake_splunk_module()
+    server = module.FakeSplunkServer(
+        token="fixture-token",
+        seed_path=_write_seed(tmp_path, seed_events),
+        delay_seconds=0.6,
+    ).start()
+    try:
+        backend = RealSplunkBackend(base_url=server.base_url, token="fixture-token", timeout=0.2)
+        with pytest.raises(SplunkSearchError, match="Splunk request failed"):
+            backend.search("sourcetype=linux_secure", earliest="-7d")
+    finally:
+        server.stop()
+
+
+# ---------------------------------------------------------------------------
+# Route-level end-to-end: /api/splunk/search-one through the REAL connector
+#
+# The search-one tests in test_api_analyze_flow monkeypatch the factory to an
+# inline mock backend. Here the route resolves RealSplunkBackend from env and
+# the bytes actually cross a socket: env -> factory -> connector -> HTTP ->
+# CSV parse -> ledger row. That was the last untested seam before the live
+# rehearsal.
+# ---------------------------------------------------------------------------
+
+# `db_client` lives in conftest.py — shared with tests/test_demo_corpus.py.
+def _seed_search_one_case(client, case_id="WIRE-CASE-1"):
+    """A case + notable + playbook query — everything search-one resolves."""
+    import db.models as db_models
+
+    db = client.test_session()
+    db.add(db_models.TriageResult(
+        case_id=case_id,
+        rule_name="Test Rule - Failed Logons",
+        rule_id="test_rule",
+        verdict="suspicious",
+        confidence_score=0.5,
+        analysis_summary="Synthetic case for the Splunk wire test.",
+    ))
+    db.add(db_models.SplunkEvent(
+        source="pasted",
+        sourcetype="splunk:notable:pasted",
+        host="VPN-GW-01",
+        raw=json.dumps({
+            "promoted_case_id": case_id,
+            "fields": {"host": "VPN-GW-01", "user": "bjones"},
+        }),
+    ))
+    db.add(db_models.SupportiveQuery(
+        rule_id="test_rule",
+        title="Failed logons for user",
+        description="",
+        spl_query="sourcetype=linux_secure user=$user$",
+    ))
+    db.commit()
+    db.close()
+    return case_id
+
+
+def _point_platform_at(monkeypatch, server, token="fixture-token"):
+    """Configure the app exactly as a rehearsal would: env, not monkeypatching."""
+    from api import auth
+
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.setenv("SPLUNK_URL", server.base_url)
+    monkeypatch.setenv("SPLUNK_TOKEN", token)
+
+
+def test_search_one_route_runs_the_real_connector(db_client, fake_splunk, monkeypatch):
+    import db.models as db_models
+
+    _point_platform_at(monkeypatch, fake_splunk)
+    case_id = _seed_search_one_case(db_client)
+
+    response = db_client.post("/api/splunk/search-one", json={
+        "case_id": case_id,
+        "query_title": "Failed logons for user",
+        "earliest": "-7d",
+    })
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "RealSplunkBackend"
+    assert body["result_status"] == "success"
+    assert body["row_count"] >= 1
+    assert body["spl"] == "sourcetype=linux_secure user=bjones"  # placeholder resolved
+    assert "10.0.0.1" in " ".join(str(r.get("raw")) for r in body["rows"])
+    assert body["error"] is None
+
+    # The wire saw exactly one export POST, and the ledger recorded one row.
+    assert [(r["method"], r["path"]) for r in fake_splunk.requests] == [
+        ("POST", "/services/search/jobs/export")
+    ]
+    db = db_client.test_session()
+    ledger = db.query(db_models.SupportiveQueryResult).filter(
+        db_models.SupportiveQueryResult.case_id == case_id,
+    ).all()
+    tool_runs = db.query(db_models.ToolRun).all()
+    db.close()
+    assert [row.source_system for row in ledger] == ["splunk_auto"]
+    assert json.loads(ledger[0].raw_result)["result_status"] == "success"
+    assert len(tool_runs) == 1 and tool_runs[0].status == "completed"
+
+
+def test_search_one_route_maps_splunk_403_to_query_failed(db_client, tmp_path, seed_events, monkeypatch):
+    """The rehearsal's most likely bad day: a token without the search
+    capability. The route must ledger a failed query, not 500."""
+    import db.models as db_models
+
+    module = _load_fake_splunk_module()
+    server = module.FakeSplunkServer(
+        token="fixture-token",
+        seed_path=_write_seed(tmp_path, seed_events),
+        fail_status=403,
+        fail_body="In handler 'export': user lacks capability 'search'",
+    ).start()
+    try:
+        _point_platform_at(monkeypatch, server)
+        case_id = _seed_search_one_case(db_client)
+        response = db_client.post("/api/splunk/search-one", json={
+            "case_id": case_id,
+            "query_title": "Failed logons for user",
+            "earliest": "-7d",
+        })
+    finally:
+        server.stop()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result_status"] == "query_failed"
+    assert body["row_count"] == 0
+    assert "HTTP 403" in body["error"]
+    assert "capability" in body["error"]  # Splunk's own message survives
+
+    db = db_client.test_session()
+    ledger = db.query(db_models.SupportiveQueryResult).filter(
+        db_models.SupportiveQueryResult.case_id == case_id,
+    ).all()
+    tool_runs = db.query(db_models.ToolRun).all()
+    db.close()
+    assert json.loads(ledger[0].raw_result)["result_status"] == "query_failed"
+    assert tool_runs[0].status == "failed"
+    assert "HTTP 403" in (tool_runs[0].stderr or "")
+
+
+def test_search_one_route_maps_empty_result_to_no_results(db_client, fake_splunk, monkeypatch):
+    import db.models as db_models
+
+    _point_platform_at(monkeypatch, fake_splunk)
+    case_id = _seed_search_one_case(db_client)
+    response = db_client.post("/api/splunk/search-one", json={
+        "case_id": case_id,
+        "query_title": "Failed logons for user",
+        "spl": "sourcetype=linux_secure user=nosuchuser",
+        "earliest": "-7d",
+    })
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["row_count"] == 0
+    assert body["result_status"] == "no_results"
+    assert body["error"] is None
+
+    db = db_client.test_session()
+    ledger = db.query(db_models.SupportiveQueryResult).filter(
+        db_models.SupportiveQueryResult.case_id == case_id,
+    ).all()
+    db.close()
+    assert json.loads(ledger[0].raw_result)["result_status"] == "no_results"
+
+
+def test_search_one_route_guardrail_times_out_a_slow_search(db_client, tmp_path, seed_events, monkeypatch):
+    """A slow instance must not hold the case: the route's per-run guardrail
+    fires even while the socket request is still in flight."""
+    import api.routes.splunk as splunk_routes
+
+    module = _load_fake_splunk_module()
+    server = module.FakeSplunkServer(
+        token="fixture-token",
+        seed_path=_write_seed(tmp_path, seed_events),
+        delay_seconds=0.8,
+    ).start()
+    try:
+        _point_platform_at(monkeypatch, server)
+        monkeypatch.setattr(splunk_routes, "_SEARCH_ONE_TIMEOUT_SECONDS", 0.2)
+        case_id = _seed_search_one_case(db_client)
+        response = db_client.post("/api/splunk/search-one", json={
+            "case_id": case_id,
+            "query_title": "Failed logons for user",
+            "earliest": "-7d",
+        })
+    finally:
+        server.stop()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["result_status"] == "query_failed"
+    assert "timed out" in body["error"].lower()
+    assert body["row_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TLS trust path: SPLUNK_CA_BUNDLE (preferred) / SPLUNK_VERIFY_TLS (loud opt-out)
+#
+# Splunk management ports (8089) commonly serve an internal/self-signed cert.
+# The rule this section pins down: trust can be *widened* for this one
+# connection, and verification is on unless an operator says otherwise — an
+# opt-out is never global and never silent.
+# ---------------------------------------------------------------------------
+
+def _clear_tls_env(monkeypatch):
+    monkeypatch.delenv("SPLUNK_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("SPLUNK_VERIFY_TLS", raising=False)
+
+
+def test_ca_bundle_env_is_used_for_verification(monkeypatch, tmp_path):
+    _clear_tls_env(monkeypatch)
+    bundle = tmp_path / "splunk-ca.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(bundle))
+
+    session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
+    backend = _real_backend(session)
+    backend.search("sourcetype=linux_secure")
+
+    assert session.calls[0]["verify"] == str(bundle)
+
+
+def test_missing_ca_bundle_fails_at_construction(monkeypatch, tmp_path):
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(tmp_path / "nope.pem"))
+
+    with pytest.raises(SplunkSearchError, match="SPLUNK_CA_BUNDLE"):
+        _real_backend(FakeSplunkSession(FakeSplunkResponse("_time\n")))
+
+
+def test_verify_tls_false_disables_verification_per_connection(monkeypatch):
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setenv("SPLUNK_VERIFY_TLS", "false")
+
+    session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
+    backend = _real_backend(session)
+    backend.search("sourcetype=linux_secure")
+
+    assert session.calls[0]["verify"] is False
+
+
+def test_ca_bundle_wins_over_verify_tls_false(monkeypatch, tmp_path):
+    """Contradictory config resolves toward verification, never away from it."""
+    _clear_tls_env(monkeypatch)
+    bundle = tmp_path / "splunk-ca.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(bundle))
+    monkeypatch.setenv("SPLUNK_VERIFY_TLS", "false")
+
+    session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
+    _real_backend(session).search("sourcetype=linux_secure")
+
+    assert session.calls[0]["verify"] == str(bundle)
+
+
+def test_tls_settings_reports_posture(monkeypatch, tmp_path):
+    from services.search_backend import tls_settings
+
+    _clear_tls_env(monkeypatch)
+    setting = tls_settings()
+    assert setting["verify"] is True
+    assert setting["verification_disabled"] is False
+    assert setting["ca_bundle_configured"] is False
+    assert setting["ca_bundle_certificates"] == 0
+    assert setting["ca_bundle_expires_at"] is None
+    assert setting["ca_bundle_days_remaining"] is None
+    assert setting["ca_bundle_warning"] == ""
+    assert setting["problem"] == ""
+
+    bundle, _key = _self_signed_cert(tmp_path, days_valid=365)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(bundle))
+    setting = tls_settings()
+    assert setting["verify"] is True
+    assert setting["ca_bundle_configured"] is True
+    assert setting["ca_bundle_readable"] is True
+    assert setting["ca_bundle_certificates"] == 1
+    assert setting["ca_bundle_expired"] is False
+    assert setting["ca_bundle_days_remaining"] >= 360
+    assert setting["ca_bundle_warning"] == ""
+    assert setting["problem"] == ""
+
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(tmp_path / "gone.pem"))
+    assert "does not exist" in tls_settings()["problem"]
+
+    monkeypatch.delenv("SPLUNK_CA_BUNDLE")
+    monkeypatch.setenv("SPLUNK_VERIFY_TLS", "0")
+    setting = tls_settings()
+    assert setting["verify"] is False
+    assert setting["verification_disabled"] is True
+
+
+def test_search_status_reports_tls_posture(monkeypatch, tmp_path):
+    from fastapi.testclient import TestClient
+
+    from api import auth
+    from api.main import app
+
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.setenv("SPLUNK_URL", "https://splunk.example.com:8089")
+    monkeypatch.setenv("SPLUNK_TOKEN", "fixture-token")
+
+    payload = TestClient(app).get("/api/splunk/search-status").json()
+    assert payload["ready"] is True
+    tls = payload["tls"]
+    assert tls["verify"] is True
+    assert tls["verification_disabled"] is False
+    assert tls["ca_bundle_configured"] is False
+    assert tls["ca_bundle_readable"] is False
+    # No bundle means nothing to expire: the system trust store is the source.
+    assert tls["ca_bundle_expires_at"] is None
+    assert tls["ca_bundle_days_remaining"] is None
+    assert tls["ca_bundle_expired"] is False
+    assert tls["ca_bundle_warning"] == ""
+
+    # A bundle path that isn't there is a readiness failure, named up front.
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(tmp_path / "gone.pem"))
+    payload = TestClient(app).get("/api/splunk/search-status").json()
+    assert payload["ready"] is False
+    assert "SPLUNK_CA_BUNDLE" in payload["problem"]
+
+
+def _status_payload(monkeypatch):
+    """search-status as an operator sees it, with the key gate disarmed."""
+    from fastapi.testclient import TestClient
+
+    from api import auth
+    from api.main import app
+
+    monkeypatch.setattr(auth, "_API_KEY", "")
+    monkeypatch.delenv("AUTH_MODE", raising=False)
+    monkeypatch.setenv("SEARCH_BACKEND", "splunk")
+    monkeypatch.setenv("SPLUNK_URL", "https://splunk.example.com:8089")
+    monkeypatch.setenv("SPLUNK_TOKEN", "fixture-token")
+    return TestClient(app).get("/api/splunk/search-status").json()
+
+
+def test_expiring_bundle_warns_without_failing_readiness(monkeypatch, tmp_path):
+    """Usable but close to breaking: green readiness, loud warning."""
+    _clear_tls_env(monkeypatch)
+    cert_path, _key = _self_signed_cert(tmp_path, days_valid=10)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(cert_path))
+
+    payload = _status_payload(monkeypatch)
+    tls = payload["tls"]
+
+    assert payload["ready"] is True          # still works today
+    assert payload["problem"] == ""
+    assert tls["ca_bundle_certificates"] == 1
+    assert tls["ca_bundle_expired"] is False
+    assert 0 <= tls["ca_bundle_days_remaining"] <= 10
+    assert tls["ca_bundle_expires_at"].startswith(str(datetime.now().year))
+    assert "expires in" in tls["ca_bundle_warning"]
+    assert "rotate" in tls["ca_bundle_warning"]
+
+
+def test_expired_bundle_fails_readiness_before_a_search_runs(monkeypatch, tmp_path):
+    """The whole point: discovery at status time, not at handshake time."""
+    _clear_tls_env(monkeypatch)
+    cert_path, _key = _self_signed_cert(tmp_path, not_after_days=-1)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(cert_path))
+
+    payload = _status_payload(monkeypatch)
+    tls = payload["tls"]
+
+    assert payload["ready"] is False
+    assert "expired" in payload["problem"].lower()
+    assert tls["ca_bundle_expired"] is True
+    assert tls["ca_bundle_days_remaining"] < 0
+    # Verification is still ON — the bundle is stale, not disabled.
+    assert tls["verify"] is True
+
+
+def test_bundle_without_certificates_is_a_readiness_problem(monkeypatch, tmp_path):
+    _clear_tls_env(monkeypatch)
+    bundle = tmp_path / "not-a-cert.pem"
+    bundle.write_text("-----BEGIN CERTIFICATE-----\nnot base64\n", encoding="utf-8")
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(bundle))
+
+    payload = _status_payload(monkeypatch)
+    assert payload["ready"] is False
+    assert "no parseable PEM certificate" in payload["problem"]
+    assert payload["tls"]["ca_bundle_expires_at"] is None
+
+
+def test_directory_bundle_reports_the_earliest_expiry(monkeypatch, tmp_path):
+    """A bundle directory is only as good as its soonest-expiring member.
+
+    Uses OpenSSL's hashed naming (`9f86d081.0`), the shape urllib3 actually
+    expects for a directory `verify=` value — a suffix filter would miss it.
+    """
+    from services.search_backend import tls_settings
+
+    _clear_tls_env(monkeypatch)
+    cas = tmp_path / "cas"
+    cas.mkdir()
+    _self_signed_cert(cas, days_valid=365, filename="9f86d081.0")
+    _self_signed_cert(cas, days_valid=20, filename="1b4f0e98.1")
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", str(cas))
+
+    setting = tls_settings()
+    assert setting["ca_bundle_certificates"] == 2
+    assert setting["ca_bundle_expired"] is False
+    assert setting["ca_bundle_days_remaining"] <= 20  # the rotating one wins
+    assert "expires in" in setting["ca_bundle_warning"]
+    assert setting["problem"] == ""
+
+
+def _self_signed_cert(tmp_path, days_valid=1, filename="fake-splunk-cert.pem", not_after_days=None):
+    """Throwaway cert for 127.0.0.1, generated per test.
+
+    Generated rather than committed: a private key in the repo is a finding,
+    even a fake one. `cryptography` is already a pinned runtime dependency.
+
+    `days_valid` moves the expiry into the future; `not_after_days` (negative)
+    puts it in the past for the expired-bundle cases.
+    """
+    import ipaddress
+    from datetime import timezone as _tz
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    now = datetime.now(_tz.utc)
+    not_after = (
+        now + timedelta(days=not_after_days) if not_after_days is not None
+        else now + timedelta(days=days_valid)
+    )
+    not_before = (
+        now - timedelta(days=abs(not_after_days) + 10) if not_after_days is not None
+        else now - timedelta(minutes=5)
+    )
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "fake-splunk-test")])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(name)
+        .issuer_name(name)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(not_before)
+        .not_valid_after(not_after)
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_path = tmp_path / filename
+    key_path = tmp_path / (filename.rsplit(".", 1)[0] + "-key.pem")
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    return cert_path, key_path
+
+
+@pytest.fixture()
+def tls_splunk(tmp_path, seed_events):
+    module = _load_fake_splunk_module()
+    cert_path, key_path = _self_signed_cert(tmp_path)
+    server = module.FakeSplunkServer(
+        token="fixture-token",
+        seed_path=_write_seed(tmp_path, seed_events),
+        tls_cert=str(cert_path),
+        tls_key=str(key_path),
+    ).start()
+    server.cert_path = str(cert_path)
+    try:
+        yield server
+    finally:
+        server.stop()
+
+
+def test_tls_handshake_without_trust_fails_with_the_fix_named(tls_splunk, monkeypatch):
+    """A bare handshake against a self-signed port must fail, and the error
+    must name SPLUNK_CA_BUNDLE — not just CERTIFICATE_VERIFY_FAILED."""
+    _clear_tls_env(monkeypatch)
+    assert tls_splunk.base_url.startswith("https://")
+
+    backend = RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
+    with pytest.raises(SplunkSearchError) as excinfo:
+        backend.search("sourcetype=linux_secure", earliest="-7d")
+
+    message = str(excinfo.value)
+    assert "TLS verification failed" in message
+    assert "SPLUNK_CA_BUNDLE" in message
+
+
+def test_tls_handshake_succeeds_with_ca_bundle(tls_splunk, monkeypatch):
+    """The supported path: pin the instance's CA, keep verification on."""
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", tls_splunk.cert_path)
+
+    backend = RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
+    rows = backend.search("sourcetype=linux_secure user=bjones", earliest="-7d")
+
+    assert backend._verify == tls_splunk.cert_path
+    assert len(rows) == 2
+    assert rows[0]["host"].startswith("VPN-GW")
+
+
+def test_tls_handshake_succeeds_with_explicit_opt_out(tls_splunk, monkeypatch):
+    """The escape hatch still works when there is no bundle to pin."""
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setenv("SPLUNK_VERIFY_TLS", "false")
+
+    backend = RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
+    rows = backend.search("sourcetype=linux_secure user=bjones", earliest="-7d")
+
+    assert backend._verify is False
+    assert len(rows) == 2
+
+
+def test_saved_searches_over_tls_with_ca_bundle(tls_splunk, monkeypatch):
+    _clear_tls_env(monkeypatch)
+    monkeypatch.setenv("SPLUNK_CA_BUNDLE", tls_splunk.cert_path)
+
+    backend = RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
+    items = backend.list_saved_searches()
+
+    assert [item["name"] for item in items] == ["Failed Logons (Fake)"]

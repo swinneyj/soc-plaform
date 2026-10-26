@@ -52,7 +52,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/splunk-boundary/status", tags=["System"])
+@router.get("/api/splunk-boundary/status", tags=["System"], dependencies=[Depends(require_role("analyst"))])
 def get_splunk_boundary_status():
     """Inspect the latch: mode, staging, and admitted batches."""
     return splunk_boundary.status()
@@ -108,7 +108,7 @@ _SEARCH_ONE_INFLIGHT: set = set()
 _SEARCH_ONE_INFLIGHT_LOCK = threading.Lock()
 
 
-@router.post("/api/splunk/search-one", tags=["Splunk"], dependencies=[Depends(require_api_key)])
+@router.post("/api/splunk/search-one", tags=["Splunk"], dependencies=[Depends(require_api_key), Depends(require_role("analyst"))])
 def splunk_search_one(payload: SplunkSearchOnePayload):
     """Run one supportive query end-to-end and ledger the outcome as `splunk_auto` evidence."""
     from services.search_backend import get_search_backend, map_search_outcome, summarize_search_rows
@@ -355,24 +355,30 @@ def _search_backend_choice() -> str:
     return (os.environ.get("SEARCH_BACKEND", "mock") or "mock").strip().lower()
 
 
-@router.get(
-    "/api/splunk/search-status",
+@router.get("/api/splunk/search-status",
     tags=["Splunk"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key), Depends(require_role("analyst"))],
 )
 def splunk_search_status():
     """Describe the active search backend: readiness, scope, never the secret."""
+    from services.search_backend import tls_settings
+
     chosen = _search_backend_choice()
     url_configured = bool((os.environ.get("SPLUNK_URL") or "").strip())
     token_configured = bool((os.environ.get("SPLUNK_TOKEN") or "").strip())
+    # TLS posture is part of readiness: a CA bundle pointing at a missing file
+    # is a configuration error the rehearsal would otherwise hit mid-search.
+    tls = tls_settings()
     if chosen == "mock":
         ready, problem = True, ""
     elif chosen == "splunk":
-        ready = url_configured and token_configured
-        problem = (
-            "" if ready
-            else "SEARCH_BACKEND=splunk requires SPLUNK_URL and SPLUNK_TOKEN"
-        )
+        ready = url_configured and token_configured and not tls["problem"]
+        if url_configured and token_configured and tls["problem"]:
+            problem = tls["problem"]
+        elif ready:
+            problem = ""
+        else:
+            problem = "SEARCH_BACKEND=splunk requires SPLUNK_URL and SPLUNK_TOKEN"
     else:
         ready = False
         problem = f"Unknown SEARCH_BACKEND '{chosen}' (expected 'mock' or 'splunk')"
@@ -386,16 +392,32 @@ def splunk_search_status():
             "splunk_url_configured": url_configured,
             "splunk_token_configured": token_configured,
         },
+        # Booleans only. `verify: false` is the loud opt-out (see
+        # SPLUNK_VERIFY_TLS); `ca_bundle_configured` means trust is widened
+        # for this connection via SPLUNK_CA_BUNDLE, not disabled.
+        "tls": {
+            "verify": tls["verify"],
+            "verification_disabled": tls["verification_disabled"],
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_readable": tls["ca_bundle_readable"],
+            # Expiry pre-flight: an expired bundle makes ready false (the
+            # handshake already fails), a near-expiry one warns without
+            # blocking. Both surface here before a query is attempted.
+            "ca_bundle_certificates": tls["ca_bundle_certificates"],
+            "ca_bundle_expires_at": tls["ca_bundle_expires_at"],
+            "ca_bundle_days_remaining": tls["ca_bundle_days_remaining"],
+            "ca_bundle_expired": tls["ca_bundle_expired"],
+            "ca_bundle_warning": tls["ca_bundle_warning"],
+        },
         "timeout_seconds": _SEARCH_ONE_TIMEOUT_SECONDS,
         "supported_spl_subset": list(_SEARCH_SUBSET),
         "scope": "Search jobs only — no notables, no writes, no configuration endpoints.",
     }
 
 
-@router.get(
-    "/api/splunk/saved-searches",
+@router.get("/api/splunk/saved-searches",
     tags=["Splunk"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key), Depends(require_role("analyst"))],
 )
 def splunk_saved_searches():
     """List visible saved searches on the live Splunk instance (read-only)."""

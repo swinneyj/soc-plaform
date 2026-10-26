@@ -36,6 +36,10 @@ a pointer so nobody has to remember the commands.
   repo venvs if bare `python3` lacks pyflakes — no venv activation needed;
   `PYTHON=<path>` still forces a specific interpreter. Python only; the reason it
   exists is 3.14 lazy annotation masking — see script header).
+- SBOM drift gate: `python scripts/check_sbom_pins.py` — every pin the current
+  interpreter's markers select (plus the three CDN library versions in
+  `web/index.modular.html`) must match `docs/SBOM.json`. Stdlib only, runs in CI
+  before the install; regenerate with `scripts/sbom` when it fails.
 - Merge-marker gate: `bash scripts/check_no_merge_markers.sh`.
 - Web option-key guard: `node scripts/check_web_option_keys.mjs` (a duplicate
   key inside one object literal is silently discarded at parse time — the

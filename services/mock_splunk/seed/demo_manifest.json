@@ -1,0 +1,30 @@
+{
+  "generated_at": "2026-10-23T11:32:57",
+  "events": 500,
+  "by_index": {
+    "auth": 45,
+    "edr": 117,
+    "itsm": 4,
+    "netflow": 55,
+    "notable": 1,
+    "proxy": 123,
+    "wineventlog": 155
+  },
+  "window": {
+    "earliest": "2026-10-16T12:20:12",
+    "latest": "2026-10-23T11:12:57"
+  },
+  "notable": "demo_notable.txt",
+  "rule_id": "DEMO_RULE_PS_EXFIL",
+  "rule_name": "Encoded PowerShell Followed by Unusual VPN Login",
+  "playbook_queries": [
+    "Encoded PowerShell lineage on case host",
+    "Outbound destinations for case host",
+    "VPN logon history for case user",
+    "Lateral logons from case host",
+    "Malware hashes seen on case host",
+    "Approved change records for case host"
+  ],
+  "regenerate_with": "python scripts/seed_demo_corpus.py",
+  "note": "Anchored to generation time. The fake warns when the corpus is >48h old; regenerate before a demo."
+}

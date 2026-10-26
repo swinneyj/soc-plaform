@@ -13,7 +13,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import require_role
 
 from api import deps
 from api.helpers.errors import raise_internal
@@ -120,7 +121,7 @@ def _rebuild_supportive_rules_file() -> None:
 
 # Helper Functions
 
-@router.get("/api/db/placeholder-aliases", tags=["Rules"])
+@router.get("/api/db/placeholder-aliases", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def list_placeholder_aliases():
     # List all defined placeholder aliases.
     # Response shape matches what the frontend expects:
@@ -152,7 +153,7 @@ def list_placeholder_aliases():
         raise_internal(e, context="rules")
 
 
-@router.get("/api/db/placeholder-aliases/suggestions", tags=["Rules"])
+@router.get("/api/db/placeholder-aliases/suggestions", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def suggest_placeholder_alias_fields(
     limit_events: int = Query(50, ge=1, le=500, description="Number of recent pasted notables to scan"),
 ):
@@ -210,7 +211,7 @@ def suggest_placeholder_alias_fields(
         raise_internal(e, context="rules")
 
 
-@router.post("/api/db/placeholder-aliases", tags=["Rules"])
+@router.post("/api/db/placeholder-aliases", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def create_placeholder_alias(payload: PlaceholderAliasPayload):
     # Create a new placeholder alias.
     # Alias names are normalized to lowercase and must be unique.
@@ -261,7 +262,7 @@ def create_placeholder_alias(payload: PlaceholderAliasPayload):
         raise_internal(e, context="rules")
 
 
-@router.put("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
+@router.put("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePayload):
     # Update an existing placeholder alias.
     # Supports partial updates for alias, fields, and description.
@@ -323,7 +324,7 @@ def update_placeholder_alias(alias_id: int, payload: PlaceholderAliasUpdatePaylo
         raise_internal(e, context="rules")
 
 
-@router.delete("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"])
+@router.delete("/api/db/placeholder-aliases/{alias_id}", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def delete_placeholder_alias(alias_id: int):
     # Delete a placeholder alias definition.
     try:
@@ -352,7 +353,7 @@ def delete_placeholder_alias(alias_id: int):
 
 
 
-@router.get("/api/db/supportive-queries", tags=["Rules"])
+@router.get("/api/db/supportive-queries", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def list_supportive_queries(rule_id: Optional[str] = Query(default=None, description="Filter by logical rule_id")):
     # List supportive SPL queries.
     # When a rule_id is provided, only queries for that rule are returned.
@@ -385,7 +386,7 @@ def list_supportive_queries(rule_id: Optional[str] = Query(default=None, descrip
         raise_internal(e, context="rules")
 
 
-@router.post("/api/db/supportive-queries/draft", tags=["Rules"])
+@router.post("/api/db/supportive-queries/draft", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
     """Create reviewable, unsaved SPL drafts for a rule without a playbook.
 
@@ -468,7 +469,7 @@ def draft_supportive_queries(payload: SupportivePlaybookDraftRequest):
             db.close()
 
 
-@router.get("/api/db/supportive-queries/status/{case_id}", tags=["Rules"])
+@router.get("/api/db/supportive-queries/status/{case_id}", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def supportive_playbook_status(case_id: str):
     """Report whether a case's rule already has an approved playbook."""
     db = None
@@ -514,7 +515,7 @@ def supportive_playbook_status(case_id: str):
             db.close()
 
 
-@router.post("/api/db/supportive-queries/import-results", tags=["Rules"])
+@router.post("/api/db/supportive-queries/import-results", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def import_supportive_results(payload: SupportiveResultsImportRequest):
     """Turn analyst-provided Splunk results into reviewable, unsaved SPL drafts."""
     db = None
@@ -609,7 +610,7 @@ def import_supportive_results(payload: SupportiveResultsImportRequest):
             db.close()
 
 
-@router.post("/api/db/supportive-queries", tags=["Rules"])
+@router.post("/api/db/supportive-queries", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def create_supportive_query(payload: SupportiveQueryPayload):
     # Create a new supportive SPL query for a correlation rule.
     # IDs are assigned explicitly based on the current max(id) to avoid
@@ -657,7 +658,7 @@ def create_supportive_query(payload: SupportiveQueryPayload):
         raise_internal(e, context="rules")
 
 
-@router.put("/api/db/supportive-queries/{query_id}", tags=["Rules"])
+@router.put("/api/db/supportive-queries/{query_id}", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload):
     # Update an existing supportive SPL query.
     # Supports partial updates; any field omitted from the payload is left
@@ -704,7 +705,7 @@ def update_supportive_query(query_id: int, payload: SupportiveQueryUpdatePayload
         raise_internal(e, context="rules")
 
 
-@router.delete("/api/db/supportive-queries/{query_id}", tags=["Rules"])
+@router.delete("/api/db/supportive-queries/{query_id}", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def delete_supportive_query(query_id: int):
     # Delete a supportive SPL query.
     # This does not touch stored supportive_query_results; those remain as
@@ -736,7 +737,7 @@ def delete_supportive_query(query_id: int):
 
 # Rules & Closure Notes Endpoints
 
-@router.get("/api/db/rules", tags=["Rules"])
+@router.get("/api/db/rules", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def list_rules():
     # List all available ES correlation rules, including any supportive queries.
     try:

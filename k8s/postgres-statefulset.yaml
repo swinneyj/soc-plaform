@@ -1,0 +1,113 @@
+# k8s/postgres-statefulset.yaml — K8S-04: hardened PostgreSQL 15.
+#
+# StatefulSet + headless Service + PersistentVolumeClaim + encrypted
+# StorageClass template. Runs as non-root (uid 999/postgres, fsGroup 999;
+# some images use uid 26/postgres — either is non-root, 999 is pinned here).
+# Credentials come from Secret `soc-postgres` via secretKeyRef (never inline).
+# StorageClass `soc-encrypted` requests encrypted-at-rest volumes; the actual
+# provisioner/parameters are cluster-specific — adjust `provisioner` before
+# applying (the encrypted:true parameter is the contract this file pins).
+#
+# Secrets out of band:
+#   kubectl create secret generic soc-postgres \
+#     --from-literal=postgres-password='...' \
+#     --from-literal=database-url='postgresql://postgres:...@soc-postgres:5432/soc_platform'
+#
+# Verification: structural tests in tests/test_k8s_security.py;
+# kubeconform -strict 2026-10-26: VALID (3 resources: StorageClass+Service+
+# StatefulSet; 6/6 valid across the four K8S-01..04 files).
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: soc-encrypted
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Retain
+parameters:
+  encrypted: "true"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soc-postgres
+  labels:
+    app: soc-postgres
+spec:
+  clusterIP: None
+  selector:
+    app: soc-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: soc-postgres
+  labels:
+    app: soc-postgres
+spec:
+  serviceName: soc-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soc-postgres
+  template:
+    metadata:
+      labels:
+        app: soc-postgres
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+              name: postgres
+          env:
+            - name: POSTGRES_DB
+              value: soc_platform
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: soc-postgres
+                  key: postgres-password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: soc-postgres-data
+              mountPath: /var/lib/postgresql/data
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            runAsUser: 999
+            runAsNonRoot: true
+            capabilities:
+              drop:
+                - ALL
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-p", "5432"]
+            initialDelaySeconds: 15
+            periodSeconds: 20
+  volumeClaimTemplates:
+    - metadata:
+        name: soc-postgres-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        storageClassName: soc-encrypted
+        resources:
+          requests:
+            storage: 10Gi

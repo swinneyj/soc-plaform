@@ -96,6 +96,16 @@ async def _request_id(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     if request.url.path.startswith("/api/"):
         response.headers["Cache-Control"] = "no-store"
+    # F13 (narrow half): directives that cannot break this UI. Deliberately
+    # no `default-src`/`script-src`/`style-src` — Vue is the global build
+    # compiling `template:` strings at runtime and Tailwind is the Play CDN,
+    # so both need 'unsafe-eval' and inline styles; a strict policy would have
+    # to weaken itself to the point of being decorative. These four constrain
+    # what an injected document could do without touching load behavior:
+    # no framing, no plugins, no <base> hijack, no cross-origin form posts.
+    response.headers["Content-Security-Policy"] = (
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
+    )
     return response
 
 
@@ -159,6 +169,15 @@ async def _api_key_mutation_gate(request, call_next):
         if is_api and path not in auth.EXEMPT_PATHS:
             actor, reason = auth.resolve_proxy_actor(request)
             if actor.kind == "anonymous":
+                # HIGH-02: a well-formed X.509 DN naming no local row is a
+                # *forbidden* identity (the credential parsed, the account
+                # does not exist) — 403, not 401. All other proxy failures
+                # (missing/malformed/untrusted/integer-unknown/inactive)
+                # stay 401 to preserve the existing contract.
+                raw = request.headers.get(auth.proxy_header_name(), "") or ""
+                if reason == "proxy_user_unknown" and "CN=" in raw:
+                    return _gate_reject(
+                        request, 403, "Unknown user", reason, actor=actor)
                 return _gate_reject(
                     request, 401, "Authentication required", reason or "anonymous")
     elif auth._API_KEY and auth.mutation_gate_rejects(request) and not auth.request_has_api_key(request):
@@ -190,8 +209,10 @@ async def _api_key_mutation_gate(request, call_next):
     return response
 
 
-# C2.1.5 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30): per-client-IP
-# sliding 60 s window on the Ollama-backed POST surfaces; over-limit -> 429.
+# C2.1.5 hardening (DEVELOPMENT_PLAN §11, signed off Sept 30), widened SEC-04:
+# per-client-IP sliding 60 s window on ALL mutating /api/* requests;
+# over-limit -> 429. _RATE_PATHS lists the legacy Ollama surfaces (kept for
+# reference/compat); the gate itself no longer matches on it.
 _RATE_HITS: dict = {}  # client ip -> [timestamps]
 RATE_LIMIT_PER_MIN = int(os.environ.get("RATE_LIMIT_PER_MIN", "30"))
 # F9: global request-body backstop (env bytes, default 10 MiB). The paste
@@ -252,7 +273,14 @@ async def _body_size_cap(request, call_next):
 
 
 async def _ollama_rate_limit(request, call_next):
-    if request.method == "POST" and any(request.url.path.startswith(p) for p in _RATE_PATHS):
+    # SEC-04: all mutating /api/* requests share the per-IP sliding window
+    # (legacy Ollama surfaces in _RATE_PATHS included). Auth bootstrap paths
+    # are excluded — login carries its own throttle, session/dev-login/health
+    # must stay reachable for probes.
+    _mutating = request.method in ("POST", "PUT", "PATCH", "DELETE")
+    _api = request.url.path.startswith("/api/")
+    _exempt = request.url.path in auth.EXEMPT_PATHS
+    if _mutating and _api and not _exempt:
         ip = request.client.host if request.client else "?"
         now = time.time()
         # F8: opportunistic global sweep — drop every IP whose window is
@@ -306,7 +334,9 @@ def install(app):
             # The frontend uses exactly these methods and headers (see
             # web/modules/api.js); keep the allowlist tight instead of "*".
             allow_methods=["GET", "POST", "PUT", "DELETE"],
-            allow_headers=["Content-Type", "Accept", "X-API-Key"],
+            # X-CSRF-Token is mandatory on session-mode mutations: leaving it
+            # out made every cross-origin preflight fail (F15, 2026-10-23).
+            allow_headers=["Content-Type", "Accept", "X-API-Key", "X-CSRF-Token"],
         )
 
     # Canonical resource paths rewrite to the legacy /api/db/* routes (S13).

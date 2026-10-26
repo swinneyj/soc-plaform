@@ -1,0 +1,33 @@
+# k8s/netpol-api-ingress.yaml — K8S-01: soc-api ingress lockdown.
+#
+# NetworkPolicy for `soc-api` pods: deny-all by default, allow incoming TCP
+# 8000 ONLY from pods in the `ingress-nginx` namespace. All other ingress
+# (including other namespaces, including the inference pods) is denied.
+# Egress is unrestricted here (the API needs DNS + Postgres + Ollama).
+# LLM zero-egress is a separate policy (netpol-llm-zero-egress.yaml).
+#
+# Verification: structural tests in tests/test_k8s_security.py;
+# kubeconform -strict 2026-10-26: VALID (this file's 1 resource).
+# `kubectl apply --dry-run=client` needs a live cluster here (this kubectl
+# does discovery even with --validate=false), so kubeconform is the offline
+# gate; server-side dry-run remains a cluster-side step.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: soc-api-ingress
+  labels:
+    app: soc-api
+spec:
+  podSelector:
+    matchLabels:
+      app: soc-api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000

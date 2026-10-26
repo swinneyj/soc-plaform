@@ -46,6 +46,46 @@ PUBLIC_PATHS = (
     "/health", "/api/health", "/api/auth/login", "/api/auth/session",
     "/api/auth/dev-login",
 )
+# SEC-02 finalized policy (owner answers 2026-10-26 work order Q1-Q5, plus
+# HIGH-01 Tier-1 hardening 2026-10-26: system-observability reads are admin):
+# - 5 public (health + auth bootstrap)
+# - 20 admin: tool execution + job deletes + registry + boundary admit/purge
+#   + regression + 9 destructive case/notable/evidence deletes + 3 system
+#   observability reads (/api/db/stats, /api/db/operations,
+#   /api/db/ollama/health)
+# - 50 analyst: everything else authenticated (investigation flow, playbook
+#   writes, tool catalog READS, GET /api/jobs*, GET /api/splunk-boundary/status)
+FINAL_ADMIN_PATHS = frozenset({
+    "/api/db/stats",
+    "/api/db/operations",
+    "/api/db/ollama/health",
+    "/api/execute",
+    "/api/jobs",  # DELETE only; GET is analyst (see FINAL_ANALYST_METHOD_OVERRIDES)
+    "/api/jobs/{job_id}",  # DELETE only; GET is analyst
+    "/api/registry",
+    "/api/registry/reload",
+    "/api/splunk-boundary/admit",
+    "/api/splunk-boundary/batches/{batch_id}",
+    "/api/tools/regression",
+    "/api/db/triage/{case_id}/delete",
+    "/api/db/triage/batch-delete",
+    "/api/db/notables/{event_id}",  # DELETE only; GET is analyst
+    "/api/db/notables/{event_id}/delete",
+    "/api/db/notables/batch-delete",
+    "/api/db/triage/{case_id}/evidence/{evidence_id}",  # DELETE only; no GET on this path
+    "/api/db/triage/{case_id}/evidence/{evidence_id}/delete",
+    "/api/db/triage/{case_id}/evidence/batch-delete",
+    "/api/db/triage/{case_id}/evidence/delete-all",
+})
+# (method, path) pairs on an admin path that stay analyst (reads).
+FINAL_ANALYST_METHOD_OVERRIDES = frozenset({
+    ("GET", "/api/jobs"),
+    ("GET", "/api/jobs/{job_id}"),
+    ("GET", "/api/tools"),
+    ("GET", "/api/tools/{tool_name}"),
+    ("GET", "/api/splunk-boundary/status"),
+    ("GET", "/api/db/notables/{event_id}"),
+})
 ADMIN_PREFIXES = ("/api/tools", "/api/jobs", "/api/splunk-boundary")
 DESTRUCTIVE_MARKERS = ("delete", "wipe", "purge", "execute")
 
@@ -150,14 +190,28 @@ def collect(found=None):
         )
         if path in PUBLIC_PATHS:
             proposed = "public"
-        elif (
-            path.startswith(ADMIN_PREFIXES)
-            or role == "admin"
-            or any(marker in path for marker in DESTRUCTIVE_MARKERS)
-        ):
-            proposed = "admin"
+        elif (tuple(methods) == ["GET"] and False):
+            proposed = "analyst"  # placeholder to keep structure explicit
         else:
-            proposed = "analyst"
+            # Finalized policy: explicit admin set with read overrides.
+            is_admin = False
+            for m in methods:
+                if (m, path) in FINAL_ANALYST_METHOD_OVERRIDES:
+                    continue
+                if path in FINAL_ADMIN_PATHS:
+                    # Dual-use paths (GET + DELETE on same path) are admin
+                    # only for non-GET methods; GETs are covered above.
+                    if path in ("/api/jobs", "/api/jobs/{job_id}",
+                                "/api/db/notables/{event_id}",
+                                "/api/db/triage/{case_id}/evidence/{evidence_id}") and m == "GET":
+                        continue
+                    is_admin = True
+            # Tool catalog reads, GET jobs, boundary status are analyst even
+            # though their prefixes once proposed admin.
+            if path in ("/api/tools", "/api/tools/{tool_name}",
+                        "/api/splunk-boundary/status") and set(methods) == {"GET"}:
+                is_admin = False
+            proposed = "admin" if is_admin else "analyst"
         rows.append(
             {
                 "methods": ",".join(methods),

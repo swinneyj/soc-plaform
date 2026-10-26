@@ -51,13 +51,18 @@ def normalize_database_url(database_url: str) -> str:
     return database_url
 
 
-def create_database_engine(database_url: str):
+def create_database_engine(database_url: str, connect_args: dict | None = None):
     """Create a SQLAlchemy engine for the configured runtime database.
 
     The supported runtime backend is PostgreSQL. Other drivers are not
-    configured or tested here.
+    configured or tested here. `connect_args` (e.g. {"connect_timeout": 2})
+    is passed through to the DBAPI — used by the /api/health probe so it
+    fails fast instead of hanging on a dead database.
     """
-    return create_engine(normalize_database_url(database_url), pool_pre_ping=True)
+    kwargs = {"pool_pre_ping": True}
+    if connect_args:
+        kwargs["connect_args"] = connect_args
+    return create_engine(normalize_database_url(database_url), **kwargs)
 
 
 engine = create_database_engine(DATABASE_URL)

@@ -6,6 +6,10 @@ loaded from ``services/mock_splunk/seed/seed_events.jsonl``:
 
 - base-term and ``key=value`` search, ``| search k=v``, ``| where k OP v``
   comparisons, ``| stats count (by field)``, and ``| head N``;
+- field values support ``*``/``?`` wildcards (``index=*``, ``sourcetype=win*``);
+- events carry ``index`` metadata (default ``main``) alongside
+  source/sourcetype/host, so index-qualified SPL is a real filter rather than
+  a term that silently matches nothing;
 - inline ``earliest=``/``latest=`` qualifiers inside the SPL text win over the
   caller's job-level window (same precedence as real Splunk);
 - anything else raises ``ValueError`` (``unsupported SPL operator``) instead of
@@ -26,6 +30,21 @@ _SEED_PATH = Path(__file__).parent / "mock_splunk" / "seed" / "seed_events.jsonl
 
 _TIME_RE = re.compile(r"^-?(?P<n>\d+)(?P<unit>[mhd])$")
 _KV_RE = re.compile(r'(?P<key>\w+)=(\"(?P<qval>[^\"]+)\"|(?P<val>\S+))')
+
+
+def _match_field_value(actual: Optional[str], expected: str) -> bool:
+    """Match a field value, honouring ``*``/``?`` wildcards like Splunk.
+
+    Returns False when the field is absent — a missing field never matches,
+    which is the behaviour that makes ``index=notable`` on an index-less
+    corpus visibly empty instead of quietly permissive.
+    """
+    if actual is None:
+        return False
+    if "*" not in expected and "?" not in expected:
+        return actual == expected
+    pattern = "^" + re.escape(expected).replace(r"\*", ".*").replace(r"\?", ".") + "$"
+    return re.match(pattern, actual) is not None
 
 
 def _parse_offset(text: str) -> Optional[timedelta]:
@@ -61,6 +80,7 @@ class MockSplunkBackend:
                     continue
                 record = json.loads(line)
                 record["timestamp"] = datetime.fromisoformat(record["timestamp"])
+                record.setdefault("index", "main")
                 events.append(record)
         events.sort(key=lambda e: e["timestamp"])
         return events
@@ -145,6 +165,15 @@ class MockSplunkBackend:
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
+    def newest_event_at(self) -> Optional[datetime]:
+        """Timestamp of the newest loaded event (None for an empty corpus).
+
+        Callers use this to detect a stale fixture: a corpus anchored weeks
+        ago answers nothing inside the platform's default -7d window, which
+        looks like "no data" rather than "old fixture".
+        """
+        return self._events[-1]["timestamp"] if self._events else None
+
     def search(
         self,
         spl: str,
@@ -163,14 +192,19 @@ class MockSplunkBackend:
             if not self._in_time_window(event["timestamp"], earliest, latest):
                 continue
             fields = self._fields(event.get("raw", ""))
+            # Metadata wins over any same-named token inside the raw text.
             fields.update(
                 {
+                    "index": event.get("index", "main"),
                     "source": event.get("source", ""),
                     "sourcetype": event.get("sourcetype", ""),
                     "host": event.get("host", ""),
                 }
             )
-            if any(fields.get(k) != v for k, v in base_terms.items()):
+            if any(
+                not _match_field_value(fields.get(k), v)
+                for k, v in base_terms.items()
+            ):
                 continue
             blob = " ".join(
                 [event.get("raw", ""), event.get("source", ""),
@@ -180,6 +214,7 @@ class MockSplunkBackend:
                 continue
             rows.append(
                 {
+                    "index": event.get("index", "main"),
                     "source": event.get("source", ""),
                     "sourcetype": event.get("sourcetype", ""),
                     "host": event.get("host", ""),
@@ -225,7 +260,7 @@ class MockSplunkBackend:
                 if actual is None:
                     return False
                 if oper in ("=", "=="):
-                    if actual != expected:
+                    if not _match_field_value(actual, expected):
                         return False
                 elif oper == "!=":
                     if actual == expected:

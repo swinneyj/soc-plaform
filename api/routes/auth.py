@@ -11,7 +11,8 @@ import os
 import secrets
 import time
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from api.auth import require_role
 from pydantic import BaseModel
 
 from api import auth
@@ -172,7 +173,7 @@ def login(payload: LoginRequest, request: Request, response: Response):
         db.close()
 
 
-@router.post("/api/auth/logout")
+@router.post("/api/auth/logout", dependencies=[Depends(require_role("analyst"))])
 def logout(request: Request, response: Response):
     # Audit BEFORE destroy_session so the actor still resolves.
     try:

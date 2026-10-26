@@ -39,6 +39,14 @@ jobs:
         # from), and it runs before any dependency install.
         run: python scripts/check_requirement_markers.py
 
+      - name: Check SBOM mirrors the pins
+        # docs/SBOM.json is committed alongside the pins it describes, so a
+        # dependency bump (or a CDN tag edit in web/index.modular.html) can
+        # leave it silently describing an older environment. Stdlib only, so
+        # it runs before the install; regenerate with `scripts/sbom` and
+        # commit the result when this fails.
+        run: python scripts/check_sbom_pins.py
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip

@@ -152,7 +152,7 @@ Readiness evaluation lives under the cases family above
 | POST | — | `/api/splunk-boundary/admit` | Key (middleware + pinned) | Admit a batch through the boundary latch. |
 | DELETE | — | `/api/splunk-boundary/batches/{batch_id}` | Key (middleware + pinned) | Release an admitted batch. |
 | POST | — | `/api/splunk/search-one` | Key (middleware + pinned) | Run one SPL against the configured backend and save `splunk_auto` evidence. |
-| GET | — | `/api/splunk/search-status` | Key when armed (pinned) | Read-only backend introspection: mode, readiness, SPL subset. Booleans only — never echoes the URL or token. |
+| GET | — | `/api/splunk/search-status` | Key when armed (pinned) | Read-only backend introspection: mode, readiness, SPL subset, TLS posture (`tls.verify` / `verification_disabled` / `ca_bundle_configured` / `ca_bundle_readable` / `ca_bundle_certificates` / `ca_bundle_expires_at` / `ca_bundle_days_remaining` / `ca_bundle_expired` / `ca_bundle_warning`). An expired pinned CA fails `ready`; ≤30 days warns. Booleans, counts and dates only — never echoes the URL, token, or bundle path. |
 | GET | — | `/api/splunk/saved-searches` | Key when armed (pinned) | Read-only listing of visible saved searches on the live Splunk instance (409 unless `SEARCH_BACKEND=splunk`). |
 
 ## Tools, execution & reports

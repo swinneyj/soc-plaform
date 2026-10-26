@@ -1,6 +1,7 @@
 # Frontend Modularization
 
 **Date:** 2026-09-04  
+**Status:** ✅ COMPLETE (Sept 2026) — historical plan doc. The modular shell is the live UI: `web/index.modular.html` + `web/utils/` + `web/modules/` + `web/components/`, with `web/index.html` a redirect shim. Nothing here is pending; current layout lives in `docs/REPO_MAP.md`.  
 **Scope:** `web/` UI only (Vue 3 SPA). Backend / API unchanged.  
 **Goal:** Break the monolithic `index.html` into small, domain-owned files so troubleshooting and future changes stay local.
 

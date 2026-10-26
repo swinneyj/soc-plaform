@@ -1,0 +1,19 @@
+Title: Encoded PowerShell Followed by Unusual VPN Login
+Correlation Search: Encoded PowerShell Followed by Unusual VPN Login
+Description: Encoded PowerShell launched by WINWORD.EXE on FINWS07, followed by a burst of failed logons and an unmanaged VPN success for mrivera from Bucharest.
+Host: FINWS07
+Destination: FINWS07
+User: mrivera
+Source IP Address: 185.220.101.7
+Process: powershell.exe
+Parent Process: WINWORD.EXE
+Command Line: powershell.exe -NoP -NonI -W Hidden -Enc SQBFAFgA
+Severity: high
+Urgency: high
+Status: New
+Owner: unassigned
+Security Domain: endpoint
+Time: 2026-10-23T11:12:57
+Count: 1
+Rule ID: DEMO_RULE_PS_EXFIL
+Type: notable

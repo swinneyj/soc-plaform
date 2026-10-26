@@ -1,9 +1,12 @@
 # Route / Role Matrix (SEC-02)
 
-**Status:** inventory + **proposal**. No enforcement was changed. The owner
-decided on 2026-10-23 to review the matrix before any route gains a role gate,
-because one recorded decision (Oct 14: "analyst deletes stay") points the
-opposite way from this proposal for seven routes — see *Decisions needed*.
+**Status:** **enforced** (SEC-02, 2026-10-26 work order + HIGH-01 Tier-1
+2026-10-26). All 70 authenticated routes carry `require_role`; the 5 public
+routes carry none. Owner answers Q1–Q5 applied, plus the 3 system-
+observability reads (`/api/db/stats`, `/api/db/operations`,
+`/api/db/ollama/health`) are admin per HIGH-01 (system-config routes require
+admin) — 20 admin / 50 analyst. `tests/test_route_matrix.py` asserts the
+admin set and 403s for analyst-on-admin.
 
 ## How this file is produced
 
@@ -35,39 +38,43 @@ Two implementation notes that matter for trusting the numbers:
 | Mutating (POST/PUT/PATCH/DELETE or delete-shaped GET) | **40** | |
 | Read-only | **35** | |
 | Carry a `require_api_key` dependency | **9** | `POST /api/execute`, `DELETE /api/jobs`, `DELETE /api/jobs/{job_id}`, `POST /api/splunk-boundary/admit`, `DELETE /api/splunk-boundary/batches/{batch_id}`, `GET /api/splunk/saved-searches`, `POST /api/splunk/search-one`, `GET /api/splunk/search-status`, `POST /api/tools/regression` |
-| Carry a `require_role` dependency | **10** | `POST /api/execute`, `GET/DELETE /api/jobs`, `GET /api/jobs/{job_id}`, `GET /api/registry`, `POST /api/registry/reload`, `POST /api/splunk-boundary/admit`, `DELETE /api/splunk-boundary/batches/{batch_id}`, `POST /api/tools/regression`, `GET /api/tools`, `GET /api/tools/{tool_name}` |
+| Carry a `require_role` dependency | **70** | all authenticated routes (20 admin + 50 analyst); the 5 public routes carry none |
 
 What that means in each mode:
 
-* **API-key mode (flag off)** — all 39 mutations need the key; **reads are open**
+* **API-key mode (flag off)** — `require_role` is a no-op; all 39 mutations need the key; **reads are open**
   by design (the key is a deployment credential, not a user).
 * **Session mode** — every `/api/*` request needs an actor (reads included);
-  mutations additionally need `X-CSRF-Token`.
-* **Proxy mode (SEC-01)** — same read+write gate as session mode, identity from
-  the trusted header.
-* **Role separation** — covers **10 of 75 routes (13 %)**: the ten above.
+  mutations additionally need `X-CSRF-Token`; analyst actors 403 on the 20 admin routes.
+* **Proxy mode (SEC-01/01B)** — same read+write gate as session mode, identity from
+  the trusted header (bare id or X.509 DN).
+* **Role separation** — covers **70 of 75 routes (93 %)**: 20 admin, 50 analyst.
 
-So "read vs write" exists; "analyst vs admin" mostly does not.
-
-## Proposed policy
+## Enforced policy (Q1–Q5 answers applied)
 
 Three roles, assigned by function rather than by HTTP verb:
 
 * **admin (20 routes)** — machine/ops surfaces and anything destructive:
-  * tool catalog + execution + registry: `GET /api/tools`, `GET /api/tools/{tool_name}`,
-    `POST /api/execute`, `POST /api/tools/regression`, `GET /api/registry`,
-    `POST /api/registry/reload`
-  * job control: `GET /api/jobs`, `GET /api/jobs/{job_id}`, `DELETE /api/jobs`,
-    `DELETE /api/jobs/{job_id}`
-  * Splunk boundary (ingest/release/purge + its status): `POST /api/splunk-boundary/admit`,
-    `DELETE /api/splunk-boundary/batches/{batch_id}`, `GET /api/splunk-boundary/status`
-  * destructive case/notable/evidence paths: `POST /api/db/triage/{case_id}/delete`,
-    `POST /api/db/triage/batch-delete`, `POST /api/db/triage/{case_id}/evidence/delete-all`,
-    `POST /api/db/triage/{case_id}/evidence/batch-delete`,
+  * system observability (HIGH-01): `GET /api/db/stats`, `GET /api/db/operations`,
+    `GET /api/db/ollama/health`
+  * execution + registry: `POST /api/execute`, `POST /api/tools/regression`,
+    `GET /api/registry`, `POST /api/registry/reload`
+  * job deletes: `DELETE /api/jobs`, `DELETE /api/jobs/{job_id}`
+    (GETs are analyst per Q4)
+  * Splunk boundary admit/purge: `POST /api/splunk-boundary/admit`,
+    `DELETE /api/splunk-boundary/batches/{batch_id}` (status is analyst per Q5)
+  * destructive case/notable/evidence paths (Q1 admin-only):
+    `POST /api/db/triage/{case_id}/delete`, `POST /api/db/triage/batch-delete`,
+    `DELETE /api/db/notables/{event_id}`, `POST /api/db/notables/{event_id}/delete`,
+    `POST /api/db/notables/batch-delete`,
+    `DELETE /api/db/triage/{case_id}/evidence/{evidence_id}`,
     `POST /api/db/triage/{case_id}/evidence/{evidence_id}/delete`,
-    `POST /api/db/notables/{event_id}/delete`, `POST /api/db/notables/batch-delete`
-* **analyst (50 routes)** — the investigation flow: cases, notables, evidence,
-  analyses, closure, rules/playbooks, reports, read-only Splunk search.
+    `POST /api/db/triage/{case_id}/evidence/batch-delete`,
+    `POST /api/db/triage/{case_id}/evidence/delete-all`
+* **analyst (50 routes)** — the investigation flow: cases, notables, evidence
+  (create/edit/close), analyses, closure, rules/playbooks **writes** (Q2 analyst),
+  reports, tool catalog **reads** (Q3 analyst: `GET /api/tools*`), `GET /api/jobs*`
+  (Q4 analyst), `GET /api/splunk-boundary/status` (Q5 analyst), read-only Splunk search.
 * **public (5 routes)** — `/health`, `/api/health`, `/api/auth/login`,
   `/api/auth/session`, `/api/auth/dev-login` (must answer before login;
   `/api/auth/*` is exempt in every mode, and dev-login does its own armed-key
@@ -77,21 +84,14 @@ Note the asymmetry this creates: analyst-visible routes keep working exactly as
 today for an **API key** caller (the key resolves as the admin machine actor),
 so enforcement only ever restricts *session/proxy users*, never automation.
 
-## Decisions needed before enforcement
+## Decisions (answered 2026-10-26 work order, supersedes Oct 14)
 
-1. **Deletes (7 routes).** This proposal makes case/notable/evidence deletion
-   admin-only. The recorded **Oct 14 owner decision** is "analyst deletes stay".
-   Both cannot hold. Which wins?
-2. **Tool catalog reads (2 routes).** `GET /api/tools` and `GET /api/tools/{tool_name}`
-   are metadata, already admin-gated — keep them admin, or open the catalog to
-   analysts while keeping execution admin?
-3. **`GET /api/jobs` / `GET /api/jobs/{job_id}`.** Admin, or may an analyst see
-   job status? (Today both are admin-gated, so this is a *relaxation* question.)
-4. **`GET /api/splunk-boundary/status`.** Ops monitoring surface, proposed admin;
-   should an analyst see ingest health?
-5. **Read split on the other 50.** Leave them analyst (proposed) or require
-   admin for rules/playbook *writes* (`POST/PUT/DELETE /api/db/placeholder-aliases*`,
-   `/api/db/supportive-queries*`) — i.e. is playbook authoring an analyst task?
+1. **Deletes: admin-only.** The Oct 14 "analyst deletes stay" is superseded:
+   analysts may create/edit/close; permanent deletion requires admin.
+2. **Playbook & playbook-card writes: analyst.**
+3. **Tool catalog & execution reads: analyst** (`GET /api/tools*` relaxed to analyst; execution stays admin).
+4. **`GET /api/jobs*`: analyst** (relaxed; deletes stay admin).
+5. **`GET /api/splunk-boundary/status`: analyst**.
 
 ## Enforcement options (pick one when 1–5 are answered)
 
@@ -116,80 +116,80 @@ admin controls; that is cosmetic, not a control).
 <!-- BEGIN GENERATED ROUTE MATRIX -->
 | # | Method | Path | Mutating | Existing key dep | Existing role dep | Proposed role |
 |---|---|---|---|---|---|---|
-| 1 | `GET` | `/api/` | no | - | - | **analyst** |
+| 1 | `GET` | `/api/` | no | - | analyst | **analyst** |
 | 2 | `POST` | `/api/auth/dev-login` | yes | - | - | **public** |
 | 3 | `POST` | `/api/auth/login` | yes | - | - | **public** |
-| 4 | `POST` | `/api/auth/logout` | yes | - | - | **analyst** |
+| 4 | `POST` | `/api/auth/logout` | yes | - | analyst | **analyst** |
 | 5 | `GET` | `/api/auth/session` | no | - | - | **public** |
-| 6 | `POST` | `/api/code-review` | yes | - | - | **analyst** |
-| 7 | `POST` | `/api/code-review/fix` | yes | - | - | **analyst** |
-| 8 | `POST` | `/api/code-review/sections` | yes | - | - | **analyst** |
-| 9 | `POST` | `/api/code-review/zip` | yes | - | - | **analyst** |
-| 10 | `GET` | `/api/code-reviews` | no | - | - | **analyst** |
-| 11 | `GET` | `/api/code-reviews/{review_id}` | no | - | - | **analyst** |
-| 12 | `POST` | `/api/db/analyze` | yes | - | - | **analyst** |
-| 13 | `POST` | `/api/db/closure-note` | yes | - | - | **analyst** |
-| 14 | `GET` | `/api/db/notables` | no | - | - | **analyst** |
-| 15 | `POST` | `/api/db/notables/backfill-closure-notes` | yes | - | - | **analyst** |
-| 16 | `POST` | `/api/db/notables/batch-delete` | yes | - | - | **admin** |
-| 17 | `GET` | `/api/db/notables/generate-fetch-spl` | no | - | - | **analyst** |
-| 18 | `POST` | `/api/db/notables/generate-fetch-spl` | yes | - | - | **analyst** |
-| 19 | `GET` | `/api/db/notables/historical` | no | - | - | **analyst** |
-| 20 | `POST` | `/api/db/notables/paste` | yes | - | - | **analyst** |
-| 21 | `DELETE` | `/api/db/notables/{event_id}` | yes | - | - | **analyst** |
-| 22 | `GET` | `/api/db/notables/{event_id}` | no | - | - | **analyst** |
-| 23 | `POST` | `/api/db/notables/{event_id}/delete` | yes | - | - | **admin** |
-| 24 | `POST` | `/api/db/notables/{event_id}/promote` | yes | - | - | **analyst** |
-| 25 | `GET` | `/api/db/ollama/health` | no | - | - | **analyst** |
-| 26 | `GET` | `/api/db/operations` | no | - | - | **analyst** |
-| 27 | `GET` | `/api/db/placeholder-aliases` | no | - | - | **analyst** |
-| 28 | `POST` | `/api/db/placeholder-aliases` | yes | - | - | **analyst** |
-| 29 | `GET` | `/api/db/placeholder-aliases/suggestions` | no | - | - | **analyst** |
-| 30 | `DELETE` | `/api/db/placeholder-aliases/{alias_id}` | yes | - | - | **analyst** |
-| 31 | `PUT` | `/api/db/placeholder-aliases/{alias_id}` | yes | - | - | **analyst** |
-| 32 | `GET` | `/api/db/rules` | no | - | - | **analyst** |
-| 33 | `GET` | `/api/db/stats` | no | - | - | **analyst** |
-| 34 | `GET` | `/api/db/supportive-queries` | no | - | - | **analyst** |
-| 35 | `POST` | `/api/db/supportive-queries` | yes | - | - | **analyst** |
-| 36 | `POST` | `/api/db/supportive-queries/draft` | yes | - | - | **analyst** |
-| 37 | `POST` | `/api/db/supportive-queries/import-results` | yes | - | - | **analyst** |
-| 38 | `GET` | `/api/db/supportive-queries/status/{case_id}` | no | - | - | **analyst** |
-| 39 | `DELETE` | `/api/db/supportive-queries/{query_id}` | yes | - | - | **analyst** |
-| 40 | `PUT` | `/api/db/supportive-queries/{query_id}` | yes | - | - | **analyst** |
-| 41 | `GET` | `/api/db/triage` | no | - | - | **analyst** |
-| 42 | `POST` | `/api/db/triage/batch-delete` | yes | - | - | **admin** |
-| 43 | `GET` | `/api/db/triage/{case_id}` | no | - | - | **analyst** |
-| 44 | `PUT` | `/api/db/triage/{case_id}/analysis-draft` | yes | - | - | **analyst** |
-| 45 | `GET` | `/api/db/triage/{case_id}/closure-readiness` | no | - | - | **analyst** |
-| 46 | `POST` | `/api/db/triage/{case_id}/delete` | yes | - | - | **admin** |
-| 47 | `GET` | `/api/db/triage/{case_id}/evidence` | no | - | - | **analyst** |
-| 48 | `POST` | `/api/db/triage/{case_id}/evidence` | yes | - | - | **analyst** |
-| 49 | `POST` | `/api/db/triage/{case_id}/evidence/batch-delete` | yes | - | - | **admin** |
-| 50 | `POST` | `/api/db/triage/{case_id}/evidence/delete-all` | yes | - | - | **admin** |
-| 51 | `DELETE` | `/api/db/triage/{case_id}/evidence/{evidence_id}` | yes | - | - | **analyst** |
-| 52 | `POST` | `/api/db/triage/{case_id}/evidence/{evidence_id}/delete` | yes | - | - | **admin** |
-| 53 | `GET` | `/api/db/triage/{case_id}/investigation-state` | no | - | - | **analyst** |
-| 54 | `GET` | `/api/db/triage/{case_id}/notable` | no | - | - | **analyst** |
+| 6 | `POST` | `/api/code-review` | yes | - | analyst | **analyst** |
+| 7 | `POST` | `/api/code-review/fix` | yes | - | analyst | **analyst** |
+| 8 | `POST` | `/api/code-review/sections` | yes | - | analyst | **analyst** |
+| 9 | `POST` | `/api/code-review/zip` | yes | - | analyst | **analyst** |
+| 10 | `GET` | `/api/code-reviews` | no | - | analyst | **analyst** |
+| 11 | `GET` | `/api/code-reviews/{review_id}` | no | - | analyst | **analyst** |
+| 12 | `POST` | `/api/db/analyze` | yes | - | analyst | **analyst** |
+| 13 | `POST` | `/api/db/closure-note` | yes | - | analyst | **analyst** |
+| 14 | `GET` | `/api/db/notables` | no | - | analyst | **analyst** |
+| 15 | `POST` | `/api/db/notables/backfill-closure-notes` | yes | - | analyst | **analyst** |
+| 16 | `POST` | `/api/db/notables/batch-delete` | yes | - | admin | **admin** |
+| 17 | `GET` | `/api/db/notables/generate-fetch-spl` | no | - | analyst | **analyst** |
+| 18 | `POST` | `/api/db/notables/generate-fetch-spl` | yes | - | analyst | **analyst** |
+| 19 | `GET` | `/api/db/notables/historical` | no | - | analyst | **analyst** |
+| 20 | `POST` | `/api/db/notables/paste` | yes | - | analyst | **analyst** |
+| 21 | `DELETE` | `/api/db/notables/{event_id}` | yes | - | admin | **admin** |
+| 22 | `GET` | `/api/db/notables/{event_id}` | no | - | analyst | **analyst** |
+| 23 | `POST` | `/api/db/notables/{event_id}/delete` | yes | - | admin | **admin** |
+| 24 | `POST` | `/api/db/notables/{event_id}/promote` | yes | - | analyst | **analyst** |
+| 25 | `GET` | `/api/db/ollama/health` | no | - | admin | **admin** |
+| 26 | `GET` | `/api/db/operations` | no | - | admin | **admin** |
+| 27 | `GET` | `/api/db/placeholder-aliases` | no | - | analyst | **analyst** |
+| 28 | `POST` | `/api/db/placeholder-aliases` | yes | - | analyst | **analyst** |
+| 29 | `GET` | `/api/db/placeholder-aliases/suggestions` | no | - | analyst | **analyst** |
+| 30 | `DELETE` | `/api/db/placeholder-aliases/{alias_id}` | yes | - | analyst | **analyst** |
+| 31 | `PUT` | `/api/db/placeholder-aliases/{alias_id}` | yes | - | analyst | **analyst** |
+| 32 | `GET` | `/api/db/rules` | no | - | analyst | **analyst** |
+| 33 | `GET` | `/api/db/stats` | no | - | admin | **admin** |
+| 34 | `GET` | `/api/db/supportive-queries` | no | - | analyst | **analyst** |
+| 35 | `POST` | `/api/db/supportive-queries` | yes | - | analyst | **analyst** |
+| 36 | `POST` | `/api/db/supportive-queries/draft` | yes | - | analyst | **analyst** |
+| 37 | `POST` | `/api/db/supportive-queries/import-results` | yes | - | analyst | **analyst** |
+| 38 | `GET` | `/api/db/supportive-queries/status/{case_id}` | no | - | analyst | **analyst** |
+| 39 | `DELETE` | `/api/db/supportive-queries/{query_id}` | yes | - | analyst | **analyst** |
+| 40 | `PUT` | `/api/db/supportive-queries/{query_id}` | yes | - | analyst | **analyst** |
+| 41 | `GET` | `/api/db/triage` | no | - | analyst | **analyst** |
+| 42 | `POST` | `/api/db/triage/batch-delete` | yes | - | admin | **admin** |
+| 43 | `GET` | `/api/db/triage/{case_id}` | no | - | analyst | **analyst** |
+| 44 | `PUT` | `/api/db/triage/{case_id}/analysis-draft` | yes | - | analyst | **analyst** |
+| 45 | `GET` | `/api/db/triage/{case_id}/closure-readiness` | no | - | analyst | **analyst** |
+| 46 | `POST` | `/api/db/triage/{case_id}/delete` | yes | - | admin | **admin** |
+| 47 | `GET` | `/api/db/triage/{case_id}/evidence` | no | - | analyst | **analyst** |
+| 48 | `POST` | `/api/db/triage/{case_id}/evidence` | yes | - | analyst | **analyst** |
+| 49 | `POST` | `/api/db/triage/{case_id}/evidence/batch-delete` | yes | - | admin | **admin** |
+| 50 | `POST` | `/api/db/triage/{case_id}/evidence/delete-all` | yes | - | admin | **admin** |
+| 51 | `DELETE` | `/api/db/triage/{case_id}/evidence/{evidence_id}` | yes | - | admin | **admin** |
+| 52 | `POST` | `/api/db/triage/{case_id}/evidence/{evidence_id}/delete` | yes | - | admin | **admin** |
+| 53 | `GET` | `/api/db/triage/{case_id}/investigation-state` | no | - | analyst | **analyst** |
+| 54 | `GET` | `/api/db/triage/{case_id}/notable` | no | - | analyst | **analyst** |
 | 55 | `POST` | `/api/execute` | yes | yes | admin | **admin** |
 | 56 | `GET` | `/api/health` | no | - | - | **public** |
 | 57 | `DELETE` | `/api/jobs` | yes | yes | admin | **admin** |
-| 58 | `GET` | `/api/jobs` | no | - | - | **admin** |
+| 58 | `GET` | `/api/jobs` | no | - | analyst | **analyst** |
 | 59 | `DELETE` | `/api/jobs/{job_id}` | yes | yes | admin | **admin** |
-| 60 | `GET` | `/api/jobs/{job_id}` | no | - | - | **admin** |
+| 60 | `GET` | `/api/jobs/{job_id}` | no | - | analyst | **analyst** |
 | 61 | `GET` | `/api/registry` | no | - | admin | **admin** |
 | 62 | `POST` | `/api/registry/reload` | yes | - | admin | **admin** |
-| 63 | `GET` | `/api/reports` | no | - | - | **analyst** |
-| 64 | `GET` | `/api/reports/{report_name}` | no | - | - | **analyst** |
+| 63 | `GET` | `/api/reports` | no | - | analyst | **analyst** |
+| 64 | `GET` | `/api/reports/{report_name}` | no | - | analyst | **analyst** |
 | 65 | `POST` | `/api/splunk-boundary/admit` | yes | yes | admin | **admin** |
 | 66 | `DELETE` | `/api/splunk-boundary/batches/{batch_id}` | yes | yes | admin | **admin** |
-| 67 | `GET` | `/api/splunk-boundary/status` | no | - | - | **admin** |
-| 68 | `GET` | `/api/splunk/saved-searches` | no | yes | - | **analyst** |
-| 69 | `POST` | `/api/splunk/search-one` | yes | yes | - | **analyst** |
-| 70 | `GET` | `/api/splunk/search-status` | no | yes | - | **analyst** |
-| 71 | `GET` | `/api/tool-artifacts/{artifact_path:path}` | no | - | - | **analyst** |
-| 72 | `GET` | `/api/tools` | no | - | admin | **admin** |
+| 67 | `GET` | `/api/splunk-boundary/status` | no | - | analyst | **analyst** |
+| 68 | `GET` | `/api/splunk/saved-searches` | no | yes | analyst | **analyst** |
+| 69 | `POST` | `/api/splunk/search-one` | yes | yes | analyst | **analyst** |
+| 70 | `GET` | `/api/splunk/search-status` | no | yes | analyst | **analyst** |
+| 71 | `GET` | `/api/tool-artifacts/{artifact_path:path}` | no | - | analyst | **analyst** |
+| 72 | `GET` | `/api/tools` | no | - | analyst | **analyst** |
 | 73 | `POST` | `/api/tools/regression` | yes | yes | admin | **admin** |
-| 74 | `GET` | `/api/tools/{tool_name}` | no | - | admin | **admin** |
+| 74 | `GET` | `/api/tools/{tool_name}` | no | - | analyst | **analyst** |
 | 75 | `GET` | `/health` | no | - | - | **public** |
 
 **75 routes** — 20 proposed **admin**, 50 **analyst**, 5 **public**.

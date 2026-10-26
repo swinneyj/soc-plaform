@@ -11,7 +11,8 @@ import os
 import re
 import sys
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import require_role
 
 from api import deps
 from api.helpers.errors import InternalError, raise_internal
@@ -67,7 +68,7 @@ _REDACTION_MARKER_RE = re.compile(
 )
 
 
-@router.post("/api/db/analyze", tags=["Database"])
+@router.post("/api/db/analyze", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def analyze_case(request: AnalyzeRequest):
     try:
         case_id = request.case_id

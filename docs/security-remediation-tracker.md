@@ -6,6 +6,7 @@
 **Updated Sept 30:** owner closed the mouse (E2) + exposure-restriction (#5) sub-item; **Vercel deployment retired** (owner decision) — `deploy.yml` deleted, `docs/VERCEL_HANDOFF.md` stubbed to a retirement notice; the Vercel project itself is deliberately **kept on ice** (frozen, undeployable, retained in case circumstances change).
 **Updated 2026-10-05:** added the admission-hardening entries (C2.1.2 job-queue cap, C2.1.4 paste cap, C2.1.6 tool-subprocess env isolation, C4 paste-batch) with their regression-test names, and the API-security-review remediations (F1 generic 500s + request-id server-side logging, F5 constant-time login + per-IP/per-username throttling).
 **Updated Sept 28:** added E3 — AI agent harness (Freebuff Desktop) workstation exposure; canonical risk notes + operating rules live in `AGENTS.md` → "Freebuff Desktop risk notes". Also this session: verified the git restore path (0.040s, sha256-identical) and cleared a stale `postmaster.pid` after unclean shutdown (see AGENTS.md machine quirks).
+**Updated 2026-10-23 (list reconciliation):** re-verified `docs/API_SECURITY_REVIEW.md` against the code and marked every finding whose fix has landed — **F2, F7, F9, F12 resolved; F8, F13 partially resolved** (entries added below with their regression tests). #5/#6 marked resolved in substance: the gate is armed and `/api/execute` + `/api/jobs/*` are key- and role-gated. **One new finding, F15:** the CORS allowlist omitted `X-CSRF-Token`, so a cross-origin session-mode UI could not pass preflight — found and **fixed the same day** (recorded below with the before/after probes). F10 was downgraded to informational after checking the argv builder, and F13's remaining CSP half landed as a narrow policy (no script-source rules). Note for whoever reads older entries: the middleware these fixes live in moved to `api/middleware.py` in the E.5 split (`0a9de01`), so `api/main.py` line references in pre-Oct entries are historical.
 **Scope:** code/`git grep` inspection of the working copy at `~/Downloads/soc-plaform-main`. Not a pen-test — a prioritized list of concrete, actionable findings.
 
 ---
@@ -43,20 +44,31 @@
 
 ## Priority 2 — This week
 
-### 5. No authentication on the API
+### 5. No authentication on the API ✅ RESOLVED IN SUBSTANCE (API key armed + session auth live)
 - **What:** `api/main.py` has no auth middleware, no API key check, no login. Anyone who can reach the server can hit every endpoint (triage data, notables, job execution).
 - **Why it matters:** The Vercel deployment (`soc-plaform-livid.vercel.app`) is publicly reachable; if its backend talks to the shared DB with no auth, anyone can query or mutate SOC data.
 - **Remediation:**
   - [x] Add an API-key/token dependency (FastAPI `Depends`) on all non-health endpoints (covered by the method-based mutation middleware + A1 path-aware gate), or
   - [x] Restrict exposure (Vercel password protection / IP allowlist) while internal-only — owner confirmed the current posture is acceptable (Sept 30, 2026)
 - **Note:** biggest structural gap — deserves a deliberate design conversation, not a quick patch.
+- **Status 2026-10-23 — resolved:** both remediation branches landed. The key gate is armed
+  locally (`API_KEY` injected from BWS at launch) and `AUTH_MODE=session` is on, so every
+  request carries a verified actor (session user or API-key machine actor) and every mutation
+  needs CSRF or a key. What remains is the *accepted* residual in
+  `docs/API_SECURITY_REVIEW.md` **F3** — the served UI holds the key in `window.SOC_CONFIG`,
+  so UI access equals full write access — which the owner accepted for localhost/Tailscale
+  exposure only. It is no longer an open gap; it is a documented deployment constraint.
 - **Progress Sept 25:** API-key scaffold landed — `require_api_key` dependency on the dangerous routes (execute/regression/jobs-delete); no-op until `API_KEY` is set, so local dev is unchanged.
 - **Progress Sept 25 (session 2):** activation is now **config-only** — the frontend ships `web/utils/auth.js` (single axios interceptor stamps `X-API-Key` from `SOC_CONFIG.apiKey`/`?apiKey=` across all 67 call sites; no-op when unset), `X-API-Key` is CORS-allowlisted with a behavioral preflight test, and the boundary write endpoints carry the gate too. **To activate:** set `API_KEY` (Vercel) + get the key into the browser (`SOC_CONFIG.apiKey` injection — the one remaining design choice, needs a ~10-min coworker conversation since static pages can't read env vars at runtime). **Resolved Sept 30:** the injection design decision is made — server-side injection at serve time.
 
-### 6. Unauthenticated job-execution endpoints
+### 6. Unauthenticated job-execution endpoints ✅ RESOLVED
 - **What:** `/api/jobs/*` and tool-execution routes spawn processes server-side (`tool_runs`). Combined with #5, this is remote code execution exposed to whoever can reach the server.
 - **Remediation:** Gate behind auth before exposure beyond localhost.
 - **Progress Sept 25:** covered by the same `require_api_key` dependency (remains no-op until `API_KEY` is set — natural fit for BWS-injected config later).
+- **Status 2026-10-23:** every process-spawning route is gated twice — key/session auth at the
+  mutation gate, plus `require_role("admin")` on tools/registry/jobs-delete — so an analyst
+  session gets 403 and an anonymous caller 401 (verified live 2026-10-21, recorded under
+  "Session auth ACTIVATED"). Subprocess environments are also allowlisted now (C2.1.6).
 
 ### 7. Wildcard HTTP methods/headers in CORS
 - **What:** `CORSMiddleware(allow_methods=["*"], allow_headers=["*"])` — origins are allowlisted (good), methods/headers are wide open.
@@ -102,6 +114,7 @@
   - [x] **Done Sept 30 (~18:45):** Dependabot alerts/config live — first weekly run opened 7 update PRs (#1–#7). Pending human review: merge the pip bumps + action bumps, mind the dual-runtime pins (Dependabot's `
 ` targets the py3.10 line only; verify the `<3.10` pin still satisfies the advisories before merging).
   - [x] **Done 2026-10-23:** the five open Dependabot PRs reviewed and merged (#19 sqlalchemy 2.1.5, #18 fastapi 0.146.0, #17 starlette 1.9.0, #16 pydantic 2.14.1, #14 pyflakes 4.0.3), then brought onto `dev-dalton` with the hash lock regenerated (`PIN_ONLY314=1 scripts/pin_requirements.py`). The dual-runtime check caught #16: Dependabot's pydantic pin carried no `python_version` marker, so 2.14.1 (`Requires-Python >=3.10`) broke the 3.9 leg at install — the PR branch was amended to the standard marker split (2.14.1 on `>=3.10`, 2.13.5 frozen on `<3.10`) and both legs went green before merge. `pip-audit` after the bump: **live (>=3.10) environment clean**; the frozen `<3.10` lines still carry the previously accepted advisories (`python-multipart 0.0.20` PYSEC-2026-3036/3037/3038/3039/3040, `certifi 2026.7.22` PYSEC-2026-4320) — policy unchanged, branch not extended. Local suite after install: **484 passed**.
+- **SBOM drift gate (2026-10-23):** `docs/SBOM.json` is committed next to the pins it describes and had silently fallen a Dependabot merge behind. `scripts/check_sbom_pins.py` (stdlib only, runs in CI before the install) compares the SBOM against every pin the running interpreter's markers select — Python pins **and** the three CDN library versions in `web/index.modular.html`, which have no lockfile — and fails with the drift table. Regenerating after the merge produced 42 matching pins (39 Python, 3 frontend). Marker evaluation is imported from `scripts/check_requirement_markers.py`, so the two gates cannot disagree about branches.
 - **Watch list:** `fastapi`, `starlette`, `uvicorn`, `cryptography`, `sqlalchemy`.
 
 ### 12. `triage.db` (SQLite) in working tree
@@ -258,9 +271,11 @@ hygiene items, not missing gates.
 
 ---
 
-## API security review — F1 + F5 remediations (2026-10-05)
+## API security review — remediations (F1, F2, F5, F7–F9, F12, F13) — 2026-10-05 → 2026-10-23
 
-Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the source review.
+Every fix below lands with regression tests; `docs/API_SECURITY_REVIEW.md` is the source review
+and now carries per-finding status headings. The 2026-10-23 entries were re-verified against
+the code (grep + the named tests), not copied from the review's prose.
 
 ### F1 — internal errors never leak exception text ✅ LANDED
 - **What:** every 500 answers `{"detail": "Internal error"}`; the real exception is logged server-side (with traceback) under a request id. Previously `api/main.py`'s global handler returned `str(exc)` and ~40 route handlers did `raise HTTPException(500, detail=str(e))` — in API-key mode reads are ungated by contract, so anyone who could reach port 8000 could read SQL fragments, table names, host/port, or `OLLAMA_URL` from a 500 body.
@@ -271,6 +286,52 @@ Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the sour
 - **What:** `POST /api/auth/login` used to short-circuit on a missing/inactive user, so a valid username cost a full scrypt/PBKDF2 run and an invalid one returned in microseconds — reliable username enumeration by timing; the endpoint also had no brute-force protection. Now every attempt verifies a password against a hash: missing/inactive users verify against a lazily built **dummy hash** (same KDF, same parameters), so every attempt pays exactly one KDF run. Failed attempts are counted on two independent sliding windows (per source IP and per attempted username, `LOGIN_MAX_FAILURES`/`LOGIN_WINDOW_SECONDS`, env, defaults 5/60 s); either window full → 429 **before** user resolution (even the correct password is refused while throttled). Success clears both windows.
 - **Where:** `api/routes/auth.py` (`_dummy_password_hash`, `_login_windows`, `_login_throttled`, `_record_login_failure`, `_clear_login_failures`; the `login` handler reorder).
 - **Regression tests:** `tests/test_api_key_gate.py` F5 block — spy-on-`verify_password` proofs (missing user → dummy hash; inactive user → dummy hash, never the stored hash; active user → real hash), a timing sanity test (missing-user login ≥ 40% of real-user login — both are one KDF run), throttle after repeat failures (incl. unknown usernames), independent per-IP/per-username windows, success clears windows, and window expiry.
+
+### F2 — query-parameter API key is opt-in ✅ LANDED (verified 2026-10-23)
+- **What:** `?api_key=` used to authenticate any keyed request, putting a credential into access logs, browser history, `Referer` and proxy logs. It now counts only when `AUTH_ALLOW_QUERY_KEY=1` (a deliberate smoke-test escape hatch); otherwise a query-only request 401s while the `X-API-Key` header keeps working.
+- **Where:** `api/auth.py` (`query_key_allowed`, `require_api_key`, `request_has_api_key`).
+- **Regression tests:** `tests/test_api_key_gate.py::test_execute_rejected_with_query_key_by_default` and `::test_execute_accepted_with_query_key_when_flagged`; `tests/test_api_analyze_flow.py::TestQueryKeyGate` (query-only 401 / flagged 200 / header always).
+
+### F7 — API binds loopback by default ✅ LANDED (verified 2026-10-23)
+- **What:** `uvicorn.run` defaulted to `0.0.0.0`, leaving the whole localhost/Tailscale posture to the macOS firewall. It now binds `127.0.0.1` unless `API_BIND` says otherwise, so LAN/Tailscale exposure is a deliberate env change. The Dockerfile keeps `0.0.0.0` on purpose (container port mapping requires it); that exposure is bounded by the compose port map.
+- **Where:** `api/main.py:198-208`.
+- **Verification:** launch-time only, so no pytest — `lsof -nP -iTCP:8000 -sTCP:LISTEN` after `scripts/dev` should show `127.0.0.1`. `API_BIND` is not yet listed in `.env.example`.
+
+### F8 — rate-limiter keys are swept ✅ PARTIAL (verified 2026-10-23)
+- **What:** `_RATE_HITS` grew forever: stale timestamps were pruned but the IP key was never deleted, so rotating source IPs leaked memory. Every request on a rate-limited path now sweeps keys whose timestamps are all outside the window.
+- **What is not fixed:** coverage is still the same five Ollama-backed POSTs (login has its own F5 throttle). Cheap mutating endpoints rely on the auth gate, the queue cap and the body cap rather than a rate limit.
+- **Where:** `api/middleware.py:256-265`.
+- **Regression test:** `tests/test_api_key_gate.py::test_rate_limiter_sweeps_fully_stale_ips`.
+
+### F9 — global request-body cap ✅ LANDED (verified 2026-10-23)
+- **What:** only paste had a byte budget; every other JSON endpoint parsed unbounded bodies. `_body_size_cap` now rejects over `MAX_BODY_BYTES` (default 10 MiB) with 413 before routing, auth or parsing — checking a declared `Content-Length` without reading a byte, and draining undeclared (chunked) bodies through the raw ASGI channel with a running total so an unbounded stream still fails at the cap. Paste keeps its tighter 5 MiB gate.
+- **Where:** `api/middleware.py:196-240` (registered outermost in `install()`).
+- **Regression tests:** `tests/test_api_key_gate.py::test_body_cap_rejects_huge_declared_length`, `::test_body_cap_allows_normal_mutation`. `MAX_BODY_BYTES` is not yet listed in `.env.example`.
+
+### F10 — argument injection into tool CLIs ℹ️ INFORMATIONAL (downgraded 2026-10-23)
+- **What the review said:** a client-controlled argument *value* beginning with `--` could be reinterpreted as a flag by the tool's own argparse.
+- **What the code says:** `cmd.extend([f'--{key}', str(val)])` (`api/routes/tools.py:291-297`) binds every value as the argument of an explicit option, and renders every key as its own `--`-prefixed token — neither can split into extra argv entries. A `--dangerous` value reaches the tool as `--target`'s value, where argparse answers "expected one argument": a failed run, not a smuggled flag. The residual is a tool that hand-parses `sys.argv` and re-scans tokens; none in `Tools/` does today.
+- **Action:** none. Revisit only if a tool drops argparse.
+
+### F12 — expired sessions are vacuumed ✅ LANDED (verified 2026-10-23)
+- **What:** expired `AuthSession` rows accumulated because nothing deleted them. Each successful login now runs one indexed range delete on `expires_at <= now` — infrequent enough to bound the table without the scheduler this repo deliberately avoids.
+- **Where:** `api/routes/auth.py:155-163`.
+- **Regression test:** `tests/test_api_key_gate.py::test_successful_login_vacuums_expired_sessions` (expired row gone, live row untouched).
+- **Still open from the same note:** no password-change endpoint, so revocation-on-password-change remains unwired.
+
+### F13 — baseline security headers + narrow CSP ✅ LANDED (2026-10-23)
+- **What:** `nosniff` is stamped on every response and `Cache-Control: no-store` on `/api/*` only — case data never lands in the browser cache, static assets keep their caching. Both responses also carry `object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'`.
+- **Why not a full CSP:** this UI is the Vue *global* build compiling `template:` strings at runtime plus the Tailwind *Play* CDN, and `SOC_CONFIG` is an inline `<script>`. A `script-src`/`style-src`/`default-src` policy would need `'unsafe-eval'` + `'unsafe-inline'` (or a nonce and a precompiled build) to keep the page working, which would leave the restrictive half decorative. The four shipped directives constrain plugins, `<base>` hijack, framing and cross-origin form posts without touching load behavior. A strict policy is a build-system change, not a header change.
+- **Where:** `api/middleware.py:96-113`.
+- **Regression test:** `tests/test_api_key_gate.py::test_security_headers_on_api_and_ui` — asserts all four directives **and** that no `script-src`/`default-src` appears, so adding one forces a deliberate test change.
+
+### F15 — CORS preflight rejects `X-CSRF-Token` ✅ FIXED (found and fixed 2026-10-23)
+- **What:** session mode requires `X-CSRF-Token` on every mutating `/api/*` request and the UI sends it on every axios call, but the CORS middleware allowlists only `["Content-Type", "Accept", "X-API-Key"]`. A **cross-origin** browser client therefore fails the preflight for its own CSRF header.
+- **Evidence (live, 2026-10-23, real app with `CORS_ORIGINS` set) — before:** `OPTIONS /api/auth/login` with `Access-Control-Request-Headers: content-type,x-csrf-token` → **400**, `Access-Control-Allow-Headers: Accept, Accept-Language, Content-Language, Content-Type, X-API-Key`.
+- **Why it had not bitten:** the UI is served by the API itself on :8000, so it is same-origin and no preflight happens. The failure is closed — the mutation is refused, never waved through — so this was availability/interop, not exposure. It hits exactly the shape the middleware docstring advertises (a tunneled/cross-origin UI in session mode): reads work, mutations fail.
+- **Where:** `api/middleware.py:310`; client header at `web/utils/auth.js:46`.
+- **Fix (landed same day):** `"X-CSRF-Token"` added to `allow_headers`. After: the same preflight → **200** with `..., X-API-Key, X-CSRF-Token`; a header not on the list still → **400** (the allowlist did not become a wildcard).
+- **Regression tests:** `tests/test_api_key_gate.py::test_cors_allows_x_csrf_token_header`, `::test_cors_preflight_still_refuses_unlisted_headers` (negative control).
 
 ### Local login activation gap — the accounts did not survive local-first ✅ FIXED (2026-10-23)
 - **Found while answering "do we need admin credentials?"** — no, and worse: there were none. `AUTH_MODE=session` was on while the local `users` table was **empty** (the Oct 21 accounts were created on the shared Neon mirror, and Oct 23 made local Postgres primary), so `POST /api/auth/login` could only ever 401. The UI's bootstrap was broken too: `GET /api/auth/session` rejected the **API key** (it required `actor.kind == "session"`), so every local visit fell into a login modal with no account that could succeed. Verified live: `users` empty, keychain held only `DATABASE_URL`/`API_KEY`, the bootstrap 401'd with *and* without the key, while reads with the key returned 200.
@@ -334,6 +395,16 @@ Both fixes land with regression tests; `docs/API_SECURITY_REVIEW.md` is the sour
 
 ---
 
+### Splunk TLS trust path — `SPLUNK_CA_BUNDLE` + loud opt-out (2026-10-23) ✅ LANDED
+
+- **Why:** management-port certificates (8089) are commonly signed by an internal or self-signed CA; the connector verified with `certifi` only and had no way to trust one without `verify=False`, which would have disabled verification for the whole connector with no trace.
+- **What landed:** `SPLUNK_CA_BUNDLE` (PEM file or directory) is passed as `verify=` for this connection only — trust is *widened*, never disabled. `SPLUNK_VERIFY_TLS=false` remains as a last-resort lab escape hatch: it logs a `soc.splunk` warning at construction and is surfaced as `tls.verification_disabled` by `GET /api/splunk/search-status`.
+- **Precedence:** a valid bundle always wins; a bundle path that does not exist fails at construction and fails readiness (`ready: false`, named in `problem`).
+- **Visibility:** `search-status.tls` reports `verify`, `verification_disabled`, `ca_bundle_configured`, `ca_bundle_readable` — booleans only, never the path, URL, or token.
+- **Expiry pre-flight (same day):** the endpoint parses the pinned bundle (file or directory) and reports the **earliest** certificate expiry — `ca_bundle_certificates`, `ca_bundle_expires_at`, `ca_bundle_days_remaining` (negative once expired), `ca_bundle_expired`, `ca_bundle_warning`. An expired bundle makes `ready: false` with the date named; ≤30 days warns without blocking. A bundle with no parseable PEM is also a readiness failure. Verified live in all three states (fresh 399 days / rotating 11 days / expired −3 days).
+- **Verified live:** self-signed HTTPS fake Splunk — bare handshake rejected with an error naming `SPLUNK_CA_BUNDLE`; `SPLUNK_CA_BUNDLE=<cert>` → rows returned; `SPLUNK_VERIFY_TLS=false` → rows returned **plus** the warning on stderr. Pinned by four tests in `tests/test_search_backend.py` (real handshake, not mocks).
+- **Standing rule:** if `SPLUNK_VERIFY_TLS=false` is ever used against a real instance, record it here with the reason and a review date — it is reported by the API precisely so it cannot become an invisible decision.
+
 ## Destructive-path audit — shared production Neon (2026-10-06, not re-verified this session)
 
 Scope: the no-undo paths named in AGENTS.md, each with its guard.
@@ -387,8 +458,8 @@ sanctioned undo; nothing analogous exists for `wipe_db.py`.
 > **Owner triage (Sept 28, 2026):** Dalton reviewed every people-blocked item live (Vercel string confirmation, auth activation, Dependabot toggle, `web/Old` deletion, Safari history pass, Freebuff deletion request) and called them **non-blocking — accepted for now**. Nothing below gates Phase 3; re-open individually if circumstances change. Largest accepted exposure: the unauthenticated prod API (items 3 above / #5–#6) — accepted knowingly.
 1. ~~BWS access token / `bws run` launcher / slim `.env`~~ ✅ done (token live, `scripts/start` runs the API via `bws run`; `.env` is now token + non-secret config + keychain markers — #3 fix)
 2. **New Neon URL distribution** → local side ✅ done (Sept 28 cutover); Vercel leg ✅ moot (Sept 30 — hosted deployment retired, project kept on ice per `docs/VERCEL_HANDOFF.md`)
-3. **Auth activation decision** (coworker conversation) → `API_KEY` + server-injected `SOC_CONFIG.apiKey` locally (the Vercel leg died with the retired deployment, Sept 30)
-4. **Dependabot alerts** (GitHub Settings → Security, ~2 min, you or Justin) — `pip-audit` already run clean (see "Checked and found OK")
+3. ~~**Auth activation decision** (coworker conversation)~~ ✅ done — `API_KEY` armed + server-injected `SOC_CONFIG.apiKey`; `AUTH_MODE=session` activated 2026-10-21 with RBAC verified live (the Vercel leg died with the retired deployment, Sept 30)
+4. **Dependabot alerts** — config committed (`.github/dependabot.yml`); the Settings → Security toggle is still a human check. ✅ 2026-10-23: all five open PRs merged (#14 pyflakes 4.0.3, #16 pydantic 2.14.1, #17 starlette 1.9.0, #18 fastapi 0.146.0, #19 sqlalchemy 2.1.5) and brought onto `dev-dalton` with the hash lock regenerated; `pip-audit` clean on the live branch (recorded in #11). The SBOM was left stale by that merge — regenerated 2026-10-23 (`scripts/sbom --no-audit`; CycloneDX 1.6 schema VALID) and a new stdlib gate now fails CI if it drifts again (`scripts/check_sbom_pins.py`, runs before the dependency install).
 5. **Deprecation cleanup** from the 3.14 warnings (`utcnow()` → timezone-aware; `httpx2`)
    - [x] **`utcnow()` — done Sept 28, 2026** (commits `e3b91fb` + `b816291`): shared `_utcnow()` helper (`now(timezone.utc)` stripped to naive — byte-identical output to the old calls, so the platform's naive-UTC storage convention is untouched) across `db/models.py` (11 Column defaults), `api/main.py`, `api/routes/system.py`, `services/closure_service.py`, `services/evidence_service.py`, and 6 seed/ingest/tool scripts. Suite: **124 passed, 1 warning** on Python 3.14 **and 124 passed on Python 3.9** (dual-runtime verified the same day — the helpers deliberately use `timezone.utc`, not the 3.11+ `datetime.UTC` shorthand, so both supported interpreters stay green). The only remaining warning is third-party (`anyio.BlockingPortal` via starlette's TestClient), not fixable here. SQLite roundtrip verified: model defaults still store naive UTC. One deliberate exception: `scripts/attic/add_code_review.py` keeps its utcnow — dead one-shot migration kept as historical record (its output already landed in `db/models.py`).
    - [ ] `httpx2`/TestClient preference — gated on starlette upstream; no action today

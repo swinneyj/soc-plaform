@@ -396,7 +396,7 @@ def _persist_tool_run(job: Dict[str, Any]) -> None:
 
 
 @router.get("/api/tools", response_model=List[ToolInfo], tags=["Tools"],
-           dependencies=[Depends(require_role("admin"))])
+           dependencies=[Depends(require_role("analyst"))])
 def list_tools():
     """List all available tools with metadata."""
     registry = load_registry()
@@ -413,7 +413,7 @@ def list_tools():
     ]
 
 @router.get("/api/tools/{tool_name}", response_model=ToolInfo, tags=["Tools"],
-           dependencies=[Depends(require_role("admin"))])
+           dependencies=[Depends(require_role("analyst"))])
 def get_tool(tool_name: str):
     """Get metadata for a specific tool."""
     registry = load_registry()
@@ -492,7 +492,7 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     )
     return JobResponse(**jobs[job_id])
 
-@router.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Execution"])
+@router.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def get_job_status(job_id: str):
     """Retrieve job status and results."""
     if job_id not in jobs:
@@ -521,7 +521,7 @@ def get_job_status(job_id: str):
     job["status"] = _job_status_value(job.get("status"))
     return JobResponse(**job)
 
-@router.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"])
+@router.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by job status")):
     """List all jobs, optionally filtered by status."""
     job_list = list(jobs.values())
@@ -607,7 +607,7 @@ def clear_jobs():
         deleted = 0
     return {"deleted": deleted}
 
-@router.get("/api/reports", tags=["Data"])
+@router.get("/api/reports", tags=["Data"], dependencies=[Depends(require_role("analyst"))])
 def list_reports():
     """List all generated reports."""
     reports_dir = deps.get_reports_dir()
@@ -623,7 +623,7 @@ def list_reports():
                 })
     return sorted(reports, key=lambda x: x["modified"], reverse=True)
 
-@router.get("/api/reports/{report_name}", tags=["Data"])
+@router.get("/api/reports/{report_name}", tags=["Data"], dependencies=[Depends(require_role("analyst"))])
 def download_report(report_name: str):
     """Download a specific report file.
 
@@ -644,7 +644,7 @@ def download_report(report_name: str):
         media_type="text/plain"
     )
 
-@router.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"])
+@router.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def download_tool_artifact(artifact_path: str):
     """Download only files from approved generated-artifact directories."""
     root = Path(deps.get_platform_root()).resolve()

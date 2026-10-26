@@ -38,15 +38,88 @@ def missing_tables(url: str) -> List[str]:
     return sorted(name for name in Base.metadata.tables if name not in present)
 
 
+# SEC-03B: csrf_token must hold `enc:v1:` ciphertext (~104+ chars).
+# Fresh databases get TEXT from the EncryptedText impl; pre-SEC-03 databases
+# have varchar(64). Widen narrow columns to varchar(255) (TEXT also ok).
+COLUMN_MIN_WIDTHS = {
+    ("auth_sessions", "csrf_token"): 255,
+}
+
+
+def narrow_columns(url: str) -> List[str]:
+    """`table.column` entries whose varchar width is below the minimum (read-only)."""
+    from sqlalchemy import text as sa_text
+
+    engine = create_database_engine(url)
+    narrow = []
+    try:
+        with engine.connect() as conn:
+            if conn.dialect.name != "postgresql":
+                return []
+            for (table, column), minimum in COLUMN_MIN_WIDTHS.items():
+                row = conn.execute(
+                    sa_text(
+                        "select character_maximum_length from information_schema.columns "
+                        "where table_name = :t and column_name = :c"
+                    ),
+                    {"t": table, "c": column},
+                ).first()
+                if row is None:
+                    continue
+                width = row[0]  # None = unbounded (TEXT) — fine
+                if width is not None and width < minimum:
+                    narrow.append("%s.%s is varchar(%d), needs >= %d" % (table, column, width, minimum))
+    finally:
+        engine.dispose()
+    return narrow
+
+
+def ensure_column_widths(url: str) -> List[str]:
+    """ALTER narrow varchar columns to varchar(minimum); return statements run."""
+    from sqlalchemy import text as sa_text
+
+    engine = create_database_engine(url)
+    ran = []
+    try:
+        with engine.begin() as conn:
+            if conn.dialect.name != "postgresql":
+                return []
+            for (table, column), minimum in COLUMN_MIN_WIDTHS.items():
+                row = conn.execute(
+                    sa_text(
+                        "select character_maximum_length from information_schema.columns "
+                        "where table_name = :t and column_name = :c"
+                    ),
+                    {"t": table, "c": column},
+                ).first()
+                if row is None:
+                    continue
+                width = row[0]
+                if width is not None and width < minimum:
+                    conn.execute(
+                        sa_text(
+                            "ALTER TABLE %s ALTER COLUMN %s TYPE varchar(%d)" % (table, column, minimum)
+                        )
+                    )
+                    ran.append("%s.%s -> varchar(%d)" % (table, column, minimum))
+    finally:
+        engine.dispose()
+    return ran
+
+
 def ensure_schema(url: str) -> List[str]:
     """Create the missing tables; return the names actually created."""
     before = missing_tables(url)
     if not before:
-        return []
-    engine = create_database_engine(url)
-    Base.metadata.create_all(bind=engine)
-    after = set(inspect(engine).get_table_names())
-    return sorted(name for name in before if name in after)
+        created = []
+    else:
+        engine = create_database_engine(url)
+        Base.metadata.create_all(bind=engine)
+        after = set(inspect(engine).get_table_names())
+        created = sorted(name for name in before if name in after)
+    # SEC-03B: widen narrow columns on the same (local-only) path.
+    created.extend(ensure_column_widths(url))
+    return created
 
 
 def main(argv=None) -> int:
@@ -76,8 +149,12 @@ def main(argv=None) -> int:
 
     if check_only:
         missing = missing_tables(url)
+        narrow = narrow_columns(url)
         if missing:
             print("schema drift: missing %s" % ", ".join(missing))
+            return 1
+        if narrow:
+            print("schema drift: narrow columns: %s" % "; ".join(narrow))
             return 1
         print("schema: ok — every model table exists")
         return 0

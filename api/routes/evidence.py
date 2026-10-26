@@ -10,7 +10,8 @@ import os
 import sys
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import require_role
 from pydantic import BaseModel, Field
 
 from api import deps
@@ -139,7 +140,7 @@ def _enrich_timeline_with_evidence_ids(db, case_id: str, state_payload: Dict[str
     return state_payload
 
 
-@router.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"])
+@router.get("/api/db/triage/{case_id}/investigation-state", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_investigation_state(case_id: str):
     """Return the latest persisted investigation loop state for a case."""
     db = None
@@ -196,7 +197,7 @@ class AnalysisDraftRequest(BaseModel):
     snapshot: Dict[str, Any] = Field(default_factory=dict)
 
 
-@router.put("/api/db/triage/{case_id}/analysis-draft", tags=["Database"])
+@router.put("/api/db/triage/{case_id}/analysis-draft", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def save_analysis_draft(case_id: str, request: AnalysisDraftRequest):
     """Persist the analyst's unfinished UI state in the shared database.
 
@@ -247,7 +248,7 @@ def save_analysis_draft(case_id: str, request: AnalysisDraftRequest):
             db.close()
 
 
-@router.get("/api/db/triage/{case_id}/evidence", tags=["Database"])
+@router.get("/api/db/triage/{case_id}/evidence", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def list_case_evidence(
     case_id: str,
     source_system: Optional[str] = Query(default=None, description="Optional source/stage filter, e.g. phase2_manual"),
@@ -297,7 +298,7 @@ def list_case_evidence(
             pass
 
 
-@router.post("/api/db/triage/{case_id}/evidence", tags=["Database"])
+@router.post("/api/db/triage/{case_id}/evidence", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload):
     """Persist a batch of case-linked investigation evidence.
 
@@ -423,7 +424,7 @@ def save_case_evidence(case_id: str, payload: InvestigationEvidenceBatchPayload)
 
 
 
-@router.delete("/api/db/triage/{case_id}/evidence/{evidence_id}", tags=["Database"])
+@router.delete("/api/db/triage/{case_id}/evidence/{evidence_id}", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_case_evidence(case_id: str, evidence_id: int):
     """Delete a single saved investigation evidence item and rebuild loop state."""
     db = None
@@ -476,13 +477,13 @@ def delete_case_evidence(case_id: str, evidence_id: int):
             pass
 
 
-@router.post("/api/db/triage/{case_id}/evidence/{evidence_id}/delete", tags=["Database"])
+@router.post("/api/db/triage/{case_id}/evidence/{evidence_id}/delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_case_evidence_post(case_id: str, evidence_id: int):
     """POST wrapper for environments that disallow DELETE from the browser UI."""
     return delete_case_evidence(case_id=case_id, evidence_id=evidence_id)
 
 
-@router.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"])
+@router.post("/api/db/triage/{case_id}/evidence/batch-delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_case_evidence_batch(case_id: str, payload: dict):
     """Delete multiple saved investigation evidence items by ID and rebuild loop state."""
     db = None
@@ -529,7 +530,7 @@ def delete_case_evidence_batch(case_id: str, payload: dict):
             pass
 
 
-@router.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"])
+@router.post("/api/db/triage/{case_id}/evidence/delete-all", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_all_case_evidence(case_id: str):
     """Delete all saved investigation evidence for a case and reset loop state."""
     db = None

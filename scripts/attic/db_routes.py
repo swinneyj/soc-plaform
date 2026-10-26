@@ -1,6 +1,15 @@
 """
 Database and AI analysis endpoints for SOC Platform API.
+
+SEC-05 ATTIC — unmounted legacy. This module is NOT imported by api/main.py
+and must never be mounted without a security review (no require_api_key /
+require_role guards; pre-auth-scaffold). Importing it requires the explicit
+test-only flag SOC_ENABLE_ATTIC=1 so a stray import fails closed.
 """
+
+import os as _os
+if _os.environ.get("SOC_ENABLE_ATTIC") != "1":
+    raise RuntimeError("scripts/attic/db_routes.py is attic (SEC-05): set SOC_ENABLE_ATTIC=1 to import")
 
 from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel

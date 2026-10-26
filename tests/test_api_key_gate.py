@@ -63,6 +63,41 @@ def test_cors_allows_x_api_key_header(client):
     assert "x-api-key" in allow.lower(), f"X-API-Key not allowed by CORS: {allow}"
 
 
+def test_cors_allows_x_csrf_token_header(client):
+    """Session-mode mutations send X-CSRF-Token; the preflight must admit it.
+
+    Regression for F15 (2026-10-23): the header was missing from
+    allow_headers, so a cross-origin UI could read (GETs need no CSRF) but
+    never mutate — every preflight came back 400.
+    """
+    resp = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": CORS_TEST_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-csrf-token",
+        },
+    )
+    assert resp.status_code in (200, 204), resp.text
+    allow = resp.headers.get("access-control-allow-headers", "")
+    assert "x-csrf-token" in allow.lower(), f"X-CSRF-Token not allowed by CORS: {allow}"
+
+
+def test_cors_preflight_still_refuses_unlisted_headers(client):
+    """Negative control: adding CSRF must not turn the allowlist into a wildcard."""
+    resp = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": CORS_TEST_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-not-allowed",
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    allow = resp.headers.get("access-control-allow-headers", "")
+    assert "x-not-allowed" not in allow.lower()
+
+
 def test_execute_rejected_without_key(client, with_api_key):
     resp = client.post("/api/execute", json={"tool_name": "anything"})
     assert resp.status_code == 401
@@ -1231,10 +1266,10 @@ def actor_cache_isolated(monkeypatch):
     api_auth._actor_cache.clear()
 
 
-def _login(session_client, username="cache-user", password="pw123"):
+def _login(session_client, username="cache-user", password="pw123", role="analyst"):
     """Create a user, log in, and return (login response, cookie token)."""
     db = session_client.test_session()
-    _make_user(db, username=username, password=password)
+    _make_user(db, username=username, password=password, role=role)
     login = session_client.post(
         "/api/auth/login", json={"username": username, "password": password}
     )
@@ -1330,14 +1365,16 @@ def test_actor_cache_disabled_when_ttl_zero(
     """ACTOR_CACHE_TTL=0 opts out entirely: every request pays the
     DB queries (the pre-optimization behavior), byte for byte."""
     monkeypatch.setattr(api_auth, "ACTOR_CACHE_TTL", 0.0)
-    _login(session_client)
+    # HIGH-01: /api/db/stats is admin — exercise the double-resolve path as admin.
+    _login(session_client, role="admin")
 
-    # /api/db/stats resolves the actor once per request (the
-    # middleware), so with the cache off every request pays.
+    # /api/db/stats resolves the actor twice per request (the middleware
+    # gate + the SEC-02 require_role dependency), so with the cache off
+    # every request pays twice.
     for _ in range(3):
         resp = session_client.get("/api/db/stats")
         assert resp.status_code == 200
-    assert len(actor_cache_isolated) == 3
+    assert len(actor_cache_isolated) == 6
     assert api_auth._actor_cache == {}
 
 
@@ -1658,6 +1695,17 @@ def test_security_headers_on_api_and_ui(client):
     ui_resp = client.get("/index.modular.html")
     assert ui_resp.headers.get("X-Content-Type-Options") == "nosniff"
     assert ui_resp.headers.get("Cache-Control") != "no-store"
+    # Narrow CSP (F13): the four directives that cannot break the UI.
+    csp = api_resp.headers.get("Content-Security-Policy", "")
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'self'" in csp
+    assert "form-action 'self'" in csp
+    # Deliberately no script/style source policy: the UI is the Vue runtime
+    # compiler plus the Tailwind Play CDN, which need 'unsafe-eval' and
+    # inline styles. If one is ever added, this test should change with it.
+    assert "script-src" not in csp and "default-src" not in csp
+    assert ui_resp.headers.get("Content-Security-Policy") == csp
 
 
 def test_successful_login_vacuums_expired_sessions(session_client):

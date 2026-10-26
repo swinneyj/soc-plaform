@@ -159,8 +159,9 @@ def test_analyst_session_has_the_analyst_role(db, session_mode):
     assert info.json()["user"] == ANALYST
     assert info.json()["role"] == "analyst"
 
-    # Role gate applies: admin-only route refuses this session.
-    assert client.get("/api/tools").status_code == 403
+    # Role gate applies: admin-only route refuses this session (SEC-02 Q3:
+    # /api/tools is analyst, so use the still-admin registry).
+    assert client.get("/api/registry").status_code == 403
 
 
 def test_admin_session_clears_the_admin_gate(db, session_mode):
@@ -168,7 +169,7 @@ def test_admin_session_clears_the_admin_gate(db, session_mode):
     client = _client()
     assert _dev_login(client, ADMIN).status_code == 200
     assert client.get("/api/auth/session").json()["role"] == "admin"
-    assert client.get("/api/tools").status_code == 200
+    assert client.get("/api/registry").status_code == 200
 
 
 def test_switching_back_and_forth_replaces_the_session(db, session_mode):
@@ -176,9 +177,9 @@ def test_switching_back_and_forth_replaces_the_session(db, session_mode):
     session_mode.setenv("SOC_DEV_LOGIN", "1")
     client = _client()
     assert _dev_login(client, ANALYST).status_code == 200
-    assert client.get("/api/tools").status_code == 403
+    assert client.get("/api/registry").status_code == 403
     assert _dev_login(client, ADMIN).status_code == 200
-    assert client.get("/api/tools").status_code == 200
+    assert client.get("/api/registry").status_code == 200
 
 
 # ---------------------------------------------------------------------------

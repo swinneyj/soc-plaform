@@ -116,6 +116,12 @@ _PBKDF2_ITERATIONS = 600_000
 def hash_password(password: str) -> str:
     """Hash a password with scrypt when available, else PBKDF2-SHA256.
 
+    MED-04: scrypt (N=16384, r=8, p=1) is a salted, adaptive, memory-hard
+    KDF (NIST SP 800-63B §5.1.1.2, OWASP Password Storage compliant) —
+    the stdlib-only equivalent of bcrypt/argon2id for this platform (no
+    extra dependency, no C extension). 16-byte random salt per password;
+    PBKDF2-HMAC-SHA256/600k is the fallback where OpenSSL lacks scrypt.
+
     Encodings: `scrypt$n$r$p$salthex$hashhex` or `pbkdf2$iterations$salthex$hashhex`.
     """
     salt = secrets.token_bytes(16)
@@ -230,6 +236,13 @@ def session_mode() -> bool:
 
 PROXY_USER_HEADER_DEFAULT = "X-Auth-Request-User"
 _PROXY_USER_ID_RE = re.compile(r"^[0-9]{1,18}$")
+# SEC-01B: X.509 Subject DN support. Upstream proxies (oauth2-proxy,
+# nginx auth_request, ALB) may forward the client certificate Subject DN
+# instead of a bare integer, e.g.
+# "CN=SMITH.JANE.M.1234567890,OU=ENG,O=Enterprise,C=US".
+# The 10-digit numeric identifier is extracted from the CN segment and
+# resolved against the local users table (by id, then by username match).
+_PROXY_DN_CN_RE = re.compile(r"CN=[^,]+?\.(\d{10})(?:,|$)")
 
 
 def proxy_mode() -> bool:
@@ -295,13 +308,45 @@ def _proxy_user(user_id: int):
         db.close()
 
 
+def _proxy_user_by_username(username: str):
+    """Plain (id, username, role, is_active) matched by exact username, or None."""
+    from db.models import SessionLocal, User
+
+    db = SessionLocal()
+    try:
+        row = db.query(User).filter(User.username == username).first()
+        if row is None:
+            return None
+        return (row.id, row.username, row.role, bool(row.is_active))
+    finally:
+        db.close()
+
+
+def _proxy_user_by_external_id(external_id: str):
+    """Resolve a 10-digit DN identifier to a local users row.
+
+    Order: integer users.id match first, then exact users.username match
+    (operators may store the 10-digit ID as the username for CAC/PIV-mapped
+    accounts). No auto-provisioning — unknown identifiers return None.
+    """
+    try:
+        row = _proxy_user(int(external_id))
+    except (ValueError, TypeError):
+        row = None
+    if row is not None:
+        return row
+    return _proxy_user_by_username(external_id)
+
+
 def resolve_proxy_actor(request):
     """(Actor, reason) for AUTH_MODE=proxy.
 
     Success is ``(Actor(kind="proxy"), "")``. Failure returns an anonymous
     Actor plus the reason the gate should audit: ``proxy_header_missing``,
     ``proxy_untrusted``, ``proxy_header_malformed``, ``proxy_user_unknown`` or
-    ``proxy_user_inactive``. A valid API key still authenticates as the admin
+    ``proxy_user_inactive``. HIGH-02: the middleware gate maps a DN-shaped
+    ``proxy_user_unknown`` (raw header contains ``CN=``) to 403; every other
+    failure stays 401. A valid API key still authenticates as the admin
     machine actor, so automation and health checks keep working on a
     proxy-gated deployment.
     """
@@ -315,9 +360,7 @@ def resolve_proxy_actor(request):
         reason = "proxy_untrusted"
     else:
         value = raw.strip()
-        if not _PROXY_USER_ID_RE.match(value):
-            reason = "proxy_header_malformed"
-        else:
+        if _PROXY_USER_ID_RE.match(value):
             row = _proxy_user(int(value))
             if row is None:
                 reason = "proxy_user_unknown"
@@ -328,6 +371,23 @@ def resolve_proxy_actor(request):
                 # csrf_ok: header auth carries no cookie, so there is nothing
                 # to double-submit. See the residual CSRF note above.
                 return Actor(kind="proxy", role=row[2], user=user, csrf_ok=True, csrf_token=""), ""
+        else:
+            # SEC-01B: X.509 Subject DN string. Extract the 10-digit
+            # identifier from the CN segment; anything without that shape
+            # is malformed (401). A well-formed DN naming no local row is
+            # unknown (401 via the gate — the anonymous actor path below).
+            match = _PROXY_DN_CN_RE.search(value)
+            if not match:
+                reason = "proxy_header_malformed"
+            else:
+                row = _proxy_user_by_external_id(match.group(1))
+                if row is None:
+                    reason = "proxy_user_unknown"
+                elif not row[3]:
+                    reason = "proxy_user_inactive"
+                else:
+                    user = CachedUser(id=row[0], username=row[1], role=row[2])
+                    return Actor(kind="proxy", role=row[2], user=user, csrf_ok=True, csrf_token=""), ""
     if _API_KEY and request_has_api_key(request):
         return Actor(kind="api-key", role="admin", user=None, csrf_ok=True, csrf_token=""), ""
     return Actor(kind="anonymous", role="", user=None, csrf_ok=False, csrf_token=""), reason
@@ -460,6 +520,9 @@ def require_role(role: str):
     Binds in session AND proxy mode — both resolve a local users row, so both
     carry a real role. Flag-off this stays a no-op, which keeps every existing
     route and test byte-identical.
+
+    Hierarchy (SEC-02): admin satisfies analyst (an admin can work the
+    investigation flow); analyst never satisfies admin.
     """
     def _dependency(request: Request) -> None:
         if not (session_mode() or proxy_mode()):
@@ -467,7 +530,11 @@ def require_role(role: str):
         actor = resolve_actor(request)
         if actor.kind == "anonymous":
             raise HTTPException(status_code=401, detail="Authentication required")
-        if actor.role != role:
-            raise HTTPException(status_code=403, detail="Insufficient role")
+        if actor.role == role:
+            return
+        # Admin inherits analyst (SEC-02 hierarchy); nothing else upgrades.
+        if role == "analyst" and actor.role == "admin":
+            return
+        raise HTTPException(status_code=403, detail="Insufficient role")
 
     return _dependency

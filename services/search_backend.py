@@ -15,10 +15,11 @@ Choose with the ``SEARCH_BACKEND`` environment variable::
     SEARCH_BACKEND=mock    (default; no credentials, fully deterministic)
     SEARCH_BACKEND=splunk  (requires ``SPLUNK_URL`` + ``SPLUNK_TOKEN``)
 
-This module is the single public import surface: both backend classes and
-``SplunkSearchError`` are re-exported here, so existing imports keep working
-across the Phase 3 split. The factory lives here next to the pure
-job-outcome helpers (``map_search_outcome`` / ``summarize_search_rows``).
+This module is the single public import surface: both backend classes,
+``SplunkSearchError``, and the TLS posture helper ``tls_settings`` are
+re-exported here, so existing imports keep working across the Phase 3 split.
+The factory lives here next to the pure job-outcome helpers
+(``map_search_outcome`` / ``summarize_search_rows``).
 
 Normalized event rows match the ``SplunkEvent`` model columns so callers
 can persist results directly: ``source``, ``sourcetype``, ``host``,
@@ -32,6 +33,7 @@ from services.splunk_mock_backend import MockSplunkBackend  # noqa: F401 (re-exp
 from services.splunk_mock_backend import _parse_offset  # noqa: F401 (re-export)
 from services.splunk_real_backend import RealSplunkBackend  # noqa: F401 (re-export)
 from services.splunk_real_backend import SplunkSearchError  # noqa: F401 (re-export)
+from services.splunk_real_backend import tls_settings  # noqa: F401 (re-export)
 
 __all__ = [
     "MockSplunkBackend",
@@ -40,6 +42,7 @@ __all__ = [
     "get_search_backend",
     "map_search_outcome",
     "summarize_search_rows",
+    "tls_settings",
 ]
 
 
@@ -90,7 +93,13 @@ def summarize_search_rows(
         if raw:
             lines.append(str(raw))
         else:
-            lines.append(" ".join(f"{k}={v}" for k, v in row.items() if not k.startswith("_")))
+            # Skip the empty shape-defaults (`source=`, `sourcetype=` ...) so an
+            # aggregate row reads `count=2 parent_process=WINWORD.EXE` rather
+            # than a wall of blank fields the model has to see through.
+            lines.append(" ".join(
+                f"{k}={v}" for k, v in row.items()
+                if not k.startswith("_") and v not in ("", None)
+            ))
     if len(rows) > max_rows:
         lines.append(f"... {len(rows) - max_rows} more row(s) omitted.")
 

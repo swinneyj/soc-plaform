@@ -1,0 +1,48 @@
+# k8s/netpol-llm-zero-egress.yaml — K8S-02: local inference zero-egress.
+#
+# The local inference pod (vllm/ollama) must never reach the public internet:
+# model weights and prompts stay in-cluster. PolicyTypes Ingress+Egress,
+# ingress ONLY from soc-api pods, egress ONLY to cluster DNS (UDP/TCP 53 to
+# kube-system) — no 0.0.0.0/0. Remove the DNS egress rule only if CoreDNS is
+# bypassed via cluster-local service IPs (still add an explicit allow).
+#
+# Pod label contract: inference Deployments label pods `app: soc-llm`
+# (covers both `vllm` and `ollama` images — one policy, no per-image dupes).
+#
+# Verification: structural tests in tests/test_k8s_security.py;
+# kubeconform -strict 2026-10-26: VALID (this file's 1 resource).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: soc-llm-zero-egress
+  labels:
+    app: soc-llm
+spec:
+  podSelector:
+    matchLabels:
+      app: soc-llm
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: soc-api
+      ports:
+        - protocol: TCP
+          port: 11434
+  egress:
+    # Cluster DNS only (CoreDNS in kube-system). No other egress.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

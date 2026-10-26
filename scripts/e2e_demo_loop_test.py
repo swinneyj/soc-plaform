@@ -36,6 +36,50 @@ def step(msg):
     print(f"\n=== {msg}", flush=True)
 
 
+# ---------------------------------------------------------------------------
+# Closure signals
+#
+# The payload contracts are: investigation state carries
+# `loop_status` (`ready_for_closure`) and `closure_blockers`; the readiness
+# endpoint carries `is_ready`, `warnings` and `blockers`. There is no boolean
+# `ready_for_closure` field, no `eligible`, and no `active_blockers` — reading
+# any of those reported failure on a perfectly healthy loop.
+# ---------------------------------------------------------------------------
+
+def closure_checks(state, readiness):
+    """Return `[(name, ok, detail)]` for the closure-related signals.
+
+    Pure on purpose: a test pins the field names, because a wrong key here
+    looks identical to "the loop never closed".
+    """
+    state = state or {}
+    readiness = readiness if isinstance(readiness, dict) else {}
+    has_readiness = bool(readiness)
+    loop_status = str(state.get("loop_status") or "").strip().lower()
+    blockers = list(state.get("closure_blockers") or readiness.get("blockers") or [])
+    warnings = list(readiness.get("warnings") or [])
+    return [
+        (
+            "ready_for_closure_flag",
+            loop_status == "ready_for_closure",
+            f"loop_status={loop_status or '(missing)'} blockers={len(blockers)}",
+        ),
+        (
+            "closure_gate_reachable",
+            bool(readiness.get("is_ready")),
+            f"is_ready={readiness.get('is_ready')} confidence={readiness.get('confidence')} "
+            f"warnings={len(warnings)}",
+        ),
+        (
+            "closure_warnings_clear",
+            # Absent readiness is a missing signal, not a clean bill of health.
+            has_readiness and not warnings,
+            "; ".join(str(warning) for warning in warnings)[:200]
+            or ("none" if has_readiness else "no readiness payload"),
+        ),
+    ]
+
+
 def main():
     results = {"pass": [], "fail": []}
 
@@ -99,7 +143,16 @@ def main():
     text = analysis.get("analysis") or analysis.get("result") or ""
     pq = analysis.get("phase2_queries") or analysis.get("phase_2_queries") or []
     check("initial_analysis", bool(text), f"{elapsed:.0f}s, {len(text)} chars")
-    check("phase2_queries_generated", len(pq) > 0, f"{len(pq)} queries")
+    # Cards are phase-gated by design (catalog phase_min; DB playbook per
+    # rule). The demo rule may own no phase-1 playbook, in which case [] is
+    # the correct endpoint behavior — pin the contract (list present) and
+    # require cards only when a playbook is available for rule+phase.
+    playbook = analysis.get("supportive_playbook_available")
+    if playbook:
+        check("phase2_queries_generated", len(pq) > 0, f"{len(pq)} queries")
+    else:
+        check("phase2_queries_generated", isinstance(pq, list),
+              "no phase-1 playbook for this rule (by design), list present")
     for q in pq[:4]:
         print("   -", (q.get("title") or "?")[:70])
     state0 = analysis.get("investigation_state") or {}
@@ -180,9 +233,9 @@ def main():
     elapsed = time.time() - t0
     state = follow.get("investigation_state") or {}
     summary = state.get("evidence_summary") or {}
-    conf = state.get("confidence")
+    conf = state.get("disposition_confidence")
     disposition = state.get("provisional_disposition") or state.get("disposition")
-    blockers = summary.get("active_blockers") or state.get("active_blockers") or []
+    blockers = state.get("closure_blockers") or []
     unresolved = summary.get("unresolved_questions") or state.get("unresolved_questions") or []
     resolved = summary.get("resolved_questions") or state.get("resolved_questions") or []
     check("follow_up_analysis", True, f"{elapsed:.0f}s")
@@ -192,15 +245,13 @@ def main():
         print("   resolved:", r[:80])
     check("resolution_durable", len(resolved) >= 2, f"{len(resolved)} resolved questions")
     check("no_unresolved_blockers", len(unresolved) == 0 and len(blockers) == 0, f"unresolved={len(unresolved)} blockers={len(blockers)}")
-    rfc = state.get("ready_for_closure")
-    check("ready_for_closure_flag", rfc is True, f"ready_for_closure={rfc}")
 
     # 7. Closure readiness endpoint
     step("6. Closure readiness check")
     readiness = call("GET", f"/api/db/triage/{case_id}/closure-readiness", timeout=30)
     print("  readiness:", json.dumps(readiness)[:400])
-    ready = readiness.get("ready_for_closure", readiness.get("eligible", False)) if isinstance(readiness, dict) else False
-    check("closure_gate_reachable", bool(ready), json.dumps(readiness)[:200] if isinstance(readiness, dict) else "?")
+    for name, ok, detail in closure_checks(state, readiness):
+        check(name, ok, detail)
 
     # 8. Closure note
     step("7. Generate closure note")
@@ -223,7 +274,11 @@ def main():
         call("POST", f"/api/db/notables/{event['id']}/delete", timeout=30)
         check("cleanup_notable", True, f"event_id={event['id']}")
     except Exception as ex:
-        check("cleanup_notable", False, str(ex)[:120])
+        # Case delete purges the open working notable by design (so the same
+        # paste can be re-added cleanly) — a 404 here means already purged.
+        already_gone = "404" in str(ex)[:120]
+        check("cleanup_notable", already_gone,
+              ("already purged with case delete" if already_gone else str(ex)[:120]))
 
     # Verdict
     step("RESULT")

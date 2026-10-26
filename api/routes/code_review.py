@@ -8,7 +8,8 @@ import sys
 import zipfile
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from api.auth import require_role
 
 from api import deps
 from api.helpers.errors import InternalError, raise_internal
@@ -216,7 +217,7 @@ def _extract_code_sections(code_snippet: str, language: str) -> List[Dict[str, A
 
 
 
-@router.post("/api/code-review/fix", tags=["AI Analysis"])
+@router.post("/api/code-review/fix", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 def fix_code(payload: dict):
     # Generate fixed/improved version of code based on review.
     try:
@@ -258,7 +259,7 @@ def fix_code(payload: dict):
         raise_internal(e, context="code-review")
 
 
-@router.post("/api/code-review", tags=["AI Analysis"])
+@router.post("/api/code-review", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 def code_review(payload: dict):
     # Review code using local Ollama model and store results in database.
 
@@ -346,7 +347,7 @@ def code_review(payload: dict):
         raise_internal(e, context="code-review")
 
 
-@router.post("/api/code-review/sections", tags=["AI Analysis"])
+@router.post("/api/code-review/sections", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 def code_review_sections(payload: dict):
     # Detect functions/classes/sections in a code snippet.
     # This is a lightweight helper for the Code Review UI and does not
@@ -372,7 +373,7 @@ def code_review_sections(payload: dict):
         raise_internal(e, context="code-review")
 
 
-@router.post("/api/code-review/zip", tags=["AI Analysis"])
+@router.post("/api/code-review/zip", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 async def code_review_zip(
     file: UploadFile = File(...),
     language: str = Query("python"),
@@ -479,7 +480,7 @@ async def code_review_zip(
         raise_internal(e, context="code-review")
 
 
-@router.get("/api/code-reviews", tags=["AI Analysis"])
+@router.get("/api/code-reviews", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
     # List recent code reviews from database.
     try:
@@ -507,7 +508,7 @@ def list_code_reviews(limit: int = Query(20, ge=1, le=100)):
         raise_internal(e, context="code-review")
 
 
-@router.get("/api/code-reviews/{review_id}", tags=["AI Analysis"])
+@router.get("/api/code-reviews/{review_id}", tags=["AI Analysis"], dependencies=[Depends(require_role("analyst"))])
 def get_code_review(review_id: int):
     # Get a specific code review by ID.
     try:

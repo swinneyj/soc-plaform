@@ -7,7 +7,8 @@ operator-supplied values are advisory/audited only (plan §6).
 import re
 import sys
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import require_role
 
 from api import deps
 from api.helpers.errors import raise_internal
@@ -48,7 +49,7 @@ def classify_blocker_actions(blockers):
     return actions
 
 
-@router.get("/api/db/triage/{case_id}/closure-readiness", tags=["Rules"])
+@router.get("/api/db/triage/{case_id}/closure-readiness", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def check_closure_readiness(case_id: str):
     """Evaluate whether a case satisfies all investigation gating rules for closure."""
     try:
@@ -69,7 +70,7 @@ def check_closure_readiness(case_id: str):
         raise_internal(e, context="closure")
 
 
-@router.post("/api/db/closure-note", tags=["Rules"])
+@router.post("/api/db/closure-note", tags=["Rules"], dependencies=[Depends(require_role("analyst"))])
 def generate_closure_note(request: dict):
     """Generate an operator-ready structured closure note backed by investigation state and evidence.
 

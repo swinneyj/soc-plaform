@@ -70,6 +70,18 @@ if [ -f scripts/check_requirement_markers.py ]; then
   fi
 fi
 
+# SBOM drift gate (mirrors the CI step): the committed docs/SBOM.json must
+# still mirror the pins this interpreter selects, plus the UI's CDN versions.
+if [ -f scripts/check_sbom_pins.py ] && [ -n "${REQ_PY:-}" ]; then
+  echo "── SBOM drift check ──"
+  if ! "$REQ_PY" scripts/check_sbom_pins.py; then
+    echo ""
+    echo "❌ docs/SBOM.json drifted from the pins — push BLOCKED."
+    echo "   Regenerate with scripts/sbom, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
 # Syntax compile gate (mirrors the CI "Syntax compile gate" step): every
 # api/services/db module must at least compile, so a merge-broken file that no
 # test imports cannot slip through a green suite. Compile only — nothing runs.

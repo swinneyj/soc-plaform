@@ -201,12 +201,14 @@ def test_bare_ip_entry_matches_that_peer_only(db, proxy):
 # ---------------------------------------------------------------------------
 
 def test_proxy_actor_carries_role_analyst_forbidden_on_admin_route(db, proxy):
-    resp = _client().get("/api/tools", headers={HEADER: str(ANALYST_ID)})
+    # SEC-02 Q3: GET /api/tools is analyst (relaxed), so use a still-admin
+    # route for the negative control.
+    resp = _client().get("/api/registry", headers={HEADER: str(ANALYST_ID)})
     assert resp.status_code == 403
 
 
 def test_proxy_actor_carries_role_admin_allowed_on_admin_route(db, proxy):
-    resp = _client().get("/api/tools", headers={HEADER: str(ADMIN_ID)})
+    resp = _client().get("/api/registry", headers={HEADER: str(ADMIN_ID)})
     assert resp.status_code == 200, resp.text
 
 
