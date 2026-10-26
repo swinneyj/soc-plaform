@@ -53,6 +53,7 @@
             <!-- Database -->
             <database-tab
                 v-if="currentTab === 'database'"
+                :is-admin="isAdmin"
                 :db-stats="dbStats"
                 :operations-stats="operationsStats"
                 :notable-paste-text="notablePasteText"
@@ -122,6 +123,7 @@
             <analysis-tab
                 v-if="currentTab === 'analysis'"
                 ref="analysisTabRef"
+                :is-admin="isAdmin"
                 :ollama-health="ollamaHealth"
                 :analysis-case-search="analysisCaseSearch"
                 :analysis-case-id="analysisCaseId"

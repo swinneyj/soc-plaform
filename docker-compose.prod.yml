@@ -1,0 +1,103 @@
+# Scenario C — Single-host production (Docker Compose / Podman on a hardened VM).
+#
+# Zero application code changes: the same image from Dockerfile runs here.
+# NetworkPolicy isolation is mirrored with internal bridge networks:
+#   - `llm` network is `internal: true` (the compose equivalent of the
+#     K8S-02 zero-egress policy): the inference container has no route out
+#     except to `api`, and publishes no ports.
+#   - `backend` is internal (api <-> postgres only).
+#   - only `api:8000` is published, behind the host reverse proxy / LB.
+# Disk encryption is host-level LUKS (verified on the VM, not in compose).
+#
+# Required env (export or a restricted .env.prod, mode 0600 — never commit):
+#   POSTGRES_PASSWORD, API_KEY, SOC_FIELD_KEY, DATABASE_URL
+#   (e.g. DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/soc_platform)
+# Optional: AUTH_MODE=proxy_header + SOC_PROXY_USER_HEADER when the host
+# proxy authenticates users (mirrors k8s/adapters ConfigMaps); default
+# session mode otherwise. SESSION_SECURE=1 when serving HTTPS.
+#
+# Validate without starting: docker compose -f docker-compose.prod.yml config
+# Start: docker compose -f docker-compose.prod.yml up -d --build
+#
+# Phase-4 note: the enterprise base-image swap (non-root UID,
+# readOnlyRootFilesystem, internal registry) happens in Dockerfile/k8s and
+# is picked up here automatically on rebuild — no compose changes needed.
+name: soc-platform-prod
+
+services:
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: soc_platform
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  llm:
+    # Local inference only. No published ports, no external network.
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    networks:
+      - llm
+    # Uncomment for NVIDIA GPUs: requires the NVIDIA container toolkit.
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  api:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
+      API_KEY: ${API_KEY:?API_KEY is required}
+      SOC_FIELD_KEY: ${SOC_FIELD_KEY:?SOC_FIELD_KEY is required}
+      AUTH_MODE: ${AUTH_MODE:-session}
+      SOC_PROXY_USER_HEADER: ${SOC_PROXY_USER_HEADER:-X-Auth-Request-User}
+      SOC_TRUSTED_PROXY_CIDRS: ${SOC_TRUSTED_PROXY_CIDRS:-10.0.0.0/8}
+      SESSION_SECURE: ${SESSION_SECURE:-1}
+      SOC_PORT: "8000"
+      OLLAMA_URL: http://llm:11434
+    ports:
+      - "8000:8000"
+    volumes:
+      - soc-data:/app/Data
+      - soc-backups:/app/local-backups
+    networks:
+      - frontend
+      - backend
+      - llm
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+networks:
+  frontend:
+  backend:
+    internal: true
+  llm:
+    internal: true
+
+volumes:
+  pgdata:
+  soc-data:
+  soc-backups:

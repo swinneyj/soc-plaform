@@ -1,0 +1,45 @@
+# Scenario A — Managed Cloud Kubernetes (EKS / GKE / AKS).
+#
+# Zero application code changes. Two deltas over the base manifests:
+#   1. PostgreSQL binds the cloud KMS-encrypted StorageClass below instead
+#      of `soc-encrypted`.
+#   2. The API runs behind the enterprise proxy in AUTH_MODE=proxy_header
+#      (ConfigMap below), with header trust already enforced by
+#      netpol-api-ingress + the Ingress strip snippet (HIGH-02/HIGH-03).
+#
+# Bind (run from the repo root, after editing the provisioner for your cloud):
+#   kubectl apply -f k8s/adapters/scenario-a-managed-cloud.yaml
+#   kubectl patch statefulset soc-postgres \
+#     --type=json -p='[{"op":"replace","path":"/spec/volumeClaimTemplates/0/spec/storageClassName","value":"cloud-kms-encrypted"}]'
+#   kubectl patch deployment soc-api --type=json -p='[ \
+#     {"op":"add","path":"/spec/template/spec/containers/0/envFrom","value":[{"configMapRef":{"name":"soc-api-config"}}]}]'
+#
+# Provisioner per cloud (edit `provisioner:` + `parameters:` below):
+#   AWS EKS (default here): ebs.csi.aws.com, parameters {type: gp3, encrypted: "true"}
+#   GKE: pd.csi.storage.gke.io, parameters {type: pd-ssd} + CMEK via
+#        `gce-pd-csi-driver` disk-encryption-kms-key (see GKE docs).
+#   AKS: disk.csi.azure.com, parameters {skuname: Premium_LRS} + DiskEncryptionSetID.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: cloud-kms-encrypted
+provisioner: ebs.csi.aws.com
+reclaimPolicy: Retain
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  encrypted: "true"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soc-api-config
+  labels:
+    app: soc-api
+data:
+  AUTH_MODE: proxy_header
+  SOC_PROXY_USER_HEADER: X-Auth-Request-User
+  SOC_TRUSTED_PROXY_CIDRS: 10.0.0.0/8
+  SESSION_SECURE: "1"
+  RATE_LIMIT_PER_MIN: "30"

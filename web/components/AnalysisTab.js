@@ -60,7 +60,10 @@ window.AnalysisTab = {
         'buildLoopTimelineFn',
         'formatLoopStatusFn',
         'formatDispositionLabelFn',
-        'formatFindingLabelFn'
+        'formatFindingLabelFn',
+        // HIGH-01/Phase 2.3: destructive deletes require admin; analysts get
+        // a disabled button instead of a 403 surprise.
+        'isAdmin'
     ],
     emits: [
         'update:analysis-case-search',
@@ -1010,14 +1013,18 @@ window.AnalysisTab = {
                     <button
                         v-if="someEvidenceSelected"
                         type="button"
-                        class="text-[11px] px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100 font-semibold"
+                        class="text-[11px] px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100 font-semibold disabled:opacity-50"
+                        :disabled="isAdmin === false"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         @click="emitDeleteSelectedEvidence"
                     >
                         Delete Selected ({{ selectedEvidenceCount }})
                     </button>
                     <button
                         type="button"
-                        class="text-[11px] px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200 font-semibold"
+                        class="text-[11px] px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200 font-semibold disabled:opacity-50"
+                        :disabled="isAdmin === false"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         @click="emitDeleteAllEvidence"
                     >
                         Delete All
@@ -1077,8 +1084,9 @@ window.AnalysisTab = {
                                 </div>
                                 <button
                                     type="button"
-                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold"
-                                    title="Delete this evidence item"
+                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold disabled:opacity-50"
+                                    :disabled="isAdmin === false"
+                                    :title="isAdmin === false ? 'Requires an admin account' : 'Delete this evidence item'"
                                     @click.stop="$emit('delete-evidence', item)"
                                 >
                                     ×
@@ -1656,7 +1664,7 @@ window.AnalysisTab = {
                     </div>
                     <div class="flex gap-2">
                         <button type="button" class="text-xs text-blue-300" @click="$emit('edit-placeholder-alias', alias)">Edit</button>
-                        <button type="button" class="text-xs text-red-300" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button>
+                        <button type="button" class="text-xs text-red-300 disabled:opacity-50" :disabled="isAdmin === false" :title="isAdmin === false ? 'Requires an admin account' : ''" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button>
                     </div>
                 </div>
                 <p v-if="!placeholderAliasList || !placeholderAliasList.length" class="text-xs text-gray-500">No aliases saved yet.</p>

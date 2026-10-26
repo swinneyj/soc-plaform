@@ -29,7 +29,10 @@ window.DatabaseTab = {
         'evidenceLedgerItems',
         'evidenceLedgerLoading',
         'evidenceLedgerError',
-        'evidenceLedgerBusyId'
+        'evidenceLedgerBusyId',
+        // HIGH-01/Phase 2.3: destructive deletes require admin; analysts get
+        // a disabled button instead of a 403 surprise.
+        'isAdmin'
     ],
     emits: [
         'change-tab',
@@ -417,7 +420,8 @@ window.DatabaseTab = {
                             </label>
                             <button
                                 @click="$emit('delete-selected-pasted-notables')"
-                                :disabled="!selectedNotableIds || !selectedNotableIds.length"
+                                :disabled="isAdmin === false || !selectedNotableIds || !selectedNotableIds.length"
+                                :title="isAdmin === false ? 'Requires an admin account' : ''"
                                 class="px-3 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
                                 Delete selected
                             </button>
@@ -475,9 +479,9 @@ window.DatabaseTab = {
                                     </div>
                                     <button
                                         @click="$emit('delete-evidence-ledger-item', item)"
-                                        :disabled="evidenceLedgerBusyId === item.id"
+                                        :disabled="isAdmin === false || evidenceLedgerBusyId === item.id"
                                         class="flex-shrink-0 px-2 py-1 bg-red-900 hover:bg-red-800 disabled:bg-gray-700 rounded text-[11px] font-semibold text-red-100"
-                                        title="Delete this evidence item permanently"
+                                        :title="isAdmin === false ? 'Requires an admin account' : 'Delete this evidence item permanently'"
                                     >{{ evidenceLedgerBusyId === item.id ? '…' : 'Delete' }}</button>
                                 </div>
                                 <pre class="mt-2 whitespace-pre-wrap bg-black/40 rounded p-2 max-h-24 overflow-y-auto text-gray-300 font-mono">{{ ledgerResultPreview(item) }}</pre>
@@ -519,8 +523,9 @@ window.DatabaseTab = {
                             <div class="text-right text-xs text-gray-400">
                                 <button
                                     @click="$emit('delete-pasted-notable', notable)"
-                                    class="text-gray-500 hover:text-red-400 mb-1 ml-2"
-                                    title="Remove this pasted notable from the recent list">
+                                    class="text-gray-500 hover:text-red-400 mb-1 ml-2 disabled:opacity-50"
+                                    :disabled="isAdmin === false"
+                                    :title="isAdmin === false ? 'Requires an admin account' : 'Remove this pasted notable from the recent list'">
                                     ✕
                                 </button>
                                 <p>{{ notable.urgency || 'n/a' }} urgency</p>
@@ -613,7 +618,7 @@ window.DatabaseTab = {
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
                         <button @click="toggleSelectAllClosedNotables" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Select All</button>
-                        <button @click="$emit('delete-selected-closed-notables', selectedClosedNotableIds)" :disabled="!selectedClosedNotableIds.length" class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">Delete Selected</button>
+                        <button @click="$emit('delete-selected-closed-notables', selectedClosedNotableIds)" :disabled="isAdmin === false || !selectedClosedNotableIds.length" :title="isAdmin === false ? 'Requires an admin account' : ''" class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">Delete Selected</button>
                         <button v-if="selectedClosedNotableIds.length" @click="selectedClosedNotableIds = []" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
                         <button v-if="Object.values(closedNotableFilters).some(Boolean)" @click="clearClosedNotableFilters" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Filters</button>
                     </div>
@@ -688,8 +693,9 @@ window.DatabaseTab = {
                                 <td class="px-2 py-1 align-top">
                                     <button
                                         @click.stop="$emit('delete-closed-notable', item)"
-                                        class="px-2 py-1 bg-red-700 hover:bg-red-800 rounded text-[11px] font-semibold"
-                                        title="Delete this closed notable from summaries"
+                                        class="px-2 py-1 bg-red-700 hover:bg-red-800 rounded text-[11px] font-semibold disabled:opacity-50"
+                                        :disabled="isAdmin === false"
+                                        :title="isAdmin === false ? 'Requires an admin account' : 'Delete this closed notable from summaries'"
                                     >
                                         Delete
                                     </button>
@@ -773,7 +779,8 @@ window.DatabaseTab = {
                     <button v-if="selectedTriageCaseIds && selectedTriageCaseIds.length" @click="$emit('update:selected-triage-case-ids', [])" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
                     <button
                         @click="$emit('delete-selected-triage-cases')"
-                        :disabled="!selectedTriageCaseIds || !selectedTriageCaseIds.length"
+                        :disabled="isAdmin === false || !selectedTriageCaseIds || !selectedTriageCaseIds.length"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
                         Delete Selected
                     </button>
@@ -841,7 +848,9 @@ window.DatabaseTab = {
                         </button>
                         <button
                             @click="$emit('delete-triage-case', case_)"
-                            class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold transition">
+                            :disabled="isAdmin === false"
+                            :title="isAdmin === false ? 'Requires an admin account' : ''"
+                            class="px-3 py-1 bg-red-700 hover:bg-red-800 disabled:opacity-50 rounded text-xs font-semibold transition">
                             Delete case
                         </button>
                     </div>
