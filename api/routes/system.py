@@ -23,27 +23,27 @@ def health():
 
 @router.get("/api/health", tags=["System"])
 def api_health():
-    """OPS-01: liveness + real PostgreSQL probe (fast SELECT 1, short timeout).
+    """OPS-01: liveness + database probe (SELECT 1 via SessionLocal).
 
     200 {"status": "healthy", "db": "connected"} when reachable;
     503 {"status": "unhealthy", "db": "disconnected"} when not.
     Never leaks driver errors (500 scrubber would also catch, but be explicit).
+
+    Uses SessionLocal (not a fresh engine from db.target.resolve) so the
+    pytest suite stays hermetic: conftest repoints SessionLocal at
+    in-memory SQLite, and this probe follows it. In production SessionLocal
+    is bound to Postgres, so this still probes the real database.
     """
     from fastapi.responses import JSONResponse
     try:
         from sqlalchemy import text as _text
-        from db.models import create_database_engine
-        from db.target import resolve as _resolve
-        url, _, _ = _resolve()
-        # Short-timeout probe engine: do not reuse the pool (health must fail
-        # fast when the DB is gone, not hang on a stale checkout).
-        engine = create_database_engine(url, connect_args={"connect_timeout": 2}) if "sqlite" not in url else create_database_engine(url)
+        from db.models import SessionLocal as _SessionLocal
+        db = _SessionLocal()
         try:
-            with engine.connect() as conn:
-                conn.execute(_text("SELECT 1"))
+            db.execute(_text("SELECT 1"))
         finally:
             try:
-                engine.dispose()
+                db.close()
             except Exception:
                 pass
         return {"status": "healthy", "db": "connected", "timestamp": _utcnow().isoformat()}

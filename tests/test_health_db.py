@@ -24,8 +24,8 @@ def test_api_health_503_when_db_unreachable(monkeypatch):
     def _boom(*args, **kwargs):
         raise ConnectionError("db down")
 
-    monkeypatch.setattr(db_models, "create_database_engine", _boom)
-    # api/routes/system.py imports create_database_engine inside the handler
+    monkeypatch.setattr(db_models, "SessionLocal", _boom)
+    # api/routes/system.py imports SessionLocal inside the handler
     # from db.models, so patching the attribute is enough.
     client = TestClient(api_main.app)
     resp = client.get("/api/health")
