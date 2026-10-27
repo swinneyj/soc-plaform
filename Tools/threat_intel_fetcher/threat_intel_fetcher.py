@@ -215,10 +215,17 @@ def main():
         pass
     # --- AUTO-OPEN REPORT ---
     try:
+        # report_path is generated above (fixed name + timestamp under
+        # Data/Reports); containment + existence checked before opening.
+        safe_report = os.path.abspath(report_path)
+        if os.path.commonpath([safe_report, os.path.abspath(output_dir)]) != os.path.abspath(output_dir):
+            raise ValueError("report path escapes the reports directory")
+        if not os.path.isfile(safe_report):
+            raise ValueError("report file does not exist: %r" % (report_path,))
         if os.name == 'nt':
-            os.startfile(report_path)
+            os.startfile(safe_report)
         else:
-            subprocess.run(['xdg-open', report_path])
+            subprocess.run(['xdg-open', safe_report])
         if not args.silent:
             print(f"  [+] Automatically opened report: {os.path.basename(report_path)}")
     except Exception as e:

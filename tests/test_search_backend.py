@@ -1123,12 +1123,12 @@ def test_search_one_route_guardrail_times_out_a_slow_search(db_client, tmp_path,
 
 
 # ---------------------------------------------------------------------------
-# TLS trust path: SPLUNK_CA_BUNDLE (preferred) / SPLUNK_VERIFY_TLS (loud opt-out)
+# TLS trust path: SPLUNK_CA_BUNDLE pinning; verification unconditional.
 #
 # Splunk management ports (8089) commonly serve an internal/self-signed cert.
 # The rule this section pins down: trust can be *widened* for this one
-# connection, and verification is on unless an operator says otherwise — an
-# opt-out is never global and never silent.
+# connection via a bundle, and verification is never disabled — a disable
+# request (SPLUNK_VERIFY_TLS=false / verify_tls=False) is refused loudly.
 # ---------------------------------------------------------------------------
 
 def _clear_tls_env(monkeypatch):
@@ -1157,19 +1157,28 @@ def test_missing_ca_bundle_fails_at_construction(monkeypatch, tmp_path):
         _real_backend(FakeSplunkSession(FakeSplunkResponse("_time\n")))
 
 
-def test_verify_tls_false_disables_verification_per_connection(monkeypatch):
+def test_verify_tls_false_is_refused(monkeypatch):
+    """A disable request raises instead of returning verify=False."""
     _clear_tls_env(monkeypatch)
     monkeypatch.setenv("SPLUNK_VERIFY_TLS", "false")
 
     session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
-    backend = _real_backend(session)
-    backend.search("sourcetype=linux_secure")
+    with pytest.raises(SplunkSearchError, match="cannot be disabled"):
+        _real_backend(session)
+    assert session.calls == []
 
-    assert session.calls[0]["verify"] is False
+
+def test_verify_tls_false_arg_is_refused(monkeypatch):
+    _clear_tls_env(monkeypatch)
+    session = FakeSplunkSession(FakeSplunkResponse("_time,raw\n"))
+    with pytest.raises(SplunkSearchError, match="cannot be disabled"):
+        _real_backend(session, verify_tls=False)
+    assert session.calls == []
 
 
 def test_ca_bundle_wins_over_verify_tls_false(monkeypatch, tmp_path):
-    """Contradictory config resolves toward verification, never away from it."""
+    """A bundle verifies against the bundle; the disable request is refused
+    as noise (warned, not honored) rather than breaking the pinned path."""
     _clear_tls_env(monkeypatch)
     bundle = tmp_path / "splunk-ca.pem"
     bundle.write_text("-----BEGIN CERTIFICATE-----\n", encoding="utf-8")
@@ -1214,8 +1223,9 @@ def test_tls_settings_reports_posture(monkeypatch, tmp_path):
     monkeypatch.delenv("SPLUNK_CA_BUNDLE")
     monkeypatch.setenv("SPLUNK_VERIFY_TLS", "0")
     setting = tls_settings()
-    assert setting["verify"] is False
-    assert setting["verification_disabled"] is True
+    assert setting["verify"] is True
+    assert setting["verification_disabled"] is False
+    assert "no longer honors" in setting["problem"]
 
 
 def test_search_status_reports_tls_posture(monkeypatch, tmp_path):
@@ -1436,16 +1446,13 @@ def test_tls_handshake_succeeds_with_ca_bundle(tls_splunk, monkeypatch):
     assert rows[0]["host"].startswith("VPN-GW")
 
 
-def test_tls_handshake_succeeds_with_explicit_opt_out(tls_splunk, monkeypatch):
-    """The escape hatch still works when there is no bundle to pin."""
+def test_tls_handshake_refuses_explicit_opt_out(tls_splunk, monkeypatch):
+    """The former escape hatch now refuses before any handshake happens."""
     _clear_tls_env(monkeypatch)
     monkeypatch.setenv("SPLUNK_VERIFY_TLS", "false")
 
-    backend = RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
-    rows = backend.search("sourcetype=linux_secure user=bjones", earliest="-7d")
-
-    assert backend._verify is False
-    assert len(rows) == 2
+    with pytest.raises(SplunkSearchError, match="cannot be disabled"):
+        RealSplunkBackend(base_url=tls_splunk.base_url, token="fixture-token", timeout=10)
 
 
 def test_saved_searches_over_tls_with_ca_bundle(tls_splunk, monkeypatch):

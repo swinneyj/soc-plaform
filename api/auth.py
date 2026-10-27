@@ -99,40 +99,24 @@ def request_has_api_key(request) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Password hashing — stdlib KDF only (SESSION_AUTH_PLAN.md §4, Piece A).
-# Preferred scheme is scrypt; some Python 3.9 builds lack OpenSSL scrypt
-# support, so hash_password falls back to PBKDF2-HMAC-SHA256 (600k iterations,
-# OWASP-recommended). verify_password dispatches on the stored scheme prefix,
-# so hashes remain verifiable across runtimes.
+# Password hashing — PBKDF2-HMAC-SHA256 only (FIPS 140-3 approved KDF;
+# scrypt is not FIPS-approved and has no fallback path here). 600k
+# iterations per OWASP Password Storage. 16-byte random salt per password.
+#
+# Encoding: `pbkdf2$iterations$salthex$hashhex`. Legacy `scrypt$…` hashes
+# (pre-FIPS scheme) fail closed in verify_password — affected accounts
+# must reset via scripts/manage_users.py.
 # ---------------------------------------------------------------------------
 
-_SCRYPT_N = 2 ** 14
-_SCRYPT_R = 8
-_SCRYPT_P = 1
-_SCRYPT_DKLEN = 32
 _PBKDF2_ITERATIONS = 600_000
+_PBKDF2_DKLEN = 32
 
 
 def hash_password(password: str) -> str:
-    """Hash a password with scrypt when available, else PBKDF2-SHA256.
-
-    MED-04: scrypt (N=16384, r=8, p=1) is a salted, adaptive, memory-hard
-    KDF (NIST SP 800-63B §5.1.1.2, OWASP Password Storage compliant) —
-    the stdlib-only equivalent of bcrypt/argon2id for this platform (no
-    extra dependency, no C extension). 16-byte random salt per password;
-    PBKDF2-HMAC-SHA256/600k is the fallback where OpenSSL lacks scrypt.
-
-    Encodings: `scrypt$n$r$p$salthex$hashhex` or `pbkdf2$iterations$salthex$hashhex`.
-    """
+    """Hash a password with PBKDF2-HMAC-SHA256 (600k iterations)."""
     salt = secrets.token_bytes(16)
-    if hasattr(hashlib, "scrypt"):
-        digest = hashlib.scrypt(
-            password.encode("utf-8"), salt=salt,
-            n=_SCRYPT_N, r=_SCRYPT_R, p=_SCRYPT_P, dklen=_SCRYPT_DKLEN,
-        )
-        return "scrypt$%d$%d$%d$%s$%s" % (_SCRYPT_N, _SCRYPT_R, _SCRYPT_P, salt.hex(), digest.hex())
     digest = hashlib.pbkdf2_hmac(
-        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS, dklen=_SCRYPT_DKLEN,
+        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS, dklen=_PBKDF2_DKLEN,
     )
     return "pbkdf2$%d$%s$%s" % (_PBKDF2_ITERATIONS, salt.hex(), digest.hex())
 
@@ -140,19 +124,11 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, encoded: str) -> bool:
     """Constant-time check of a password against a hash_password() encoding.
 
-    Dispatches on the scheme prefix so scrypt- and pbkdf2-encoded hashes can
-    coexist (e.g. after a runtime switch). A scrypt hash presented to a
-    runtime without scrypt fails closed (False), not error.
+    PBKDF2 only. Anything else (including legacy `scrypt$…` hashes)
+    fails closed (False), never errors.
     """
     try:
         parts = encoded.split("$")
-        if parts[0] == "scrypt" and len(parts) == 6 and hasattr(hashlib, "scrypt"):
-            _, n, r, p, salthex, hashhex = parts
-            digest = hashlib.scrypt(
-                password.encode("utf-8"), salt=bytes.fromhex(salthex),
-                n=int(n), r=int(r), p=int(p), dklen=len(bytes.fromhex(hashhex)),
-            )
-            return hmac.compare_digest(digest.hex(), hashhex)
         if parts[0] == "pbkdf2" and len(parts) == 4:
             _, iters, salthex, hashhex = parts
             digest = hashlib.pbkdf2_hmac(

@@ -11,7 +11,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 tools_dir = os.path.abspath(os.path.join(current_dir, '..'))
 sys.path.append(tools_dir)
 
-from core_lib.utils import Colors, clear_screen, get_platform_root
+from core_lib.utils import Colors, clear_screen, get_platform_root, validated_tool_target
 
 
 def load_skills(kb_dir):
@@ -148,7 +148,8 @@ def main():
             if skill:
                 try:
                     print(f"\n{Colors.WARNING}[*] Opening {skill['file']} in Notepad...{Colors.ENDC}")
-                    subprocess.Popen(['notepad.exe', skill['path']])
+                    safe_skill = validated_tool_target(skill['path'], allowed_exts=('.md', '.txt'))
+                    subprocess.Popen(['notepad.exe', safe_skill])
                 except Exception as e:
                     print(f"{Colors.FAIL}[!] Failed to open skill file: {e}{Colors.ENDC}")
                 input(f"\n{Colors.BLUE}Press Enter to return to Skill Browser...{Colors.ENDC}")

@@ -392,9 +392,9 @@ def splunk_search_status():
             "splunk_url_configured": url_configured,
             "splunk_token_configured": token_configured,
         },
-        # Booleans only. `verify: false` is the loud opt-out (see
-        # SPLUNK_VERIFY_TLS); `ca_bundle_configured` means trust is widened
-        # for this connection via SPLUNK_CA_BUNDLE, not disabled.
+        # Booleans only. `verify` is always true (a disable request is
+        # refused, surfaced via `problem`); `ca_bundle_configured` means
+        # trust is widened for this connection via SPLUNK_CA_BUNDLE.
         "tls": {
             "verify": tls["verify"],
             "verification_disabled": tls["verification_disabled"],

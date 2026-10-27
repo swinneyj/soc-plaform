@@ -66,6 +66,43 @@ def get_archive_dir():
     """Returns the platform Archive directory, creating it when possible."""
     return _ensure_dir(os.path.join(get_platform_root(), "Archive"))
 
+_TOOL_TARGET_EXTS = (".py", ".ps1")
+
+
+def validated_tool_target(path, allowed_exts=_TOOL_TARGET_EXTS):
+    """Resolve a helper-script/file target for subprocess execution (shell=False).
+
+    The target must be a real file inside the platform tree with an allowed
+    extension (default: .py/.ps1 tools). Anything else — absolute escapes,
+    missing files, disallowed extensions — raises ValueError instead of
+    executing.
+    """
+    root = os.path.abspath(get_platform_root())
+    abs_path = os.path.abspath(path if os.path.isabs(path) else os.path.join(root, path))
+    if os.path.commonpath([abs_path, root]) != root:
+        raise ValueError("tool target escapes the platform tree: %r" % (path,))
+    if not os.path.isfile(abs_path):
+        raise ValueError("tool target is not a file: %r" % (path,))
+    if os.path.splitext(abs_path)[1].lower() not in tuple(allowed_exts):
+        raise ValueError("tool target has a disallowed extension: %r" % (path,))
+    return abs_path
+
+
+def validated_arg_list(args):
+    """Coerce subprocess args to a list of non-empty NUL-free strings.
+
+    With shell=False the shell cannot interpret metacharacters, but strict
+    typing here keeps a programming error (None, bytes, empty argv entries)
+    from becoming a confusing Popen failure — or worse, an argument
+    boundary surprise in a downstream tool's parser.
+    """
+    items = list(args or [])
+    for item in items:
+        if not isinstance(item, str) or not item or "\x00" in item:
+            raise ValueError("invalid subprocess argument: %r" % (item,))
+    return items
+
+
 def get_logs_dir():
     """Returns the platform Logs directory, creating it when possible."""
     return _ensure_dir(os.path.join(get_platform_root(), "Logs"))

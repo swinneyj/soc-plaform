@@ -21,13 +21,13 @@ Configuration (BWS/keychain-injected env, never stored in the DB):
                     certificate is signed by an internal/self-signed CA:
                     trust is widened for *this connection only*, never
                     disabled process-wide.
-  ``SPLUNK_VERIFY_TLS``  optional ``false``/``0``/``no`` escape hatch for a
-                    lab box whose certificate cannot be pinned. Verification
-                    is then off for this connector only, and the disabled
-                    state is logged and reported by /api/splunk/search-status
-                    so it cannot be an invisible decision.
+  ``SPLUNK_VERIFY_TLS``  no longer honored. A falsy value refuses loudly
+                    (constructor raises; /api/splunk/search-status reports a
+                    readiness problem) instead of disabling verification.
+                    Verification is unconditional.
 
-Precedence: a valid ``SPLUNK_CA_BUNDLE`` always wins (verification stays on).
+Precedence: a valid ``SPLUNK_CA_BUNDLE`` is the only trust widening
+(verification stays on, against the bundle).
 ``SPLUNK_VERIFY_TLS=false`` only applies when no bundle is configured, and
 emits a warning naming the risk.
 
@@ -46,7 +46,12 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("soc.splunk")
 
-_FALSY = ("0", "false", "no", "off")
+#: Values that count as an explicit request to disable TLS verification.
+#: There is no longer any code path that honors them — they are detected
+#: only so the connector can refuse loudly instead of silently verifying
+#: (which would mask a dangerous operator intent) or silently skipping
+#: verification (which would be worse).
+_TLS_DISABLE_VALUES = ("0", "false", "no", "off")
 
 
 class SplunkSearchError(RuntimeError):
@@ -57,13 +62,15 @@ def _env_ca_bundle() -> str:
     return (os.environ.get("SPLUNK_CA_BUNDLE") or "").strip()
 
 
-def _env_verify_disabled() -> bool:
+def _env_verify_disable_requested() -> bool:
     """True only on an explicit falsy ``SPLUNK_VERIFY_TLS``.
 
-    Unset or any other value means "verify" — TLS verification is opt-out,
-    never opt-in, so a typo cannot silently disable it.
+    Kept as a tripwire: the connector no longer honors a disable request —
+    callers raise instead. Detecting the request (rather than ignoring the
+    variable) keeps a stale ``SPLUNK_VERIFY_TLS=false`` deployment from
+    silently meaning something different than the operator intended.
     """
-    return (os.environ.get("SPLUNK_VERIFY_TLS") or "").strip().lower() in _FALSY
+    return (os.environ.get("SPLUNK_VERIFY_TLS") or "").strip().lower() in _TLS_DISABLE_VALUES
 
 
 def _check_ca_bundle(path: str) -> None:
@@ -169,8 +176,8 @@ def tls_settings() -> Dict[str, Any]:
     bundle = _env_ca_bundle()
     bundle_present = bool(bundle)
     bundle_ok = bundle_present and os.path.exists(bundle)
-    # A bundle implies verification; the opt-out is ignored while one is set.
-    disabled = _env_verify_disabled() and not bundle_present
+    # Verification is unconditional. A stale disable request is surfaced as
+    # a readiness problem, never honored.
 
     problem = ""
     warning = ""
@@ -205,9 +212,17 @@ def tls_settings() -> Dict[str, Any]:
                     "handshake starts failing."
                 )
 
+    disable_requested = _env_verify_disable_requested()
+    if disable_requested:
+        refusal = (
+            "SPLUNK_VERIFY_TLS requests disabling TLS verification, which "
+            "this connector no longer honors — verification is unconditional. "
+            "Unset SPLUNK_VERIFY_TLS (and use SPLUNK_CA_BUNDLE for private CAs)."
+        )
+        problem = (problem + " " + refusal).strip() if problem else refusal
     return {
-        "verify": not disabled,
-        "verification_disabled": disabled,
+        "verify": True,
+        "verification_disabled": False,
         "ca_bundle_configured": bundle_present,
         "ca_bundle_readable": bundle_ok,
         "ca_bundle_certificates": certificates,
@@ -263,33 +278,26 @@ class RealSplunkBackend:
     def _resolve_verify(ca_bundle: Optional[str], verify_tls: Optional[bool]) -> Any:
         """Turn the TLS env/args into the ``verify=`` value requests expects.
 
-        ``True`` (certifi default) or a CA bundle path. Deliberately never
-        returns a trust-store override that disables verification globally —
-        an opt-out affects only this connector instance.
+        ``True`` (system trust store) or a CA bundle path. Verification is
+        unconditional: ``verify_tls=False`` or a falsy ``SPLUNK_VERIFY_TLS``
+        raises instead of returning ``False``.
         """
         bundle = (ca_bundle if ca_bundle is not None else _env_ca_bundle()).strip()
         if bundle:
             _check_ca_bundle(bundle)
-            if verify_tls is False or _env_verify_disabled():
+            if verify_tls is False or _env_verify_disable_requested():
                 logger.warning(
-                    "Splunk TLS: SPLUNK_VERIFY_TLS=false ignored because "
+                    "Splunk TLS: a disable request is refused because "
                     "SPLUNK_CA_BUNDLE is set — verifying against the bundle."
                 )
             return bundle
-        disabled = (
-            verify_tls is False
-            if verify_tls is not None
-            else _env_verify_disabled()
-        )
-        if disabled:
-            logger.warning(
-                "Splunk TLS verification is DISABLED for %s. Any certificate "
-                "is accepted for this connector. Prefer SPLUNK_CA_BUNDLE "
-                "(pin the instance's CA) and report this state in the "
-                "security tracker.",
-                "the configured SPLUNK_URL",
+        if verify_tls is False or _env_verify_disable_requested():
+            raise SplunkSearchError(
+                "Splunk TLS verification cannot be disabled: verify_tls=False "
+                "or SPLUNK_VERIFY_TLS=false was requested, which this connector "
+                "refuses — verification is unconditional. Unset the variable "
+                "(and use SPLUNK_CA_BUNDLE for private CAs)."
             )
-            return False
         return True
 
     @classmethod

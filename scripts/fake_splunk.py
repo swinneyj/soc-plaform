@@ -28,7 +28,7 @@ Failure knobs (for rehearsing the live run's bad days):
   --delay SECONDS   sleep before answering, so the connector's timeout path
                     (and the route's per-run guardrail) can fire for real
   --tls-cert PEM    serve HTTPS with that certificate, so the connector's
-                    trust path (SPLUNK_CA_BUNDLE, SPLUNK_VERIFY_TLS) is
+                    trust path (SPLUNK_CA_BUNDLE pinning) is
                     exercised against a real handshake
 
 Every request is recorded on `server.requests` (method + path), so a test can
@@ -253,7 +253,7 @@ class FakeSplunkServer:
         # Append-only wire log: {"method", "path"} per request, in order.
         self._httpd.requests = []
         # Optional TLS: serve a supplied cert so the connector's trust path
-        # (SPLUNK_CA_BUNDLE / SPLUNK_VERIFY_TLS) can be exercised for real.
+        # (SPLUNK_CA_BUNDLE pinning) can be exercised for real.
         self._tls = bool(tls_cert)
         if self._tls:
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
