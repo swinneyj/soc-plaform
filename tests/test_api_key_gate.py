@@ -230,9 +230,11 @@ def session_client(monkeypatch):
     engine.dispose()
 
 
-def _make_user(db, username="alice", role="analyst", password="pw123"):
+def _make_user(db, username="alice", role="analyst", password=None):
     from db.models import User
 
+    if password is None:
+        password = "%s-test-password" % username
     user = User(username=username, role=role, password_hash=api_auth.hash_password(password))
     db.add(user)
     db.commit()
@@ -1266,8 +1268,10 @@ def actor_cache_isolated(monkeypatch):
     api_auth._actor_cache.clear()
 
 
-def _login(session_client, username="cache-user", password="pw123", role="analyst"):
+def _login(session_client, username="cache-user", password=None, role="analyst"):
     """Create a user, log in, and return (login response, cookie token)."""
+    if password is None:
+        password = "%s-test-password" % username
     db = session_client.test_session()
     _make_user(db, username=username, password=password, role=role)
     login = session_client.post(

@@ -64,7 +64,7 @@ def request(method, path, headers=None, body=None):
     for key, value in (headers or {}).items():
         req.add_header(key, value)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- host-local smoke prober (loopback BASE); paths are the static probe list in this file, headers are fixed test headers
             return resp.status, {k.lower(): v for k, v in resp.headers.items()}, resp.read().decode()
     except urllib.error.HTTPError as ex:
         return ex.code, {k.lower(): v for k, v in ex.headers.items()}, ex.read().decode()

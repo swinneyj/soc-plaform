@@ -534,7 +534,7 @@ const configuredApiUrl = apiOverride || window.SOC_PLATFORM_API_URL || '/api';
                         job.running = true;
                         Promise.resolve()
                             .then(() => job.run())
-                            .catch(err => console.error('poll[' + job.name + '] failed:', err))
+                            .catch(err => console.error('poll[' + job.name + '] failed:', err)) // nosemgrep: javascript.lang.security.audit.unsafe-formatstring.unsafe-formatstring -- job.name is an internal poller key, not attacker input; log-only sink
                             .finally(() => { job.running = false; });
                     }
                 }

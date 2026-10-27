@@ -438,6 +438,7 @@ def _csrf_ok(request, csrf_token: str) -> bool:
     """Double-submit check of the X-CSRF-Token header against the
     session's CSRF token."""
     header = request.headers.get("X-CSRF-Token")
+    # nosemgrep: python.django.security.nan-injection.nan-injection -- header is a str (or None); bool() on a string can never produce NaN, and the compare is constant-time
     return bool(header) and hmac.compare_digest(
         header.encode("utf-8"), csrf_token.encode("utf-8")
     )

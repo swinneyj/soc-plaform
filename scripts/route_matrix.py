@@ -137,7 +137,7 @@ def _route_objects():
 
     found = []
     for name in ROUTER_MODULES:
-        module = importlib.import_module("api.routes.%s" % name)
+        module = importlib.import_module("api.routes.%s" % name)  # nosemgrep: python.lang.security.audit.non-literal-import.non-literal-import -- name comes from the static ROUTER_MODULES allowlist in this file, never from input
         router = getattr(module, "router", None)
         for route in getattr(router, "routes", []) or []:
             path = getattr(route, "path", "")

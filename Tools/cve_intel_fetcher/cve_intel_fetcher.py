@@ -32,7 +32,7 @@ def fetch_cve_data(cve_id, silent=False):
     req = urllib.request.Request(url, headers={'User-Agent': 'SOC-Commander-IL5/1.0'})
     
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- cve_id is regex-validated ^CVE-\d{4}-\d{4,}$ above; host is the fixed NVD API
             data = json.loads(response.read().decode('utf-8'))
             
         vulnerabilities = data.get('vulnerabilities', [])

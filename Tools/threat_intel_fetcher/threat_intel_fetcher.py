@@ -23,7 +23,7 @@ def get_request(url):
         headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- every caller passes a hardcoded HTTPS feed URL (CISA KEV/urlhaus/Feodo/ThreatFox); no user input reaches the URL
             return response.read().decode('utf-8')
     except Exception as e:
         return f"Error: {e}"

@@ -19,6 +19,7 @@ CLI:
 
 from __future__ import annotations
 
+import re
 import sys
 from typing import List
 
@@ -44,6 +45,21 @@ def missing_tables(url: str) -> List[str]:
 COLUMN_MIN_WIDTHS = {
     ("auth_sessions", "csrf_token"): 255,
 }
+
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _sql_identifier(name: str, what: str) -> str:
+    """Allowlist one SQL identifier (table/column name) for interpolation.
+
+    DDL cannot take bound parameters for identifiers, so the ALTER below
+    must interpolate — but only values matching the language's own
+    identifier grammar, drawn from the static COLUMN_MIN_WIDTHS map above
+    (never from request input). Anything else raises instead of executing.
+    """
+    if not _SQL_IDENTIFIER_RE.match(name or ""):
+        raise ValueError(f"refusing to interpolate non-identifier {what}: {name!r}")
+    return name
 
 
 def narrow_columns(url: str) -> List[str]:
@@ -97,8 +113,13 @@ def ensure_column_widths(url: str) -> List[str]:
                 width = row[0]
                 if width is not None and width < minimum:
                     conn.execute(
-                        sa_text(
-                            "ALTER TABLE %s ALTER COLUMN %s TYPE varchar(%d)" % (table, column, minimum)
+                        sa_text(  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- identifiers pass _sql_identifier() allowlist from COLUMN_MIN_WIDTHS and minimum is int(); no outside input reaches the string
+                            "ALTER TABLE %s ALTER COLUMN %s TYPE varchar(%d)"
+                            % (
+                                _sql_identifier(table, "table"),
+                                _sql_identifier(column, "column"),
+                                int(minimum),
+                            )
                         )
                     )
                     ran.append("%s.%s -> varchar(%d)" % (table, column, minimum))

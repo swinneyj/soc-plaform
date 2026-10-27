@@ -1,0 +1,5 @@
+# Semgrep scope: retired fragments are not shipped code.
+# scripts/attic/ is explicitly retired (see scripts/check_undefined_names.sh,
+# which also excludes it) — its old UI copies and one-off scripts must not
+# fail the security gate for the live tree.
+scripts/attic/

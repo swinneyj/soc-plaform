@@ -104,6 +104,14 @@ spec:
       labels:
         app: soc-api
     spec:
+      # Least privilege: every container runs as a non-root UID, none may
+      # gain privileges, and the fsGroup makes the emptyDir audit volume
+      # writable so the API can log without running as root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
       volumes:
         - name: audit-logs
           emptyDir: {}
@@ -119,6 +127,8 @@ spec:
       containers:
         - name: api
           image: soc-platform:latest
+          securityContext:
+            allowPrivilegeEscalation: false
           # The platform image is side-loaded into the node (ctr import),
           # not served by a registry — kubelet must use the local copy.
           imagePullPolicy: Never
@@ -162,6 +172,8 @@ spec:
             periodSeconds: 5
         - name: fluent-bit
           image: fluent/fluent-bit:3.2
+          securityContext:
+            allowPrivilegeEscalation: false
           args:
             - --config=/fluent-bit/config/fluent-bit.conf
           env:

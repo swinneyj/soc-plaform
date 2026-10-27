@@ -58,7 +58,7 @@ def engine(monkeypatch):
 def _raw(engine, table, column, pk):
     with engine.connect() as conn:
         return conn.execute(
-            text("select %s from %s where id = :k" % (column, table)), {"k": pk}
+            text("select %s from %s where id = :k" % (column, table)), {"k": pk}  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- test helper; every caller passes hardcoded table/column literals; pk stays a bound param
         ).scalar()
 
 

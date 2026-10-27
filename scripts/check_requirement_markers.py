@@ -166,7 +166,7 @@ def fetch_requires_python(name, version, where, cache):
     for attempt in range(2):
         try:
             request = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(request, timeout=10) as response:
+            with urllib.request.urlopen(request, timeout=10) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- fixed https://pypi.org host; name/version come from our own requirements files being linted, never from network input
                 payload = json.load(response)
             spec = payload["info"].get("requires_python")
             cache[key] = spec

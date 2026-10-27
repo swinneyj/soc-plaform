@@ -354,10 +354,10 @@ window.AnalysisTab = {
             const escapedKey = sectionKey
                 .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
                 .replace(/\s+/g, '\\s+');
-            const pattern = new RegExp('(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?(?=(?:\\*\\*|###\\s+)|$)', 'i');
+            const pattern = new RegExp('(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?(?=(?:\\*\\*|###\\s+)|$)', 'i'); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- escapedKey is regex-escaped two lines above; matches only analysis-section headers in our own model text
             const match = text.match(pattern);
             if (match) {
-                const headerPattern = new RegExp('^(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?\\n', 'i');
+                const headerPattern = new RegExp('^(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?\\n', 'i'); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- escapedKey is regex-escaped above; matches only analysis-section headers in our own model text
                 return match[0].replace(headerPattern, '').trim();
             }
             return '';

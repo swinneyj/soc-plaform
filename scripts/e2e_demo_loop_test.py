@@ -28,7 +28,7 @@ def call(method, path, payload=None, timeout=240):
     req.add_header("Content-Type", "application/json")
     if _API_KEY:
         req.add_header("X-API-Key", _API_KEY)
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- test-only loopback client (BASE=http://127.0.0.1:8000); paths are static probe strings in this script
         return json.loads(resp.read().decode())
 
 

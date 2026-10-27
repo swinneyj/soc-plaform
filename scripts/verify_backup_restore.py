@@ -66,7 +66,7 @@ def _table_counts(engine, tables: list[str]) -> dict:
     with engine.connect() as conn:
         for t in tables:
             try:
-                counts[t] = conn.execute(sa_text('select count(*) from "%s"' % t)).scalar()
+                counts[t] = conn.execute(sa_text('select count(*) from "%s"' % t)).scalar()  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- t comes from Base.metadata.tables.keys() (ORM metadata), double-quoted
             except Exception as exc:
                 counts[t] = "ERR:%s" % type(exc).__name__
     return counts
@@ -117,7 +117,7 @@ def main(argv=None) -> int:
     try:
         with admin_engine.connect() as conn:
             conn = conn.execution_options(isolation_level="AUTOCOMMIT")
-            conn.execute(sa_text('CREATE DATABASE "%s"' % scratch_name))
+            conn.execute(sa_text('CREATE DATABASE "%s"' % scratch_name))  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- scratch_name is generated in this file (soc_verify_<timestamp>), never from input
         print("scratch: created database %s" % scratch_name)
     except Exception as exc:
         print("cannot create scratch database: %s: %s" % (type(exc).__name__, exc))
@@ -204,7 +204,7 @@ def main(argv=None) -> int:
                         ),
                         {"d": scratch_name},
                     )
-                    conn.execute(sa_text('DROP DATABASE IF EXISTS "%s"' % scratch_name))
+                    conn.execute(sa_text('DROP DATABASE IF EXISTS "%s"' % scratch_name))  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- scratch_name is generated in this file (soc_verify_<timestamp>), never from input
                 admin_engine2.dispose()
                 print("scratch: dropped %s" % scratch_name)
             except Exception as exc:

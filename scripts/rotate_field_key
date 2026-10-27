@@ -107,7 +107,7 @@ def _column_width(conn, table, column):
 def _rows(conn, table, column):
     pk = COLUMNS[table][0]
     return conn.execute(
-        text("select %s, %s from %s where %s is not null" % (pk, column, table, column))
+        text("select %s, %s from %s where %s is not null" % (pk, column, table, column))  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- table/column/pk come from the in-file COLUMNS allowlist; only values are bound params
     ).fetchall()
 
 
@@ -191,7 +191,7 @@ def _rewrite(engine, mode):
                     if replacement == value:
                         continue
                     conn.execute(
-                        text("update %s set %s = :v where %s = :k" % (table, column, pk)),
+                        text("update %s set %s = :v where %s = :k" % (table, column, pk)),  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- table/column/pk come from the in-file COLUMNS allowlist; values stay bound params
                         {"v": replacement, "k": pkv},
                     )
                     changed += 1

@@ -611,7 +611,7 @@ def ingest_json_notables(
                 elif ts is None:
                     ts = _utcnow()
 
-                raw_hash = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+                raw_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
                 row_key = (sourcetype, src, host, ts, raw_hash)
                 candidate = (
                     session.query(SplunkEvent)
@@ -624,7 +624,7 @@ def ingest_json_notables(
                     .all()
                 )
                 if row_key in pending_keys or any(
-                    hashlib.sha1((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
+                    hashlib.sha256((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
                     for e in candidate
                 ):
                     stats["rows_skipped"] += 1

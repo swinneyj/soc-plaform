@@ -160,7 +160,7 @@ def pypi_hashes(name, version):
     for attempt in range(3):
         try:
             req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=20) as resp:
+            with urllib.request.urlopen(req, timeout=20) as resp:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- fixed https://pypi.org host; name/version are pins being resolved from our own requirements files, never from network input
                 payload = json.load(resp)
             hashes = sorted({
                 f["digests"]["sha256"]

@@ -100,9 +100,11 @@ def session_client(monkeypatch):
     engine.dispose()
 
 
-def _make_user(db, username="alice", role="analyst", password="pw123"):
+def _make_user(db, username="alice", role="analyst", password=None):
     from db.models import User
 
+    if password is None:
+        password = "%s-test-password" % username
     user = User(username=username, role=role,
                 password_hash=api_auth.hash_password(password))
     db.add(user)
