@@ -377,6 +377,35 @@ class TestPhaseFollowUpGeneration:
         )
         assert cards == []
 
+    def test_more_targets_than_templates_yields_no_duplicate_titles(self):
+        """Live gap (MOCK-CASE-001 phases 5-6): 3 open targets against a
+        2-template playbook minted two same-titled variant cards, which
+        ledgered byte-identical duplicate evidence rows. Extra targets must
+        fold into the existing cards' target_questions instead."""
+        results = [evidence_item("Process execution check"),
+                   evidence_item("Outbound destination check")]
+        state = {
+            "unresolved_questions": [
+                "What is the purpose of the certutil.exe execution?",
+                "Is the destination host a known suspicious entity?",
+                "Was lateral movement observed?",
+            ],
+            "closure_blockers": [],
+        }
+        cards = api_main._build_question_driven_followup_queries(
+            [TEMPLATE_A, TEMPLATE_B], state,
+            results, phase_number=6,
+        )
+        assert cards, "exhausted playbook must still yield cards while open"
+        titles = [c["title"] for c in cards]
+        assert len(titles) == len(set(titles)), f"duplicate card titles: {titles}"
+        assert len(cards) <= 2, "at most one card per template"
+        targeted = {t for c in cards for t in c.get("target_questions", [])}
+        for question in state["unresolved_questions"]:
+            assert question in targeted, f"target lost: {question}"
+        for card in cards:
+            assert card.get("is_variant") is True
+
 
 # ---------------------------------------------------------------------------
 # 4. Ollama model tag resolution

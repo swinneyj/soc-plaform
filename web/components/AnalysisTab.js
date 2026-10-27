@@ -107,6 +107,7 @@ window.AnalysisTab = {
         'update-supportive-finding',
         'update-enrichment-manual',
         'update-enrichment-finding',
+        'start-next-follow-up',
         'update-phase2-manual',
         'update-card-status',
         'update-phase2-finding',
@@ -121,7 +122,12 @@ window.AnalysisTab = {
             currentStage: 1,
             showResolvedFollowUp: false,
             supportiveImportText: '',
-            supportiveImportFilename: ''
+            supportiveImportFilename: '',
+            // Collapsible long-form AI text (scroll relief): assessment
+            // narrative cards and the Phase N analysis block. Verdicts and
+            // action buttons stay visible when collapsed.
+            assessmentCollapsed: false,
+            phase2AnalysisCollapsed: false
         };
     },
     watch: {
@@ -294,11 +300,15 @@ window.AnalysisTab = {
             this.currentStage = requestedStage;
         },
         startNextFollowUpPhase() {
-            const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
-            this.$emit('update:follow-up-phase', nextPhase);
-            this.$emit('update-card-state', {});
+            // The parent owns the phase advance so the current phase's card
+            // inputs are saved (phaseN_manual) BEFORE the phase number bumps
+            // and the card map clears. Emitting update:follow-up-phase +
+            // update-card-state first wiped phase2CardState, so the parent's
+            // savePhase2Evidence ran on empty state and manual findings were
+            // silently lost while splunk_auto rows (saved at Run time)
+            // survived — the reported "ran but didn't save" shape.
             this.currentStage = 4;
-            this.$emit('run-phase2-analysis');
+            this.$emit('start-next-follow-up');
         },
         getSupportiveKey(q) {
             if (typeof this.getSupportiveKeyFn === 'function') return this.getSupportiveKeyFn(q);
@@ -806,8 +816,16 @@ window.AnalysisTab = {
 
         <!-- Formatted Initial Assessment Visual Cards -->
         <div v-if="analysisResult" class="space-y-4 pt-4 border-t border-gray-700">
+            <div class="flex items-center justify-between">
+                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Initial Assessment Result</p>
+                <button
+                    type="button"
+                    @click="assessmentCollapsed = !assessmentCollapsed"
+                    class="text-[11px] text-blue-300 hover:text-blue-200"
+                >{{ assessmentCollapsed ? 'Expand ▸' : 'Collapse ▾' }}</button>
+            </div>
             <!-- 1. Initial Thoughts / Hypothesis Card -->
-            <div class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-2">
+            <div v-show="!assessmentCollapsed" class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-2">
                 <div class="flex items-center gap-2 text-blue-300 font-semibold text-xs uppercase tracking-wider">
                     <span>💡</span>
                     <span>Threat Hypothesis & Initial Thoughts</span>
@@ -816,7 +834,7 @@ window.AnalysisTab = {
             </div>
 
             <!-- 2. Key Questions Card -->
-            <div v-if="getParsedQuestions().length" class="bg-gray-900 border border-amber-800/80 rounded-lg p-4 space-y-2">
+            <div v-if="getParsedQuestions().length && !assessmentCollapsed" class="bg-gray-900 border border-amber-800/80 rounded-lg p-4 space-y-2">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2 text-amber-300 font-semibold text-xs uppercase tracking-wider">
                         <span>❓</span>
@@ -833,7 +851,7 @@ window.AnalysisTab = {
             </div>
 
             <!-- 3. Investigative Analysis Narrative Card -->
-            <div v-if="getAnalysisSection('investigative analysis')" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
+            <div v-if="getAnalysisSection('investigative analysis') && !assessmentCollapsed" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
                 <div class="flex items-center gap-2 text-gray-300 font-semibold text-xs uppercase tracking-wider">
                     <span>🔍</span>
                     <span>Investigative Analysis</span>
@@ -1281,8 +1299,15 @@ window.AnalysisTab = {
             </div>
 
             <div v-if="phase2Result && phase2Result.analysis" class="bg-gray-900 border border-purple-800/80 rounded-lg p-4 space-y-2">
-                <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase {{ followUpPhase }} AI Analysis</p>
-                <div class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
+                <div class="flex items-center justify-between">
+                    <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase {{ followUpPhase }} AI Analysis</p>
+                    <button
+                        type="button"
+                        @click="phase2AnalysisCollapsed = !phase2AnalysisCollapsed"
+                        class="text-[11px] text-purple-300 hover:text-purple-200"
+                    >{{ phase2AnalysisCollapsed ? 'Expand ▸' : 'Collapse ▾' }}</button>
+                </div>
+                <div v-show="!phase2AnalysisCollapsed" class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
             </div>
 
             <div v-if="phase2EvidenceItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
