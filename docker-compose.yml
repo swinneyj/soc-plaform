@@ -27,8 +27,6 @@ services:
       retries: 3
       start_period: 15s
     depends_on:
-      redis:
-        condition: service_started
       postgres:
         condition: service_healthy
 
@@ -52,17 +50,5 @@ services:
       timeout: 5s
       retries: 5
 
-  # Redis: Job queue for async tool execution
-  redis:
-    image: redis:7-alpine
-    volumes:
-      - redis-data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
-
 volumes:
-  redis-data:
   postgres-data:

@@ -24,8 +24,8 @@ if ! docker version >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[*] Starting postgres and redis via docker compose..."
-docker compose up -d postgres redis
+echo "[*] Starting postgres via docker compose..."
+docker compose up -d postgres
 
 echo "[*] Waiting for PostgreSQL to become ready..."
 for attempt in $(seq 1 60); do

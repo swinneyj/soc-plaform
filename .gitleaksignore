@@ -1,0 +1,8 @@
+# Verified false positives (reviewed 2026-10-27; re-check if gitleaks flags more).
+# All four are low-entropy generic-api-key matches on dummy/UI-key strings —
+# no credentials have ever lived in this repo (real DATABASE_URL/API_KEY live
+# in BWS / macOS Keychain per AGENTS.md protocols 1-2).
+709ed701a5152bf16d8e8c28a1f37f1e93adafc0:tests/test_audit_logging.py:generic-api-key:177
+709ed701a5152bf16d8e8c28a1f37f1e93adafc0:tests/test_audit_logging.py:generic-api-key:348
+ad6f83fe9035e1b16aa5b751f426ff3c27640774:web/index.html:generic-api-key:855
+ad6f83fe9035e1b16aa5b751f426ff3c27640774:web/index.html:generic-api-key:1032

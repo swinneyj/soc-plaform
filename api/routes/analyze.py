@@ -8,11 +8,14 @@ import concurrent.futures
 import json
 import logging
 import os
+import re
 import sys
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import require_role
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
 from services.analysis_service import (
     build_analysis_prompt_intro,
     extract_phase2_evidence_json as _extract_phase2_evidence_json_impl,
@@ -57,8 +60,15 @@ ANALYZE_TIMEOUT_S = int(os.environ.get("ANALYZE_TIMEOUT_S", "300"))
 
 router = APIRouter()
 
+# Tokens the text pipeline leaves where it redacted or tokenized a value. A
+# rule_name containing one no longer describes the rule, so the catalog matcher
+# falls back to the notable's raw_fields (BUG-02).
+_REDACTION_MARKER_RE = re.compile(
+    r"\[REDACTED_[A-Z0-9_]+\]|\b(?:HOST|IPV4|IPV6|MAC|TICKET)_\d+\b"
+)
 
-@router.post("/api/db/analyze", tags=["Database"])
+
+@router.post("/api/db/analyze", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def analyze_case(request: AnalyzeRequest):
     try:
         case_id = request.case_id
@@ -114,6 +124,9 @@ def analyze_case(request: AnalyzeRequest):
                 source_notable_payload = {
                     "event_id": event.id,
                     "fields": payload.get("fields", {}),
+                    # Pre-sanitization originals, kept for the catalog matcher
+                    # only (BUG-02). Never added to the model prompt.
+                    "raw_fields": payload.get("raw_fields") or {},
                     "sanitized_text": payload.get("sanitized_text", ""),
                     "history": payload.get("history"),
                     "saved_at": payload.get("saved_at") or (event.ingested_at.isoformat() if event.ingested_at else None),
@@ -218,16 +231,32 @@ def analyze_case(request: AnalyzeRequest):
 
         if catalog_rules:
             notable_fields = (source_notable_payload or {}).get("fields") or {}
+            notable_raw_fields = (source_notable_payload or {}).get("raw_fields") or {}
+            # `fields` is the sanitized/reparsed view; `raw_fields` keeps the
+            # originals. Merge them for the matcher only — `fields` wins per
+            # key when both exist, and the prompt block below still reads
+            # `fields`, so nothing unsanitized reaches the model (BUG-02).
+            matcher_fields = {**notable_raw_fields, **notable_fields}
+            anchor_rule_name = (case.rule_name or "").strip()
+            if not anchor_rule_name or _REDACTION_MARKER_RE.search(anchor_rule_name):
+                # Imported notables can carry a sanitized or empty rule name;
+                # the raw fields still name the detection, so use them rather
+                # than matching on nothing (which silently returned no cards).
+                anchor_rule_name = str(
+                    matcher_fields.get("rule_name")
+                    or matcher_fields.get("search_name")
+                    or ""
+                ).strip()
             anchor_text = " ".join(
                 str(value) for value in [
-                    case.rule_name,
-                    notable_fields.get("correlation_search"),
-                    notable_fields.get("title"),
-                    notable_fields.get("description"),
-                    notable_fields.get("file_path"),
-                    notable_fields.get("file_name"),
-                    notable_fields.get("process"),
-                    notable_fields.get("parent_process"),
+                    anchor_rule_name,
+                    matcher_fields.get("correlation_search"),
+                    matcher_fields.get("title"),
+                    matcher_fields.get("description"),
+                    matcher_fields.get("file_path"),
+                    matcher_fields.get("file_name"),
+                    matcher_fields.get("process"),
+                    matcher_fields.get("parent_process"),
                 ] if value
             )
             normalized_anchor = _normalize_rule_match_text(anchor_text)
@@ -462,7 +491,7 @@ def analyze_case(request: AnalyzeRequest):
         model = result.get("model") or model
 
         if not result["success"]:
-            raise HTTPException(status_code=500, detail=result["error"])
+            raise InternalError(result["error"], context="analyze")
 
         response_text = result["response"] or ""
         phase2_queries = _extract_phase2_queries(response_text)
@@ -634,6 +663,6 @@ def analyze_case(request: AnalyzeRequest):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="analyze")
 
 

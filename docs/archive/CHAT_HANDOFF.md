@@ -1,5 +1,7 @@
 # SOC Platform Chat Handoff
 
+> **Doc status:** ⚠️ STALE — historical narrative handoff from the Justin-branch / port 8001 era, predating the current modularization, auth model, ops model, and repo layout. Retained as historical record only; **not** a current operating reference. For current operating detail, start from `docs/REPO_MAP.md`, `docs/EXECUTION_PLAYBOOK.md`, `docs/CURRENT_STATE_CHECKS.md`, and `docs/security-remediation-tracker.md`.
+
 This document summarizes the investigation-workflow testing and development decisions from the prior chat so another user can continue without repeating the setup or experiments.
 
 ## Project and test environment
@@ -169,7 +171,7 @@ set +a
 ./scripts/start_platform.sh
 ```
 
-The startup script starts PostgreSQL and Redis, restores the shared dump, builds the API, and starts the API service.
+The startup script starts PostgreSQL, restores the shared dump, builds the API, and starts the API service.
 
 Open:
 

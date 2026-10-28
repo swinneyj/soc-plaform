@@ -3,7 +3,8 @@
 import datetime
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from api.auth import require_role
 
 
 def _utcnow() -> datetime.datetime:
@@ -22,10 +23,38 @@ def health():
 
 @router.get("/api/health", tags=["System"])
 def api_health():
-    return {"status": "healthy", "timestamp": _utcnow().isoformat()}
+    """OPS-01: liveness + database probe (SELECT 1 via SessionLocal).
+
+    200 {"status": "healthy", "db": "connected"} when reachable;
+    503 {"status": "unhealthy", "db": "disconnected"} when not.
+    Never leaks driver errors (500 scrubber would also catch, but be explicit).
+
+    Uses SessionLocal (not a fresh engine from db.target.resolve) so the
+    pytest suite stays hermetic: conftest repoints SessionLocal at
+    in-memory SQLite, and this probe follows it. In production SessionLocal
+    is bound to Postgres, so this still probes the real database.
+    """
+    from fastapi.responses import JSONResponse
+    try:
+        from sqlalchemy import text as _text
+        from db.models import SessionLocal as _SessionLocal
+        db = _SessionLocal()
+        try:
+            db.execute(_text("SELECT 1"))
+        finally:
+            try:
+                db.close()
+            except Exception:
+                pass
+        return {"status": "healthy", "db": "connected", "timestamp": _utcnow().isoformat()}
+    except Exception:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "db": "disconnected", "timestamp": _utcnow().isoformat()},
+        )
 
 
-@router.get("/api/", tags=["System"])
+@router.get("/api/", tags=["System"], dependencies=[Depends(require_role("analyst"))])
 def api_root():
     return {
         "name": "SOC Platform API",
@@ -35,7 +64,7 @@ def api_root():
     }
 
 
-@router.get("/api/db/ollama/health", tags=["Database"])
+@router.get("/api/db/ollama/health", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def ollama_health():
     try:
         from services.ollama_service import check_ollama_health
@@ -49,7 +78,7 @@ def ollama_health():
         }
 
 
-@router.get("/api/db/stats", tags=["Database"])
+@router.get("/api/db/stats", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def db_stats():
     try:
         from sqlalchemy import func
@@ -88,7 +117,7 @@ def db_stats():
         return {"triage_cases": 0, "error": str(exc)}
 
 
-@router.get("/api/db/operations", tags=["Database"])
+@router.get("/api/db/operations", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def operations_dashboard():
     """Return operational case, closure, evidence, and tool-run metrics."""
     try:

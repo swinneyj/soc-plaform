@@ -2,6 +2,15 @@
 
 *Last verified: Sep 25, 2026. Maintained by Dalton & Buffy (Codebuff).*
 
+> **Doc scope note:** this is the **Mac workstation / tailnet / shared-folder / BWS /
+> accounts-on-Dalton's-Mac** setup doc. It is intentionally separate from the Docker /
+> new-user setup guide, which lives at [docs/SETUP.md](docs/SETUP.md). Both are named
+> `SETUP.md` by historical accident (same drift class as the README trio); if you are
+> looking for Docker Compose / bootstrap / branch preview environments / the deployment
+> stories matrix, go there instead. If the split ever becomes more nuisance than useful,
+> consolidate to a single canonical `docs/SETUP.md` and move this to a more specific name
+> (e.g. `SETUP_MAC_WORKSTATION.md`).
+
 ## What this is
 
 Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https://tailscale.com) mesh VPN, with a shared file drop zone. Everything runs over an encrypted WireGuard tunnel — **nothing is exposed to the public internet**.
@@ -23,7 +32,9 @@ Two MacBook Pros (Dalton's and Jay's) connected via a private [Tailscale](https:
 
 Secrets no longer live in `.env` by hand — they live in the **SSC-Lewis** BWS org (free 2-person plan), project **SOC Platform**. `.env` is just a bootstrap: it holds `BWS_ACCESS_TOKEN` (machine account `Machine-Dev`, scoped to the project only) plus local-only keys.
 
-**The four vault secrets:** `DATABASE_URL` (currently local Postgres — swap to Neon's URL when it arrives), `OLLAMA_URL`, `API_KEY` (dormant until the gate activates), `CORS_ORIGINS`.
+**The four vault secrets:** `DATABASE_URL` (the shared Neon mirror URL since Sept 28 — **not** the local runtime database), `OLLAMA_URL`, `API_KEY` (**gate enforcing locally** — BWS-injected at launch; unauthenticated `/api/*` → 401, witnessed Oct 5, 2026), `CORS_ORIGINS`.
+
+**Database (local-first since Oct 23, 2026):** the platform runs on **local Postgres** (`127.0.0.1:5432/soc_platform`, Homebrew `postgresql@16`) and needs no vault and no network for it. The shared Neon project is an optional mirror: `scripts/start --shared` runs against it. Because `bws run` injects `DATABASE_URL` as an env var, a **local** launch deliberately skips BWS and takes `API_KEY` from the login keychain instead (`scripts/secrets-keychain inject`). The launcher banner's `db target:` line is the truth about which database is in use. Full policy and the free-tier cost table: `docs/LOCAL_FIRST_DATABASE.md`.
 
 **Daily commands:**
 ```bash

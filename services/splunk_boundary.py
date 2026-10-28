@@ -322,6 +322,10 @@ def ingest_csv_events(
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
     inserted: list = []
+    # Dedup guard for rows added during THIS run but not yet flushed:
+    # with autoflush off, session.query() cannot see them, so same-file
+    # duplicates would otherwise all insert (fuzz finding, 2026-10-05).
+    pending_keys: set = set()
     try:
         with open(source, "r", encoding="utf-8", errors="ignore") as fh:
             reader = _csv.DictReader(fh)
@@ -330,7 +334,30 @@ def ingest_csv_events(
                 return stats
 
             stats["success"] = True
-            for row_num, row in enumerate(reader, start=2):
+            while True:
+                # Lazy csv iteration: a NUL byte anywhere makes csv raise
+                # csv.Error mid-stream ("line contains NUL"). Caught here so
+                # one hostile cell degrades to a per-row skip instead of
+                # aborting the whole batch and losing every pre-error row's
+                # purge bookkeeping (property-fuzz finding, 2026-10-05).
+                try:
+                    row = next(reader)
+                except StopIteration:
+                    break
+                except _csv.Error as exc:
+                    # The error may fire mid-record (NUL inside a quoted
+                    # multi-line field), so the stream cannot be resynced
+                    # reliably — continuing would parse garbage. End parsing
+                    # here: keep everything inserted so far (committed below,
+                    # purge bookkeeping intact) and surface the truncation.
+                    stats["rows_read"] += 1
+                    stats["rows_skipped"] += 1
+                    stats["errors"].append(
+                        f"Row {reader.line_num} (csv stream): {str(exc)[:100]}; "
+                        "parsing stopped at this line"
+                    )
+                    break
+                row_num = reader.line_num
                 stats["rows_read"] += 1
                 try:
                     field_lower = {k.lower(): v for k, v in row.items() if k}
@@ -359,6 +386,7 @@ def ingest_csv_events(
                     if ts is None:
                         ts = _utcnow()
 
+                    row_key = (sourcetype, src, host, ts)
                     existing = (
                         session.query(SplunkEvent)
                         .filter(
@@ -369,7 +397,7 @@ def ingest_csv_events(
                         )
                         .first()
                     )
-                    if existing:
+                    if existing or row_key in pending_keys:
                         stats["rows_skipped"] += 1
                         continue
 
@@ -381,6 +409,7 @@ def ingest_csv_events(
                         timestamp=ts,
                     )
                     session.add(event)
+                    pending_keys.add(row_key)
                     inserted.append(event)
                     stats["rows_inserted"] += 1
                     if stats["rows_inserted"] % 50 == 0:
@@ -394,10 +423,16 @@ def ingest_csv_events(
         # Guard against silent total failure: if the database itself is
         # broken (missing tables, connection loss), every row lands in
         # errors[] while nothing was inserted. That must not read as success.
+        # Stream errors (NUL lines) are data-quality skips by design and
+        # must not trigger the DB-failure diagnosis.
+        db_failures = sum(
+            1 for e in stats["errors"] if "(csv stream)" not in e
+        )
         if (
             stats["rows_read"] > 0
             and stats["rows_inserted"] == 0
             and stats["rows_skipped"] == len(stats["errors"])
+            and db_failures > 0
         ):
             stats["success"] = False
             stats["error"] = (
@@ -467,7 +502,10 @@ def ingest_json_notables(
       - ``source`` (default ``splunk_json_export``)
       - ``host`` (default ``unknown``)
       - ``_time``/``timestamp``: ISO string or epoch seconds (Splunk exports
-        epoch floats; both normalize to naive UTC, fallback = now)
+        epoch floats; both normalize to naive UTC). A MISSING timestamp (key
+        absent, null, or empty) falls back to arrival time; a PRESENT but
+        unparseable one SKIPS the row with an error entry — a corrupt claim
+        is surfaced, never silently relabeled "now".
 
     Deduplication: same (sourcetype, source, host, timestamp) candidates are
     additionally compared by raw payload hash, so same-second events do not
@@ -494,7 +532,9 @@ def ingest_json_notables(
 
     try:
         payload = json.loads(source.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError: non-UTF-8 exports must be a clean error,
+        # never a raised crash (fuzz finding, 2026-10-05).
         stats["error"] = f"invalid JSON: {exc}"
         return stats
 
@@ -511,6 +551,10 @@ def ingest_json_notables(
     SplunkEvent, SessionLocal = _load_db_module()
     session = (session_factory or SessionLocal)()
     inserted: list = []
+    # Same unflushed-insert guard as the CSV engine: with autoflush off,
+    # the candidate query cannot see rows added earlier in this run, so
+    # same-second same-payload duplicates would all insert.
+    pending_keys: set = set()
     try:
         stats["success"] = True
         for index, obj in enumerate(objects, start=1):
@@ -522,9 +566,22 @@ def ingest_json_notables(
                 raw = json.dumps(obj, ensure_ascii=False)
 
                 ts = None
+                ts_present = "_time" in obj or "timestamp" in obj
                 ts_value = obj.get("_time", obj.get("timestamp"))
-                if isinstance(ts_value, (int, float)):
-                    ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
+                if isinstance(ts_value, bool):
+                    # JSON true/false are not timestamps. Python's bool-is-int
+                    # would coerce them through fromtimestamp to epoch 0/1
+                    # (year 1970) — a silent timeline lie. Leave ts None so
+                    # the corrupt-claim skip below surfaces it.
+                    pass
+                elif isinstance(ts_value, (int, float)):
+                    try:
+                        ts = datetime.fromtimestamp(float(ts_value), tz=timezone.utc).replace(tzinfo=None)
+                    except (OverflowError, OSError, ValueError):
+                        # Absurd epochs (1e20, negatives past the epoch on
+                        # some platforms) must not crash the whole run —
+                        # the corrupt-claim skip below handles them.
+                        ts = None
                 elif isinstance(ts_value, str) and ts_value.strip():
                     try:
                         ts = datetime.fromisoformat(ts_value.strip().replace("Z", "+00:00"))
@@ -532,10 +589,30 @@ def ingest_json_notables(
                             ts = ts.astimezone(timezone.utc).replace(tzinfo=None)
                     except ValueError:
                         ts = None
-                if ts is None:
+                if ts is None and ts_present:
+                    ts_missing = ts_value is None or (
+                        isinstance(ts_value, str) and not ts_value.strip()
+                    )
+                    if not ts_missing:
+                        # The export CLAIMS a timestamp it cannot deliver
+                        # (unparseable string, absurd epoch, wrong type).
+                        # Skip the row with an error entry so the
+                        # data-quality problem is visible, instead of
+                        # silently relabeling the event "now" — a fake
+                        # fresh time corrupts timeline analysis. A MISSING
+                        # claim (key absent, null, empty string) keeps the
+                        # arrival-time fallback below.
+                        stats["rows_skipped"] += 1
+                        stats["errors"].append(
+                            f"Event {index}: corrupt _time {str(ts_value)[:50]!r}; row skipped"
+                        )
+                        continue
+                    ts = _utcnow()
+                elif ts is None:
                     ts = _utcnow()
 
-                raw_hash = hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+                raw_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+                row_key = (sourcetype, src, host, ts, raw_hash)
                 candidate = (
                     session.query(SplunkEvent)
                     .filter(
@@ -546,8 +623,8 @@ def ingest_json_notables(
                     )
                     .all()
                 )
-                if any(
-                    hashlib.sha1((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
+                if row_key in pending_keys or any(
+                    hashlib.sha256((e.raw or "").encode("utf-8")).hexdigest()[:16] == raw_hash
                     for e in candidate
                 ):
                     stats["rows_skipped"] += 1
@@ -561,6 +638,7 @@ def ingest_json_notables(
                     timestamp=ts,
                 )
                 session.add(event)
+                pending_keys.add(row_key)
                 inserted.append(event)
                 stats["rows_inserted"] += 1
                 if stats["rows_inserted"] % 50 == 0:
@@ -571,11 +649,18 @@ def ingest_json_notables(
         session.commit()
         stats["inserted_ids"] = [obj.id for obj in inserted]
 
+        db_failures = sum(
+            1 for e in stats["errors"] if "corrupt _time" not in e
+        )
         if (
             stats["rows_read"] > 0
             and stats["rows_inserted"] == 0
             and stats["rows_skipped"] == len(stats["errors"])
+            and db_failures > 0
         ):
+            # Every row died on something OTHER than a data-quality skip
+            # (corrupt _time rows skip by design) — that pattern means the
+            # database itself is broken; never report it as success.
             stats["success"] = False
             stats["error"] = (
                 "all events failed (likely a database error); first: "

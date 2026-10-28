@@ -33,7 +33,6 @@ project-root/
 
 ### Key Services
 - **API** (FastAPI): REST endpoints for tools, database, Ollama integration
-- **Redis**: Job queue for long-running tasks
 - **Ollama**: Local LLM inference (on host network via `host.docker.internal:11434`)
 - **PostgreSQL**: Default runtime database for events and cases
 - **SQLite**: Optional legacy fallback only if a backup file is provided separately
@@ -154,7 +153,7 @@ SPLUNK_EXPORTS_DIR=/app/Splunk_Exports
 ### Docker Compose Runtime
 ```
 docker compose up -d postgres         # PostgreSQL only
-docker compose up -d api-service redis postgres
+docker compose up -d api-service postgres
 docker compose down                   # Stop all
 ```
 

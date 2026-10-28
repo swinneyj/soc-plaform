@@ -10,9 +10,15 @@
 set -euo pipefail
 
 # Prefer the libpq keg's client tools (keg-only, not on the default PATH) and
-# make sure Homebrew is reachable under launchd's minimal environment. The
-# client must be >= the server's major version — Neon runs PostgreSQL 18.
-PATH="/opt/homebrew/opt/libpq/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
+# make sure Homebrew is reachable under launchd's minimal environment. Detect
+# the Homebrew prefix at runtime so this works on Intel + Apple Silicon, and Linux.
+# The client must be >= the server's major version — Neon runs PostgreSQL 18.
+HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+if [[ -n "$HOMEBREW_PREFIX" ]]; then
+  PATH="${HOMEBREW_PREFIX}/opt/libpq/bin:${HOMEBREW_PREFIX}/bin:/usr/local/bin:$PATH"
+else
+  PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
+fi
 export PATH
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

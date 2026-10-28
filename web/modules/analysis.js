@@ -1126,6 +1126,28 @@
             }
         },
 
+        async startNextFollowUpPhase() {
+            // Ordered phase advance: save the CURRENT phase's card inputs
+            // first (source_system phaseN_manual), then bump the phase and
+            // clear the card map, then run the next follow-up analysis.
+            // Clearing before saving wiped unsaved manual findings — Run
+            // results survived as splunk_auto (saved at Run time) but typed
+            // findings were lost and the new cards rendered empty.
+            if (!this.analysisCaseId) {
+                return;
+            }
+            try {
+                await this.savePhase2Evidence({ silent: true });
+            } catch (err) {
+                console.warn('Pre-advance phase evidence save failed:', err);
+            }
+            const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
+            this.followUpPhase = nextPhase;
+            this.phase2CardState = {};
+            this._storeAnalysisStateSnapshot();
+            await this.runPhase2Analysis();
+        },
+
         async generateSupportivePlaybookDraft() {
             if (!this.analysisCaseId) {
                 return;
@@ -1492,7 +1514,6 @@
                 followUpPhase: this.followUpPhase,
                 phase2CardState: this.phase2CardState,
                 phase2EditedQueries: this.phase2EditedQueries,
-                phase2CardState: this.phase2CardState,
                 analysisResult: this.analysisResult,
                 phase2Result: this.phase2Result,
                 investigationState: this.investigationState,

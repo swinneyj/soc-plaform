@@ -2,6 +2,12 @@
 # SOC Platform self-start script (used by LaunchAgent and by humans).
 # Order: wait for Postgres -> start Ollama if absent -> start API (uvicorn).
 # Safe to run repeatedly: exits quietly if the API port is already served.
+#
+# Cross-platform sibling: scripts/start_soc_api.ps1 (PowerShell Core) —
+# same behavior (wait Postgres -> start Ollama if absent -> start uvicorn)
+# without the macOS-only assumptions (no nc -z, detects Homebrew prefix at
+# runtime, no launchd KeepAlive throttling). Use that on Windows/Linux, or
+# anywhere bash + nc + Homebrew isn't the right fit.
 
 set -u
 
@@ -43,10 +49,14 @@ fi
 if ! nc -z 127.0.0.1 "$OLLAMA_PORT" >/dev/null 2>&1; then
   OLLAMA_BIN="$(command -v ollama || true)"
   if [[ -z "$OLLAMA_BIN" ]]; then
-    # launchd gives us a minimal PATH, so probe the usual install locations
-    for cand in /opt/homebrew/bin/ollama /usr/local/bin/ollama \
-                "$HOME/Applications/Ollama.app/Contents/Resources/ollama" \
-                /Applications/Ollama.app/Contents/Resources/ollama; do
+    # launchd gives us a minimal PATH, so probe the usual install locations.
+    # Detect Homebrew prefix at runtime (works on Intel + Apple Silicon, and Linux).
+    HOMEBREW_PREFIX="$(brew --prefix 2>/dev/null || true)"
+    for cand in \
+        "${HOMEBREW_PREFIX}/bin/ollama" \
+        "$HOME/Applications/Ollama.app/Contents/Resources/ollama" \
+        /Applications/Ollama.app/Contents/Resources/ollama \
+        /usr/local/bin/ollama; do
       if [[ -x "$cand" ]]; then OLLAMA_BIN="$cand"; break; fi
     done
   fi

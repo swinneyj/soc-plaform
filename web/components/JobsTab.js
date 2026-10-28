@@ -193,6 +193,7 @@ window.JobsTab = {
                 </div>
             </div>
                 </div>
+            </div>
 
             <div v-if="jobGroups.length" class="flex items-center justify-between">
                 <button @click="page = Math.max(1, page - 1)" :disabled="page <= 1" class="bg-gray-700 disabled:opacity-40 px-3 py-2 rounded text-sm">Previous</button>

@@ -1,5 +1,15 @@
 # Setup Guide
 
+> **Doc scope note:** this is the **Docker / new-user setup** guide — clone, compose,
+> bootstrap, dump restore, branch preview environments, deployment stories. It is
+> intentionally separate from the Mac workstation / tailnet / shared-folder / BWS /
+> accounts-on-Dalton's-Mac setup doc, which lives at [SETUP.md](SETUP.md) (same name by
+> historical accident — same drift class as the README trio). Both are named
+> `SETUP.md`; if you want the tailnet / SMB / guest-access / account quirks / fail-safe
+> story, go to the root one. If the split ever becomes more nuisance than useful,
+> consolidate to a single canonical `docs/SETUP.md` and move the Mac-workstation doc to
+> a more specific name (e.g. `SETUP_MAC_WORKSTATION.md`).
+
 ## Purpose
 
 This guide is the single setup path for a new user who pulls the project from Git and needs both code and current database-backed runtime behavior.
@@ -30,6 +40,33 @@ Reason:
 - the repo is already configured for it
 - it avoids conflicts with any separate PostgreSQL instance on `localhost:5432`
 - it gives consistent behavior across users
+
+## Cross-Platform Script Story
+
+The repo ships two native-script families that start and back up the API outside of
+Docker Compose. They are written once in **PowerShell Core** (`#!/usr/bin/env pwsh`)
+so the same file runs on Windows, macOS, and Linux. The older macOS-native bash
+scripts are still present for environments where only bash is available.
+
+| Task | Bash (macOS-native) | PowerShell Core (cross-platform) |
+|------|---------------------|----------------------------------|
+| Start the API after Postgres is up | `scripts/start_soc_api.sh` | `scripts/start_soc_api.ps1` |
+| Daily pg_dump backup + gzip + retention | `scripts/backup_db.sh` | `scripts/backup_db.ps1` |
+
+PowerShell Core script notes:
+- They require **PowerShell 7+** (`pwsh`). On macOS that is `brew install powershell`;
+  on Windows it is the standard `pwsh` from PowerShell Core; on Linux it is the
+  distro or upstream PowerShell package.
+- The API starter (`start_soc_api.ps1`) waits for Postgres on `127.0.0.1:5432`,
+  optionally starts `ollama serve` if it is absent, loads `.env`, and launches
+  uvicorn. It does **not** start PostgreSQL itself.
+- The backup script (`backup_db.ps1`) delegates the dump to
+  `scripts/export_postgres_dump.ps1`, gzips the output, and enforces count-based
+  retention (`BACKUP_KEEP`, default 14).
+- Both scripts load `.env` with the same repo-root-first fallback as the bash originals.
+- The bash originals live in the same `scripts/` directory and are still usable on
+  macOS. Pick whichever runtime your machine has; do not run both families against
+  the same instance without understanding the port/env overlap.
 
 ## Fastest New-User Path
 
@@ -90,6 +127,13 @@ This helper resets the `public` schema before import so rerunning setup on the s
 ```powershell
 $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
 python -m uvicorn --app-dir . api.main:app --host 127.0.0.1 --port 8000
+```
+
+Or use the cross-platform native starter if PostgreSQL is already running on the
+expected host/port:
+
+```powershell
+.\scripts\start_soc_api.ps1
 ```
 
 ## Creating a Current Dump for Another User
@@ -159,13 +203,12 @@ To test changes on a feature branch without touching the main/staging runtime, t
 - Ports for the preview are assigned dynamically based on the branch name (stable per branch):
 	- app port: 9000 + (hash(branch) % 300)
 	- PostgreSQL host port: 9300 + (hash(branch) % 300)
-	- Redis port: 9600 + (hash(branch) % 300)
 - The preview uses its own PostgreSQL volume (isolated from the main/staging volume) so test data does not contaminate the primary runtime.
 
 To keep preview DBs aligned with the current shared snapshot, the hook calls [scripts/start_branch_preview_from_shared_dump.ps1](scripts/start_branch_preview_from_shared_dump.ps1):
 
 - Stops any existing preview project for that branch (`docker compose -p soc-<branch> down --remove-orphans`).
-- Starts PostgreSQL and Redis for the branch (`docker compose -p soc-<branch> up -d postgres redis`) and waits for PostgreSQL health.
+- Starts PostgreSQL for the branch (`docker compose -p soc-<branch> up -d postgres`) and waits for PostgreSQL health.
 - If `Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff\current_soc_platform_dump.sql` exists, it resets the `public` schema in the branch DB and restores that shared dump.
 - Starts the branch API service via Docker Compose (`docker compose -p soc-<branch> up -d --build --force-recreate api-service`).
 
@@ -176,6 +219,7 @@ Result: each push from a feature branch both rebuilds and reseeds its sandbox fr
 | Story | Status | Entry point | Notes |
 |-------|--------|-------------|-------|
 | Mac workstation (canonical) | **Supported** | `scripts/start` | Start-riding ops: backup (20h staleness skip) + retention dry-run on every start; `scripts/start --backup` on demand. BWS/keychain secrets. |
-| Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+Redis+api-service via compose; shared-dump restore. |
+| Docker Compose (Linux/Windows) | Secondary | `scripts/start_platform.sh` | Postgres+api-service via compose; shared-dump restore. |
+| Native cross-platform scripts (PowerShell Core) | **Supported** | `scripts/start_soc_api.ps1` / `scripts/backup_db.ps1` | Same codebase on Windows, macOS, Linux. Does not start PostgreSQL; requires `pg_dump`/Docker + `gzip` for backup. Bash originals still present for macOS-only environments. |
 | Vercel (hosted API + preview) | **Retired Sept 30, 2026** | — (`deploy.yml` deleted) | Owner decision: local runtime covers the goal (local mock-Splunk testing → real-Splunk import). Stale last build still serves (project kept on ice, owner decision) — `docs/VERCEL_HANDOFF.md`. |
 | launchd/cron schedules | **Deliberately not used** | — | Ops rides `scripts/start` by decision (Sept 30). `scripts/local.soc-platform.backup.plist` exists but is not installed. |

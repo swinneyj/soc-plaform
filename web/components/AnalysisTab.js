@@ -60,7 +60,10 @@ window.AnalysisTab = {
         'buildLoopTimelineFn',
         'formatLoopStatusFn',
         'formatDispositionLabelFn',
-        'formatFindingLabelFn'
+        'formatFindingLabelFn',
+        // HIGH-01/Phase 2.3: destructive deletes require admin; analysts get
+        // a disabled button instead of a 403 surprise.
+        'isAdmin'
     ],
     emits: [
         'update:analysis-case-search',
@@ -104,6 +107,7 @@ window.AnalysisTab = {
         'update-supportive-finding',
         'update-enrichment-manual',
         'update-enrichment-finding',
+        'start-next-follow-up',
         'update-phase2-manual',
         'update-card-status',
         'update-phase2-finding',
@@ -118,7 +122,12 @@ window.AnalysisTab = {
             currentStage: 1,
             showResolvedFollowUp: false,
             supportiveImportText: '',
-            supportiveImportFilename: ''
+            supportiveImportFilename: '',
+            // Collapsible long-form AI text (scroll relief): assessment
+            // narrative cards and the Phase N analysis block. Verdicts and
+            // action buttons stay visible when collapsed.
+            assessmentCollapsed: false,
+            phase2AnalysisCollapsed: false
         };
     },
     watch: {
@@ -291,11 +300,15 @@ window.AnalysisTab = {
             this.currentStage = requestedStage;
         },
         startNextFollowUpPhase() {
-            const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
-            this.$emit('update:follow-up-phase', nextPhase);
-            this.$emit('update-card-state', {});
+            // The parent owns the phase advance so the current phase's card
+            // inputs are saved (phaseN_manual) BEFORE the phase number bumps
+            // and the card map clears. Emitting update:follow-up-phase +
+            // update-card-state first wiped phase2CardState, so the parent's
+            // savePhase2Evidence ran on empty state and manual findings were
+            // silently lost while splunk_auto rows (saved at Run time)
+            // survived — the reported "ran but didn't save" shape.
             this.currentStage = 4;
-            this.$emit('run-phase2-analysis');
+            this.$emit('start-next-follow-up');
         },
         getSupportiveKey(q) {
             if (typeof this.getSupportiveKeyFn === 'function') return this.getSupportiveKeyFn(q);
@@ -351,10 +364,10 @@ window.AnalysisTab = {
             const escapedKey = sectionKey
                 .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
                 .replace(/\s+/g, '\\s+');
-            const pattern = new RegExp('(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?(?=(?:\\*\\*|###\\s+)|$)', 'i');
+            const pattern = new RegExp('(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?(?=(?:\\*\\*|###\\s+)|$)', 'i'); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- escapedKey is regex-escaped two lines above; matches only analysis-section headers in our own model text
             const match = text.match(pattern);
             if (match) {
-                const headerPattern = new RegExp('^(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?\\n', 'i');
+                const headerPattern = new RegExp('^(?:\\*\\*|###\\s+)?' + escapedKey + '[\\s\\S]*?\\n', 'i'); // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- escapedKey is regex-escaped above; matches only analysis-section headers in our own model text
                 return match[0].replace(headerPattern, '').trim();
             }
             return '';
@@ -368,7 +381,8 @@ window.AnalysisTab = {
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
-                .replace(/\"/g, '&quot;');
+                .replace(/\"/g, '&quot;')
+                .replace(/'/g, '&#39;');
             const inline = (text) => escapeHtml(text)
                 .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
                 .replace(/`([^`]+)`/g, '<code class="px-1 py-0.5 rounded bg-black/40 text-purple-200">$1</code>');
@@ -802,8 +816,16 @@ window.AnalysisTab = {
 
         <!-- Formatted Initial Assessment Visual Cards -->
         <div v-if="analysisResult" class="space-y-4 pt-4 border-t border-gray-700">
+            <div class="flex items-center justify-between">
+                <p class="text-xs font-bold uppercase tracking-wider text-gray-400">Initial Assessment Result</p>
+                <button
+                    type="button"
+                    @click="assessmentCollapsed = !assessmentCollapsed"
+                    class="text-[11px] text-blue-300 hover:text-blue-200"
+                >{{ assessmentCollapsed ? 'Expand ▸' : 'Collapse ▾' }}</button>
+            </div>
             <!-- 1. Initial Thoughts / Hypothesis Card -->
-            <div class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-2">
+            <div v-show="!assessmentCollapsed" class="bg-gray-900 border border-blue-800/80 rounded-lg p-4 space-y-2">
                 <div class="flex items-center gap-2 text-blue-300 font-semibold text-xs uppercase tracking-wider">
                     <span>💡</span>
                     <span>Threat Hypothesis & Initial Thoughts</span>
@@ -812,7 +834,7 @@ window.AnalysisTab = {
             </div>
 
             <!-- 2. Key Questions Card -->
-            <div v-if="getParsedQuestions().length" class="bg-gray-900 border border-amber-800/80 rounded-lg p-4 space-y-2">
+            <div v-if="getParsedQuestions().length && !assessmentCollapsed" class="bg-gray-900 border border-amber-800/80 rounded-lg p-4 space-y-2">
                 <div class="flex items-center justify-between">
                     <div class="flex items-center gap-2 text-amber-300 font-semibold text-xs uppercase tracking-wider">
                         <span>❓</span>
@@ -829,7 +851,7 @@ window.AnalysisTab = {
             </div>
 
             <!-- 3. Investigative Analysis Narrative Card -->
-            <div v-if="getAnalysisSection('investigative analysis')" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
+            <div v-if="getAnalysisSection('investigative analysis') && !assessmentCollapsed" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-2">
                 <div class="flex items-center gap-2 text-gray-300 font-semibold text-xs uppercase tracking-wider">
                     <span>🔍</span>
                     <span>Investigative Analysis</span>
@@ -1009,14 +1031,18 @@ window.AnalysisTab = {
                     <button
                         v-if="someEvidenceSelected"
                         type="button"
-                        class="text-[11px] px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100 font-semibold"
+                        class="text-[11px] px-2.5 py-1 bg-red-900 hover:bg-red-800 border border-red-700 rounded text-red-100 font-semibold disabled:opacity-50"
+                        :disabled="isAdmin === false"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         @click="emitDeleteSelectedEvidence"
                     >
                         Delete Selected ({{ selectedEvidenceCount }})
                     </button>
                     <button
                         type="button"
-                        class="text-[11px] px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200 font-semibold"
+                        class="text-[11px] px-2.5 py-1 bg-red-950 hover:bg-red-900 border border-red-800 rounded text-red-200 font-semibold disabled:opacity-50"
+                        :disabled="isAdmin === false"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         @click="emitDeleteAllEvidence"
                     >
                         Delete All
@@ -1076,8 +1102,9 @@ window.AnalysisTab = {
                                 </div>
                                 <button
                                     type="button"
-                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold"
-                                    title="Delete this evidence item"
+                                    class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:text-white hover:bg-red-700 border border-gray-600 hover:border-red-500 text-sm font-bold disabled:opacity-50"
+                                    :disabled="isAdmin === false"
+                                    :title="isAdmin === false ? 'Requires an admin account' : 'Delete this evidence item'"
                                     @click.stop="$emit('delete-evidence', item)"
                                 >
                                     ×
@@ -1272,8 +1299,15 @@ window.AnalysisTab = {
             </div>
 
             <div v-if="phase2Result && phase2Result.analysis" class="bg-gray-900 border border-purple-800/80 rounded-lg p-4 space-y-2">
-                <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase {{ followUpPhase }} AI Analysis</p>
-                <div class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
+                <div class="flex items-center justify-between">
+                    <p class="text-[11px] font-bold uppercase tracking-wider text-purple-300">Phase {{ followUpPhase }} AI Analysis</p>
+                    <button
+                        type="button"
+                        @click="phase2AnalysisCollapsed = !phase2AnalysisCollapsed"
+                        class="text-[11px] text-purple-300 hover:text-purple-200"
+                    >{{ phase2AnalysisCollapsed ? 'Expand ▸' : 'Collapse ▾' }}</button>
+                </div>
+                <div v-show="!phase2AnalysisCollapsed" class="text-sm text-gray-200 leading-relaxed space-y-2" v-html="formatAnalysisText(phase2Result.analysis)"></div>
             </div>
 
             <div v-if="phase2EvidenceItems.length" class="bg-gray-900 border border-gray-700 rounded-lg p-4 space-y-3">
@@ -1655,7 +1689,7 @@ window.AnalysisTab = {
                     </div>
                     <div class="flex gap-2">
                         <button type="button" class="text-xs text-blue-300" @click="$emit('edit-placeholder-alias', alias)">Edit</button>
-                        <button type="button" class="text-xs text-red-300" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button>
+                        <button type="button" class="text-xs text-red-300 disabled:opacity-50" :disabled="isAdmin === false" :title="isAdmin === false ? 'Requires an admin account' : ''" @click="$emit('delete-placeholder-alias', alias.id)">Delete</button>
                     </div>
                 </div>
                 <p v-if="!placeholderAliasList || !placeholderAliasList.length" class="text-xs text-gray-500">No aliases saved yet.</p>

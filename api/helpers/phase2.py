@@ -195,7 +195,7 @@ def _build_question_driven_followup_queries(
         return []
 
     variants = []
-    used_in_batch: set = set()
+    variant_by_template: dict = {}
     for target in targets[:max_queries]:
         target_words = set(re.findall(r"[a-z0-9]+", target.lower()))
         ranked = []
@@ -206,16 +206,22 @@ def _build_question_driven_followup_queries(
             overlap = len(target_words & set(re.findall(r"[a-z0-9]+", candidate_text)))
             ranked.append((overlap, candidate))
         ranked.sort(key=lambda item: item[0], reverse=True)
-        # Prefer a template this batch has not already re-checked (variety);
-        # fall back to the best match so every target still gets a card.
-        best = next((c for _o, c in ranked if c["title"] not in used_in_batch), None)
+        # Prefer a template this batch has not already re-checked (variety).
+        # When every template already has a card (more targets than
+        # templates), fold the extra target into the best match's card
+        # instead of emitting a same-titled duplicate — duplicate titles
+        # ledger duplicate evidence rows for one underlying query.
+        best = next((c for _o, c in ranked if c["title"] not in variant_by_template), None)
         if best is None and ranked:
-            best = ranked[0][1]
+            reuse = ranked[0][1]
+            existing = variant_by_template.get(reuse["title"])
+            if existing is not None and target not in existing["target_questions"]:
+                existing["target_questions"].append(target)
+            continue
         if not best:
             continue
-        used_in_batch.add(best["title"])
         short_question = target if len(target) <= 90 else target[:87].rstrip() + "..."
-        variants.append({
+        variant = {
             "title": f"Phase {phase_number}: {best['title']} (targeted re-check)",
             "spl": _rescope_variant_spl(best["spl"], phase_number),
             "description": (
@@ -225,7 +231,9 @@ def _build_question_driven_followup_queries(
             ),
             "target_questions": [target],
             "is_variant": True,
-        })
+        }
+        variant_by_template[best["title"]] = variant
+        variants.append(variant)
     return variants
 
 

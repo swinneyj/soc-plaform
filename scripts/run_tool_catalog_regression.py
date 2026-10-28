@@ -18,6 +18,25 @@ def run(command, env=None, timeout=20):
     return result.returncode, (result.stdout + result.stderr).strip()
 
 
+def _tool_env():
+    """Minimal env for spawned tools (PATH, HOME, COMMANDER_BOOT).
+
+    Same allowlist as api/routes/tools.py::_tool_env: tools read
+    only COMMANDER_BOOT from their environment, and inheriting
+    os.environ would expose the API process's secrets
+    (DATABASE_URL, API_KEY, OLLAMA_API_KEY) to every tool. Kept
+    stdlib-only so this runner stays runnable without the API's
+    dependencies.
+    """
+    env = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "COMMANDER_BOOT": "1",
+    }
+    if os.environ.get("HOME"):
+        env["HOME"] = os.environ["HOME"]
+    return env
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--json', action='store_true')
@@ -53,7 +72,7 @@ def main():
                 results.append({'tool': name, 'check': 'offline_fixture', 'status': 'failed', 'detail': 'not registered'})
                 continue
             code, output = run([sys.executable, str(ROOT / tool['path']), *extra],
-                               env={**os.environ, 'COMMANDER_BOOT': '1'})
+                               env=_tool_env())
             results.append({'tool': name, 'check': 'offline_fixture', 'status': 'passed' if code == 0 else 'failed',
                             'detail': output[-1000:]})
 

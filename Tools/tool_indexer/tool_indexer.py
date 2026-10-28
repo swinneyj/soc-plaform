@@ -21,6 +21,7 @@ def parse_tool_headers(filepath):
         "description": "No description provided."
     }
     arguments = []
+    output_dirs = []
     try:
         with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
             for i in range(50):
@@ -33,6 +34,23 @@ def parse_tool_headers(filepath):
                 if '# TOOL_NAME:' in check_line: metadata['name'] = line.split(':', 1)[1].strip()
                 elif '# DESC:' in check_line: metadata['description'] = line.split(':', 1)[1].strip()
                 elif '# CATEGORY:' in check_line: metadata['category'] = line.split(':', 1)[1].strip()
+                elif '# OUTPUT_DIR:' in check_line:
+                    # Output locations this tool writes into, relative to
+                    # the platform root, comma-separated. The API scopes
+                    # per-run artifact detection to these (optimization
+                    # #5 in docs/API_SECURITY_REVIEW.md), so only declare
+                    # directories the tool actually writes into.
+                    for raw_dir in line.split(':', 1)[1].split(','):
+                        clean = raw_dir.strip().replace('\\', '/').strip('/')
+                        if not clean:
+                            continue
+                        parts = [p for p in clean.split('/') if p not in ('', '.')]
+                        if not parts or any(p == '..' for p in parts):
+                            # Refuse escapes/ambiguity rather than index
+                            # a declaration the API would reject anyway.
+                            print(f"[-] {os.path.basename(filepath)}: refusing unsafe OUTPUT_DIR '{raw_dir.strip()}'")
+                            continue
+                        output_dirs.append('/'.join(parts))
                 elif '# ARG:' in check_line:
                     raw_arg = line.split(':', 1)[1]
                     parts = [p.strip() for p in raw_arg.split('|')]
@@ -44,6 +62,7 @@ def parse_tool_headers(filepath):
         print(f"[-] Error reading {filepath}: {e}")
         
     if arguments: metadata['arguments'] = arguments
+    if output_dirs: metadata['output_dirs'] = sorted(set(output_dirs))
     return metadata
 
 def rebuild_registry():

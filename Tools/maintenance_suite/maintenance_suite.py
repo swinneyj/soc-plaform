@@ -1,6 +1,7 @@
 # TOOL_NAME: Maintenance_Suite
 # DESC: Interactive hub for cleaning the workspace, generating AI context exports, or backing up the platform.
 # CATEGORY: System Utilities
+# OUTPUT_DIR: Data/Maintenance, Data/Exports
 
 import os
 import sys
@@ -13,7 +14,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 tools_dir = os.path.abspath(os.path.join(current_dir, '..'))
 sys.path.append(tools_dir)
 
-from core_lib.utils import Colors, clear_screen, get_platform_root
+from core_lib.utils import Colors, clear_screen, get_platform_root, validated_tool_target
 
 def run_tool(script_name, base_dir, touchless=False):
     """Searches for the requested tool in the Tools directory and runs it."""
@@ -26,6 +27,7 @@ def run_tool(script_name, base_dir, touchless=False):
             break
             
     if script_path:
+        script_path = validated_tool_target(script_path)
         print(f"\n{Colors.WARNING}[*] Launching module: {script_name}...{Colors.ENDC}")
         if touchless:
             subprocess.run([sys.executable, script_path], input=b"\n\n\n")

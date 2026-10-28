@@ -1,6 +1,7 @@
 # TOOL_NAME: Threat_Intel_Fetcher
 # DESC: Aggregates live intel from CISA KEV, CISA Advisories, and Abuse.ch into a single comprehensive daily bundle. Ready for playbook automation.
 # CATEGORY: Intel Collection
+# OUTPUT_DIR: Data/Reports
 # ARG: --compare_dir | Compare Directory | Directory containing Extracted IOC CSVs to cross-reference | False
 
 import os
@@ -22,7 +23,7 @@ def get_request(url):
         headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
     )
     try:
-        with urllib.request.urlopen(req, timeout=15) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- every caller passes a hardcoded HTTPS feed URL (CISA KEV/urlhaus/Feodo/ThreatFox); no user input reaches the URL
             return response.read().decode('utf-8')
     except Exception as e:
         return f"Error: {e}"
@@ -214,10 +215,17 @@ def main():
         pass
     # --- AUTO-OPEN REPORT ---
     try:
+        # report_path is generated above (fixed name + timestamp under
+        # Data/Reports); containment + existence checked before opening.
+        safe_report = os.path.abspath(report_path)
+        if os.path.commonpath([safe_report, os.path.abspath(output_dir)]) != os.path.abspath(output_dir):
+            raise ValueError("report path escapes the reports directory")
+        if not os.path.isfile(safe_report):
+            raise ValueError("report file does not exist: %r" % (report_path,))
         if os.name == 'nt':
-            os.startfile(report_path)
+            os.startfile(safe_report)
         else:
-            subprocess.run(['xdg-open', report_path])
+            subprocess.run(['xdg-open', safe_report])
         if not args.silent:
             print(f"  [+] Automatically opened report: {os.path.basename(report_path)}")
     except Exception as e:

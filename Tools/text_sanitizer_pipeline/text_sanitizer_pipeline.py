@@ -1,6 +1,7 @@
 # TOOL_NAME: Text_Sanitizer_Pipeline
 # DESC: Reflows garbled text and sanitizes IPs, MACs, and common PII/PHI before opening in Notepad.
 # CATEGORY: System Utilities
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --target | Target Text File | Path to the text file to sanitize directly | False
 # ARG: --mode | Input Mode | 1 (Paste), 2 (File Drag & Drop) | False
 # ARG: --width | Line Width | Desired wrap width (default 100) | False
@@ -91,6 +92,59 @@ def reflow_text(raw: str, width: int) -> str:
     return "\n".join(wrapped)
 
 
+# --- Hostname matching (BUG-01) -------------------------------------------
+# A hostname is redacted here, and (almost) nothing else is. Two shapes
+# qualify:
+#
+#   1. dotted names — three or more labels (fs-01.corp.local,
+#      dc01.example.com), or two labels ending in an internal suffix
+#      (server-01.local, jump.corp);
+#   2. bare machine names — 2-3 hyphenated segments carrying both letters and
+#      digits, where a segment reads letters-then-digits (srv-app01,
+#      win10-lab, ndc32-28) or the classic two-segment NAME-01 form (FS-01).
+#
+# Deliberately excluded: hyphenated application tags (win-update-rollup,
+# user-profile-service — no digits), dates (2026-10-23), ISO-8601 timestamps
+# (2026-10-23T18:28:43), file names (index.html) and bare domains
+# (example.com). The previous `\b([A-Za-z0-9]+[-][A-Za-z0-9-]+)\b` matched
+# every hyphenated token, so timestamps and tags were tokenized as hosts.
+_HOST_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+_DOTTED_HOST_RE = re.compile(
+    r"\b(?:%s\.){2,}%s\b" % (_HOST_LABEL, _HOST_LABEL)
+    + r"|\b(?:%s\.)(?:local|lan|corp|internal|intranet|home|svc|site)\b" % _HOST_LABEL,
+    re.IGNORECASE,
+)
+_BARE_HOST_CANDIDATE_RE = re.compile(r"\b[A-Za-z0-9]+(?:-[A-Za-z0-9]+){1,2}\b")
+_LETTERS_THEN_DIGITS_RE = re.compile(r"[A-Za-z]+[0-9]+")
+_ALPHA_SEGMENT_RE = re.compile(r"[A-Za-z]+")
+
+
+def _looks_like_bare_host(token: str) -> bool:
+    """True for machine-name shapes; False for tags, dates and timestamps."""
+    if not 3 <= len(token) <= 24:
+        return False
+    segments = token.split("-")
+    if not all(segments):
+        return False
+    if not re.search(r"[A-Za-z]", token) or not re.search(r"[0-9]", token):
+        return False
+    if all(segment.isdigit() for segment in segments):
+        return False  # a date, not a host (2026-10-23)
+    if any(_LETTERS_THEN_DIGITS_RE.fullmatch(segment) for segment in segments):
+        return True  # srv-app01, win10-lab, ndc32-28
+    # Trailing index form: NAME-01 or ns-lb-01. Alphabetic halves are capped at
+    # 6 chars so date-stamped tags (release-2026-10) are not mistaken for
+    # hosts, and at most two prefixes are allowed.
+    tail = segments[-1]
+    if not tail.isdigit() or not 1 <= len(tail) <= 4:
+        return False
+    prefixes = segments[:-1]
+    return bool(prefixes) and len(prefixes) <= 2 and all(
+        _ALPHA_SEGMENT_RE.fullmatch(prefix) and 1 <= len(prefix) <= 6
+        for prefix in prefixes
+    )
+
+
 # --- Sanitization heuristics (mirrors Data_Ingestor_Pipeline) ---
 
 def sanitize_logs_with_tokens(text: str):
@@ -130,12 +184,18 @@ def sanitize_logs_with_tokens(text: str):
     text = re.sub(r"(?i)ticket[-_]?#?\d+", "[REDACTED_TICKET]", text)
     text = re.sub(r"(?i)\b(INC|SR|REQ|TASK)[-_]?[0-9]{4,}\b", "[REDACTED_TICKET]", text)
 
-    # Simple hostnames (short alnum-plus-dash segments before a domain or by themselves)
-    # e.g. ndc32-28, srv-app01, win10-lab → HOST_N tokens.
+    # Hostnames → HOST_N tokens (see the pattern block above for what counts).
     def repl_host(m):
         return make_token("HOST", m.group(0))
 
-    text = re.sub(r"\b([A-Za-z0-9]+[-][A-Za-z0-9-]+)\b", repl_host, text)
+    def repl_bare_host(m):
+        candidate = m.group(0)
+        if not _looks_like_bare_host(candidate):
+            return candidate
+        return make_token("HOST", candidate)
+
+    text = _DOTTED_HOST_RE.sub(repl_host, text)
+    text = _BARE_HOST_CANDIDATE_RE.sub(repl_bare_host, text)
 
     return text, mapping
 

@@ -1,6 +1,7 @@
 # TOOL_NAME: splunk_notable_parser
 # DESC: Parses raw Splunk exports using aggressive Regex to extract actionable IOCs (IPs, Emails, Hashes) hidden within unstructured log data.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Reports
 # ARG: --file | Splunk CSV/TXT File | Path to the raw Splunk export | True
 
 import os

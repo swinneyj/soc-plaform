@@ -5,7 +5,6 @@ param(
     [string]$SharedDumpDir = "Z:\PAX DNA SOC\01 Tools\11 SOC Automation Handoff",
     [int]$BaseApiPort = 9000,
     [int]$BaseDbPort = 9300,
-    [int]$BaseRedisPort = 9600,
     [int]$PortRange = 300
 )
 
@@ -47,13 +46,10 @@ Write-Host "[*] Branch: $Branch"
 [int]$hash = [Math]::Abs($Branch.GetHashCode())
 [int]$appPort = $BaseApiPort + ($hash % $PortRange)
 [int]$dbPort = $BaseDbPort + ($hash % $PortRange)
-[int]$redisPort = $BaseRedisPort + ($hash % $PortRange)
-
-Write-Host "[*] Computed ports -> App: $appPort, DB: $dbPort, Redis: $redisPort"
+Write-Host "[*] Computed ports -> App: $appPort, DB: $dbPort"
 
 $env:API_HOST_PORT = "$appPort"
 $env:POSTGRES_HOST_PORT = "$dbPort"
-$env:REDIS_PORT = "$redisPort"
 $env:COMPOSE_DATABASE_URL = "postgresql+psycopg2://soc_platform@postgres:5432/soc_platform"
 $env:DATABASE_URL = "postgresql+psycopg://soc_platform@localhost:$dbPort/soc_platform"
 
@@ -62,10 +58,10 @@ $projectName = "soc-$Branch"
 Write-Host "[*] Stopping existing preview project (if any): $projectName"
 docker compose -p $projectName down --remove-orphans
 
-Write-Host "[*] Starting postgres and redis for branch preview..."
-docker compose -p $projectName up -d postgres redis
+Write-Host "[*] Starting postgres for branch preview..."
+docker compose -p $projectName up -d postgres
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "docker compose up postgres/redis failed for project $projectName"
+    Write-Error "docker compose up postgres failed for project $projectName"
     exit $LASTEXITCODE
 }
 

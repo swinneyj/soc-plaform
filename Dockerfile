@@ -33,9 +33,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copy entire platform
 COPY . .
 
-# Create data directories with proper permissions
+# Create data directories with proper permissions (owned by the runtime user below)
 RUN mkdir -p Data/Archive Data/Reports Data/Logs Data/Active_Workspace Playbooks web && \
-    chmod -R 755 Data Playbooks Tools web
+    chmod -R 755 Data Playbooks Tools web && \
+    useradd -m -u 10001 appuser && \
+    chown -R appuser:appuser /app
+
+# Never run as root: the API only needs its own tree and mounted volumes.
+USER appuser
 
 # Expose API port
 EXPOSE 8000
@@ -46,3 +51,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
 
 # Default to API service; can override with 'docker run ... python commander.py' for CLI
 CMD ["python", "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+

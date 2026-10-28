@@ -18,6 +18,7 @@ the UI does.
 """
 
 import json
+import os
 import sys
 import time
 from datetime import datetime, timedelta
@@ -977,6 +978,135 @@ class TestPlaybookFamilyGuard:
         ]
 
 
+class TestCatalogAnchorFallback:
+    """BUG-02: the catalog fuzzy-matcher must survive notables whose usable
+    fields live under `raw_fields`.
+
+    The matcher built its anchor from `case.rule_name` plus
+    `payload.get("fields")` only, while the paste/store path records the
+    originals under `raw_fields`. An imported notable with a sanitized or
+    empty rule name therefore matched nothing and silently produced no query
+    cards — the loop looked like it had converged when it had not.
+
+    Precedence is deliberate: sanitized `fields` win per key, `raw_fields`
+    only fill gaps, and the raw values are matcher-only — they must never
+    reach the model prompt.
+    """
+
+    @staticmethod
+    def _seed_case(client, case_id, rule_name, rule_id="custom_uuid_0001"):
+        db = client.test_session()
+        db.add(db_models.TriageResult(
+            case_id=case_id,
+            rule_name=rule_name,
+            rule_id=rule_id,
+            verdict="suspicious",
+            confidence_score=0.8,
+            analysis_summary="Synthetic imported-notable case.",
+        ))
+        db.commit()
+        db.close()
+
+    @staticmethod
+    def _attach_promoted_notable(client, case_id, payload):
+        db = client.test_session()
+        db.add(db_models.SplunkEvent(
+            source="pasted",
+            sourcetype="splunk:notable:pasted",
+            host="unused",
+            raw=json.dumps({**payload, "promoted_case_id": case_id}),
+        ))
+        db.commit()
+        db.close()
+
+    def _install_catalog(self, monkeypatch, tmp_path):
+        TestPlaybookFamilyGuard._install_catalog(
+            monkeypatch, tmp_path, [TestPlaybookFamilyGuard._hijack_catalog_entry()]
+        )
+
+    def test_raw_fields_drive_the_match_when_fields_are_absent(self, api_client, monkeypatch, tmp_path):
+        self._seed_case(api_client, "RAW-1", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-1", {
+            "raw_fields": {
+                "rule_name": "Certutil Staging Rule",
+                "title": "Certutil Staging",
+                "correlation_search": "certutil_staging",
+            },
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-1", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "catalog_rule_stealer"
+        assert [q["title"] for q in data["supportive_queries"]] == ["certutil staging check"]
+
+    def test_sanitized_rule_name_falls_back_to_raw_fields(self, api_client, monkeypatch, tmp_path):
+        self._seed_case(
+            api_client, "RAW-2", rule_name="Endpoint - [REDACTED_HOST] - Rule"
+        )
+        self._attach_promoted_notable(api_client, "RAW-2", {
+            "raw_fields": {"rule_name": "Certutil Staging Rule"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-2", 2)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["supportive_rule_id"] == "catalog_rule_stealer"
+
+    def test_sanitized_fields_win_over_raw_fields(self, api_client, monkeypatch, tmp_path):
+        """`raw_fields` fills gaps; it never overrides a usable sanitized field."""
+        self._seed_case(api_client, "RAW-3", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-3", {
+            "fields": {
+                "title": "Certutil Staging",
+                "correlation_search": "certutil_staging",
+            },
+            "raw_fields": {"title": "totally unrelated wording"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-3", 2)
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["supportive_rule_id"] == "catalog_rule_stealer"
+
+    def test_no_usable_anchor_adopts_nothing(self, api_client, monkeypatch, tmp_path):
+        """Malformed or irrelevant fallbacks must not invent a catalog family."""
+        self._seed_case(api_client, "RAW-4", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-4", {
+            "raw_fields": {"title": "totally unrelated wording"},
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-4", 2)
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["supportive_rule_id"] == "custom_uuid_0001"
+        assert "certutil staging check" not in [q["title"] for q in data["supportive_queries"]]
+
+    def test_raw_fields_never_reach_the_prompt(self, api_client, monkeypatch, tmp_path):
+        """The fallback is a matcher input only: raw values stay local."""
+        marker = "RAW-ONLY-MARKER-9f3"
+        self._seed_case(api_client, "RAW-5", rule_name="")
+        self._attach_promoted_notable(api_client, "RAW-5", {
+            "raw_fields": {
+                "rule_name": "Certutil Staging Rule",
+                "description": marker,
+            },
+            "sanitized_text": "imported notable",
+        })
+        self._install_catalog(monkeypatch, tmp_path)
+
+        resp = _post_analyze(api_client, "RAW-5", 2)
+        assert resp.status_code == 200, resp.text
+        prompts = "\n".join(api_client.fake_ollama.calls)
+        assert marker not in prompts, "raw_fields leaked into the model prompt"
+
+
 class TestPromoteJudgmentFlow:
     """Phase 4 (judgment-flow audit): the pasted ES disposition is the
     referring analyst's conclusion — recorded on the notable for context,
@@ -1122,9 +1252,10 @@ class TestAnalysisRetentionPrune:
 
 class TestApiKeyActivation:
     """Phase 5 auth groundwork: with API_KEY set, every mutating /api/*
-    request needs the key (X-API-Key header or ?api_key=); reads and
-    /api/health stay open. Unset API_KEY keeps local dev open — that mode is
-    what every other test exercises."""
+    request needs the key (X-API-Key header, or ?api_key= only when
+    AUTH_ALLOW_QUERY_KEY=1 — F2); reads and /api/health stay open.
+    Unset API_KEY keeps local dev open — that mode is what every other
+    test exercises."""
 
     def _evidence_body(self):
         return {
@@ -1156,9 +1287,20 @@ class TestApiKeyActivation:
         )
         assert resp.status_code == 200, resp.text
 
-    def test_query_param_key_allows_mutation(self, api_client, monkeypatch):
+    def test_query_param_key_rejected_by_default(self, api_client, monkeypatch):
+        """F2: query-only auth 401s without AUTH_ALLOW_QUERY_KEY=1."""
         monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
         case_id = seed_case(api_client, "AUTH-3")
+        resp = api_client.post(
+            f"/api/db/triage/{case_id}/evidence?api_key=sekret",
+            json=self._evidence_body(),
+        )
+        assert resp.status_code == 401
+
+    def test_query_param_key_allows_mutation_when_flagged(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        monkeypatch.setenv("AUTH_ALLOW_QUERY_KEY", "1")
+        case_id = seed_case(api_client, "AUTH-3b")
         resp = api_client.post(
             f"/api/db/triage/{case_id}/evidence?api_key=sekret",
             json=self._evidence_body(),
@@ -1215,6 +1357,85 @@ class TestApiKeyActivation:
             headers={"X-API-Key": cfg["apiKey"]},
         )
         assert resp.status_code == 200, resp.text
+
+    # Optimization #2 (API security review): the bootstrapped
+    # page is cached on (_API_KEY, file mtime) — repeat page
+    # loads are a cache lookup plus one stat, not a re-read
+    # and re-inject of the whole file.
+    def _index_path(self):
+        return os.path.join(api_main.web_dir, "index.modular.html")
+
+    def test_index_html_cached_across_repeat_loads(
+        self, api_client, monkeypatch
+    ):
+        import builtins
+
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        index_path = self._index_path()
+        api_main._index_cache["key"] = None  # start cold
+        reads = []
+        real_open = builtins.open
+
+        def counting_open(file, *args, **kwargs):
+            if str(file) == index_path:
+                reads.append(str(file))
+            return real_open(file, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", counting_open)
+        first = api_client.get("/index.modular.html")
+        second = api_client.get("/index.modular.html")
+        assert first.status_code == second.status_code == 200
+        assert "window.SOC_CONFIG" in second.text
+        assert "sekret" in second.text
+        assert first.text == second.text
+        # Two page loads, one read of the file from disk.
+        assert len(reads) == 1
+
+    def test_index_html_cache_invalidated_on_file_change(
+        self, api_client, monkeypatch
+    ):
+        monkeypatch.setattr(api_auth, "_API_KEY", "sekret")
+        index_path = self._index_path()
+        api_main._index_cache["key"] = None  # start cold
+        assert "window.SOC_CONFIG" in api_client.get("/index.modular.html").text
+
+        # Edit the file on disk and force a distinct mtime:
+        # the next load must re-read and re-inject (cache miss).
+        original = Path(index_path).read_text(encoding="utf-8")
+        try:
+            Path(index_path).write_text(
+                original.replace("</head>", "<!-- cache-bust -->\n</head>", 1),
+                encoding="utf-8",
+            )
+            stamp = time.time() + 10
+            os.utime(index_path, (stamp, stamp))
+            second = api_client.get("/index.modular.html")
+            assert second.status_code == 200
+            assert "cache-bust" in second.text
+        finally:
+            Path(index_path).write_text(original, encoding="utf-8")
+
+    def test_index_html_cache_keyed_on_api_key(self, api_client, monkeypatch):
+        monkeypatch.setattr(api_auth, "_API_KEY", "key-one")
+        api_main._index_cache["key"] = None  # start cold
+        page_one = api_client.get("/index.modular.html").text
+        assert "key-one" in page_one
+        # A different armed key is a different cache entry:
+        # the page is re-rendered with the new bootstrap.
+        monkeypatch.setattr(api_auth, "_API_KEY", "key-two")
+        page_two = api_client.get("/index.modular.html").text
+        assert "key-two" in page_two
+        assert "key-one" not in page_two
+
+    def test_index_html_cached_verbatim_when_disarmed(
+        self, api_client, monkeypatch
+    ):
+        monkeypatch.setattr(api_auth, "_API_KEY", "")
+        api_main._index_cache["key"] = None  # start cold
+        first = api_client.get("/index.modular.html")
+        second = api_client.get("/index.modular.html")
+        assert "window.SOC_CONFIG" not in second.text
+        assert first.text == second.text
 
 
 def _load_migration_module():

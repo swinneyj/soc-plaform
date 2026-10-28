@@ -12,7 +12,7 @@ import shlex
 import argparse
 
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from core_lib.utils import Colors, clear_screen, get_platform_root
+from core_lib.utils import Colors, clear_screen, get_platform_root, validated_arg_list, validated_tool_target
 
 def load_registry(platform_root):
     reg_path = os.path.join(platform_root, 'Commander_Registry.json')
@@ -138,11 +138,12 @@ def main():
             print(f"{Colors.CYAN}[*] EXECUTING: {os.path.basename(tool_path)} {raw_args}{Colors.ENDC}\n")
             
             try:
-                parsed_args = shlex.split(raw_args)
-                if full_tool_path.endswith('.py'):
-                    subprocess.run([sys.executable, full_tool_path] + parsed_args)
+                parsed_args = validated_arg_list(shlex.split(raw_args))
+                safe_tool_path = validated_tool_target(full_tool_path)
+                if safe_tool_path.endswith('.py'):
+                    subprocess.run([sys.executable, safe_tool_path] + parsed_args)
                 else:
-                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", full_tool_path] + parsed_args)
+                    subprocess.run(["powershell.exe", "-ExecutionPolicy", "Bypass", "-File", safe_tool_path] + parsed_args)
             except Exception as e:
                 print(f"{Colors.FAIL}[!] Playbook step failed: {os.path.basename(tool_path)} -> {e}{Colors.ENDC}")
                 break 

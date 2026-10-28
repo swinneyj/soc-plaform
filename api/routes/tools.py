@@ -1,5 +1,6 @@
 """Tools surface: tool registry, sync/async execution with in-memory jobs,
 reports, tool artifacts, and the ToolRun persistence trail."""
+import asyncio
 import datetime
 import json
 import logging
@@ -7,13 +8,18 @@ import os
 import subprocess
 import sys
 import uuid
+import weakref
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse
+from sqlalchemy import func
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
+from api.helpers import admission
 
 from api.auth import require_api_key, require_role
 from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
@@ -33,6 +39,66 @@ STALE_JOB_SECONDS = 600
 # Counts unfinished (pending/running) jobs; over-limit admission answers 429.
 JOB_QUEUE_MAX = int(os.environ.get("JOB_QUEUE_MAX", "100"))
 
+# API security review, optimization #3: bound simultaneous tool
+# subprocesses SEPARATELY from the job-queue cap above. The queue may
+# admit up to JOB_QUEUE_MAX unfinished jobs, but every RUNNING job used
+# to occupy an anyio threadpool thread (default pool: 40 tokens) for
+# its whole subprocess run — up to 300 s each — so ~40+ concurrent
+# runs exhausted the pool and sync endpoints starved. Background tasks
+# now park on this running-semaphore (see _tool_run_semaphore): waiting
+# for a permit costs no threadpool token, and only the subprocess run
+# itself, under a permit, occupies one. The queue stays at 100;
+# simultaneous subprocesses stay at TOOL_CONCURRENCY_MAX.
+TOOL_CONCURRENCY_MAX = max(1, int(os.environ.get("TOOL_CONCURRENCY_MAX", "6")))
+
+# Permit pools, one per event loop. asyncio primitives bind to the loop
+# they are first used on, and test clients spin up a fresh loop per
+# portal — a single module-level semaphore would raise "bound to a
+# different event loop" on the second client. In production there is
+# exactly one loop, i.e. one shared pool of TOOL_CONCURRENCY_MAX permits.
+_tool_run_semaphores = weakref.WeakKeyDictionary()
+
+
+def _tool_run_semaphore() -> "asyncio.Semaphore":
+    """The tool-running permit pool for the current event loop."""
+    loop = asyncio.get_running_loop()
+    semaphore = _tool_run_semaphores.get(loop)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(TOOL_CONCURRENCY_MAX)
+        _tool_run_semaphores[loop] = semaphore
+    return semaphore
+
+# C2.1.6 hardening: registered tools run on an explicit env allowlist,
+# NOT a copy of the API environment — the wholesale copy handed every
+# registered tool the API process's secrets (DATABASE_URL, API_KEY,
+# OLLAMA_API_KEY, ...). An audit of Tools/**/*.py found tools read
+# exactly one variable from their environment (COMMANDER_BOOT, the
+# interactive-prompt guard); anything else a tool genuinely needs must
+# be named here explicitly.
+_TOOL_ENV_PASSTHROUGH: Tuple[str, ...] = ()
+
+
+def _tool_env() -> Dict[str, str]:
+    """Minimal environment for a registered tool subprocess.
+
+    Allowlist, not inheritance: PATH (helper binaries tools shell
+    out to), HOME (tooling cache location), and COMMANDER_BOOT (the
+    API-boot flag that suppresses terminal-only prompts so API jobs
+    never block waiting for a human). Secrets of the API process
+    stay unreadable by tools.
+    """
+    env: Dict[str, str] = {
+        "PATH": os.environ.get("PATH", os.defpath),
+        "COMMANDER_BOOT": "1",
+    }
+    if os.environ.get("HOME"):
+        env["HOME"] = os.environ["HOME"]
+    for key in _TOOL_ENV_PASSTHROUGH:
+        value = os.environ.get(key)
+        if value is not None:
+            env[key] = value
+    return env
+
 def _job_status_value(status: Any) -> str:
     """Normalize enum instances and legacy persisted enum strings."""
     if isinstance(status, JobStatus):
@@ -42,6 +108,55 @@ def _job_status_value(status: Any) -> str:
         value = value.split(".", 1)[1].lower()
     return value.lower()
 
+
+def _unfinished_job_count() -> int:
+    """Unfinished (pending/running) jobs across BOTH stores: the
+    process-local jobs dict AND the persisted ToolRun rows.
+
+    The dict is process-local, so a daemon restart (or a second
+    worker) would otherwise see an empty queue and the C2.1.2
+    admission cap would silently reset to zero while persisted
+    jobs keep occupying slots. The persisted tally is a DB-side
+    func.count() filtered on unfinished statuses (API security
+    review optimization #4) — one aggregate, never a fetch of
+    every ToolRun row. Statuses are normalized in SQL with the
+    same prefix-strip + lowercase _job_status_value applies, so
+    legacy persisted enum strings still count, and job ids
+    already counted from the in-memory dict are excluded so a
+    job present in BOTH stores counts once. A DB failure
+    degrades to the in-memory count so a database hiccup cannot
+    fail admission outright.
+    """
+    unfinished_statuses = (JobStatus.PENDING.value, JobStatus.RUNNING.value)
+    live_unfinished_ids = {
+        job_id
+        for job_id, job in jobs.items()
+        if job.get("status") in unfinished_statuses
+    }
+    count = len(live_unfinished_ids)
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        try:
+            # Same normalization _job_status_value applies to a
+            # persisted string: strip the legacy "JobStatus."
+            # enum prefix, trim, lowercase — done in SQL so the
+            # count never ships rows to the process.
+            normalized_status = func.lower(
+                func.trim(func.replace(ToolRun.status, "JobStatus.", ""))
+            )
+            query = db.query(func.count(ToolRun.job_id)).filter(
+                normalized_status.in_(unfinished_statuses)
+            )
+            if live_unfinished_ids:
+                # A job tracked in BOTH stores must count once.
+                query = query.filter(ToolRun.job_id.notin_(live_unfinished_ids))
+            count += query.scalar() or 0
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[tool_runs] Admission could not count persisted jobs: %s", exc)
+    return count
 
 def load_registry() -> List[Dict]:
     """Load tool registry from JSON."""
@@ -68,16 +183,83 @@ def _fix_tool_path(tool_path: str) -> str:
                 return relative_path
     return tool_path
 
-def _tool_artifact_snapshot() -> set:
-    """Return files that tool runs may create, using portable paths."""
+# Legacy artifact sweep (optimization #5 fallback): tools that have not
+# declared their output locations in the registry keep the full sweep so
+# artifact detection never narrows silently.
+_LEGACY_ARTIFACT_DIRS = (
+    ("Reports",),
+    ("Data", "Reports"),
+    ("Data", "Archive"),
+    ("Data", "Active_Workspace"),
+    ("Data", "Exports"),
+)
+
+
+def _legacy_artifact_candidates(root: str) -> List[str]:
+    return [os.path.join(root, *parts) for parts in _LEGACY_ARTIFACT_DIRS]
+
+
+def _registry_output_dirs(tool_name: Optional[str]) -> List[str]:
+    """Declared output locations for one tool, from the registry.
+
+    Registry entries carry `output_dirs` (relative to the platform root
+    unless absolute), seeded from `# OUTPUT_DIR:` headers by the tool
+    indexer. A missing/unparsable registry degrades to no declarations —
+    tool execution must not fail over metadata.
+    """
+    if not tool_name:
+        return []
+    try:
+        registry = load_registry()
+    except Exception:
+        return []
+    wanted = str(tool_name).strip().lower()
+    for entry in registry:
+        if str(entry.get("name", "")).strip().lower() == wanted:
+            dirs = entry.get("output_dirs") or []
+            return [str(d) for d in dirs if str(d or "").strip()]
+    return []
+
+
+def _resolve_output_dirs(declared: List[str], root: str) -> List[str]:
+    """Resolve declared output locations, refusing escapes from the root.
+
+    Relative declarations join the platform root; absolutes are honored
+    only when already inside it. Containment is checked on realpath (so
+    symlinks cannot smuggle the snapshot outside) — the same
+    traversal-stance as the reports/artifact endpoints (#15). Declared
+    lists that resolve to nothing fall back to the legacy sweep at the
+    caller.
+    """
+    real_root = os.path.realpath(root)
+    resolved = []
+    for declared_dir in declared:
+        candidate = (
+            declared_dir if os.path.isabs(declared_dir) else os.path.join(root, declared_dir)
+        )
+        real = os.path.realpath(candidate)
+        if real == real_root or real.startswith(real_root + os.sep):
+            resolved.append(candidate)
+    return resolved
+
+
+def _tool_artifact_snapshot(tool_name: Optional[str] = None) -> set:
+    """Return files that tool runs may create, using portable paths.
+
+    Optimization #5: the before/after diff no longer sweeps all five
+    candidate trees for every run. A tool whose registry entry declares
+    `output_dirs` is snapshotted against only those directories; the
+    legacy sweep remains the fallback for undeclared tools (and for
+    declarations that resolve to nothing), so narrowing is opt-in per
+    tool and never silently loses artifact detection.
+    """
     root = deps.get_platform_root()
-    candidates = [
-        os.path.join(root, "Reports"),
-        os.path.join(root, "Data", "Reports"),
-        os.path.join(root, "Data", "Archive"),
-        os.path.join(root, "Data", "Active_Workspace"),
-        os.path.join(root, "Data", "Exports"),
-    ]
+    candidates = _legacy_artifact_candidates(root)
+    declared = _registry_output_dirs(tool_name)
+    if declared:
+        scoped = _resolve_output_dirs(declared, root)
+        if scoped:
+            candidates = scoped
     found = set()
     for folder in candidates:
         if not os.path.isdir(folder):
@@ -92,8 +274,17 @@ def _tool_artifact_snapshot() -> set:
     return found
 
 
-def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False) -> Dict[str, Any]:
-    """Execute a tool synchronously and return stdout/stderr/exit_code."""
+def execute_tool_sync(
+    tool_path: str,
+    args: Dict[str, str],
+    silent: bool = False,
+    tool_name: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Execute a tool synchronously and return stdout/stderr/exit_code.
+
+    `tool_name` scopes the artifact snapshot to the tool's registry-
+    declared output dirs (optimization #5); None keeps the legacy sweep.
+    """
     cmd = [sys.executable, tool_path]
     boolean_flags = {
         "silent", "list", "use_cases", "replace_all_supportive",
@@ -104,20 +295,17 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
                 cmd.append(f"--{key.replace('_', '-')}")
         elif val:
             cmd.extend([f'--{key}', str(val)])
-    before = _tool_artifact_snapshot()
+    before = _tool_artifact_snapshot(tool_name)
     try:
-        tool_env = os.environ.copy()
-        # API jobs must never block waiting for a terminal-only prompt.
-        tool_env["COMMANDER_BOOT"] = "1"
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=300,
             cwd=deps.get_platform_root(),
-            env=tool_env,
+            env=_tool_env(),
         )
-        after = _tool_artifact_snapshot()
+        after = _tool_artifact_snapshot(tool_name)
         artifacts = [os.path.relpath(p, deps.get_platform_root()).replace(os.sep, "/") for p in sorted(after - before)]
         return {
             "stdout": result.stdout,
@@ -140,23 +328,47 @@ def execute_tool_sync(tool_path: str, args: Dict[str, str], silent: bool = False
             "artifacts": [],
         }
 
-def execute_tool_async(job_id: str, tool_path: str, args: Dict[str, str], silent: bool = False):
-    """Background task to execute tool asynchronously."""
+async def execute_tool_async(
+    job_id: str,
+    tool_path: str,
+    args: Dict[str, str],
+    silent: bool = False,
+    tool_name: Optional[str] = None,
+):
+    """Background task to execute tool asynchronously.
+
+    A coroutine on purpose: FastAPI awaits coroutine background tasks on
+    the event loop instead of handing them to the threadpool, so the job
+    can park on the running-semaphore without holding a threadpool thread
+    (optimization #3 — a 100-job queue of 300 s runs must not consume
+    the ~40 anyio tokens sync endpoints depend on). The blocking
+    subprocess run is dispatched to the threadpool only while a permit
+    is held, and the permit is released however the run ends.
+    """
     if job_id in deleted_job_ids or job_id not in jobs:
         return
-    jobs[job_id]["status"] = JobStatus.RUNNING.value
-    result = execute_tool_sync(tool_path, args, silent)
-    if job_id in deleted_job_ids or job_id not in jobs:
-        return
-    jobs[job_id].update({
-        "status": JobStatus.COMPLETED.value if result["exit_code"] == 0 else JobStatus.FAILED.value,
-        "stdout": result["stdout"],
-        "stderr": result["stderr"],
-        "exit_code": result["exit_code"],
-        "artifacts": result.get("artifacts", []),
-        "completed_at": utcnow_naive().isoformat()
-    })
-    _persist_tool_run(jobs[job_id])
+    semaphore = _tool_run_semaphore()
+    await semaphore.acquire()
+    try:
+        # Re-check: the job may have been deleted while it waited for
+        # a permit — a cancelled job must never start its subprocess.
+        if job_id in deleted_job_ids or job_id not in jobs:
+            return
+        jobs[job_id]["status"] = JobStatus.RUNNING.value
+        result = await run_in_threadpool(execute_tool_sync, tool_path, args, silent, tool_name)
+        if job_id in deleted_job_ids or job_id not in jobs:
+            return
+        jobs[job_id].update({
+            "status": JobStatus.COMPLETED.value if result["exit_code"] == 0 else JobStatus.FAILED.value,
+            "stdout": result["stdout"],
+            "stderr": result["stderr"],
+            "exit_code": result["exit_code"],
+            "artifacts": result.get("artifacts", []),
+            "completed_at": utcnow_naive().isoformat()
+        })
+        await run_in_threadpool(_persist_tool_run, jobs[job_id])
+    finally:
+        semaphore.release()
 
 
 def _persist_tool_run(job: Dict[str, Any]) -> None:
@@ -184,7 +396,7 @@ def _persist_tool_run(job: Dict[str, Any]) -> None:
 
 
 @router.get("/api/tools", response_model=List[ToolInfo], tags=["Tools"],
-           dependencies=[Depends(require_role("admin"))])
+           dependencies=[Depends(require_role("analyst"))])
 def list_tools():
     """List all available tools with metadata."""
     registry = load_registry()
@@ -201,7 +413,7 @@ def list_tools():
     ]
 
 @router.get("/api/tools/{tool_name}", response_model=ToolInfo, tags=["Tools"],
-           dependencies=[Depends(require_role("admin"))])
+           dependencies=[Depends(require_role("analyst"))])
 def get_tool(tool_name: str):
     """Get metadata for a specific tool."""
     registry = load_registry()
@@ -227,11 +439,12 @@ def run_tool_catalog_regression():
     result = subprocess.run(
         [sys.executable, runner, "--json"], cwd=deps.get_platform_root(),
         capture_output=True, text=True, timeout=180,
+        env=_tool_env(),
     )
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail=result.stdout + result.stderr)
+        raise InternalError(result.stdout + result.stderr, context="tools")
     payload["exit_code"] = result.returncode
     return payload
 
@@ -240,13 +453,13 @@ def run_tool_catalog_regression():
 def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     """Execute a tool asynchronously and return a job ID."""
     # C2.1.2: admission check before registry/disk work — under load this is
-    # the cheap first gate.
-    unfinished = sum(1 for job in jobs.values() if job.get("status") in (JobStatus.PENDING.value, JobStatus.RUNNING.value))
-    if unfinished >= JOB_QUEUE_MAX:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Job queue is full ({unfinished} unfinished >= {JOB_QUEUE_MAX}); retry later",
-        )
+    # the cheap first gate. Counts in-memory AND persisted unfinished
+    # jobs so a restart does not reset the cap.
+    rejection = admission.queue_rejection(
+        _unfinished_job_count(), JOB_QUEUE_MAX
+    )
+    if rejection is not None:
+        raise rejection
     registry = load_registry()
     tool = next((t for t in registry if t["name"].lower() == request.tool_name.lower()), None)
     if not tool:
@@ -274,11 +487,12 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
         job_id,
         tool_path,
         request.arguments or {},
-        request.silent
+        request.silent,
+        request.tool_name
     )
     return JobResponse(**jobs[job_id])
 
-@router.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Execution"])
+@router.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def get_job_status(job_id: str):
     """Retrieve job status and results."""
     if job_id not in jobs:
@@ -307,7 +521,7 @@ def get_job_status(job_id: str):
     job["status"] = _job_status_value(job.get("status"))
     return JobResponse(**job)
 
-@router.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"])
+@router.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by job status")):
     """List all jobs, optionally filtered by status."""
     job_list = list(jobs.values())
@@ -393,7 +607,7 @@ def clear_jobs():
         deleted = 0
     return {"deleted": deleted}
 
-@router.get("/api/reports", tags=["Data"])
+@router.get("/api/reports", tags=["Data"], dependencies=[Depends(require_role("analyst"))])
 def list_reports():
     """List all generated reports."""
     reports_dir = deps.get_reports_dir()
@@ -409,7 +623,7 @@ def list_reports():
                 })
     return sorted(reports, key=lambda x: x["modified"], reverse=True)
 
-@router.get("/api/reports/{report_name}", tags=["Data"])
+@router.get("/api/reports/{report_name}", tags=["Data"], dependencies=[Depends(require_role("analyst"))])
 def download_report(report_name: str):
     """Download a specific report file.
 
@@ -430,7 +644,7 @@ def download_report(report_name: str):
         media_type="text/plain"
     )
 
-@router.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"])
+@router.get("/api/tool-artifacts/{artifact_path:path}", tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def download_tool_artifact(artifact_path: str):
     """Download only files from approved generated-artifact directories."""
     root = Path(deps.get_platform_root()).resolve()
@@ -465,12 +679,13 @@ def reload_registry():
             capture_output=True,
             text=True,
             timeout=60,
-            cwd=deps.get_platform_root()
+            cwd=deps.get_platform_root(),
+            env=_tool_env(),
         )
         return {
             "status": "success" if result.returncode == 0 else "failed",
             "message": result.stdout + result.stderr
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="tools")
 

@@ -1,6 +1,7 @@
 # TOOL_NAME: Case_Bundle_Builder
 # DESC: Builds a consolidated incident case bundle from a folder of exports.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Reports, Data/Archive, Data/Exports
 # SOURCE_TYPES: offline_exports
 # ARG: --source_dir | Source Directory | Folder containing raw exports for this case | True
 
@@ -13,7 +14,7 @@ import subprocess
 
 # Import shared core library
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
-from core_lib.utils import Colors, clear_screen, get_platform_root
+from core_lib.utils import Colors, clear_screen, get_platform_root, validated_arg_list, validated_tool_target
 
 
 def discover_files(source_dir):
@@ -68,8 +69,9 @@ def run_processor(tool_path, args_list, derived_dir, label, derived_outputs):
                     existing.add(os.path.join(base, name))
 
         # Execute the tool (silent flags are passed where supported)
-        parsed_args = list(args_list)
-        subprocess.run([sys.executable, tool_path] + parsed_args, input=b"\n\n\n")
+        safe_tool_path = validated_tool_target(tool_path)
+        parsed_args = validated_arg_list(args_list)
+        subprocess.run([sys.executable, safe_tool_path] + parsed_args, input=b"\n\n\n")
 
         # Detect new files after execution
         new_files = []

@@ -8,9 +8,11 @@ import json
 import sys
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import require_role
 
 from api import deps
+from api.helpers.errors import raise_internal
 
 from api.helpers.triage_keys import extract_triage_key_fields
 
@@ -112,7 +114,7 @@ def _purge_case_related_records(
 
 
 
-@router.get("/api/db/triage", tags=["Database"])
+@router.get("/api/db/triage", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_triage(
     limit: int = Query(50, ge=1, le=1000),
     search: str = Query("", description="Search case ID, rule name, or summary"),
@@ -197,7 +199,7 @@ def get_triage(
             pass
 
 
-@router.get("/api/db/triage/{case_id}", tags=["Database"])
+@router.get("/api/db/triage/{case_id}", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_triage_case(case_id: str):
     """Get a specific triage case by case ID."""
     db = None
@@ -229,7 +231,7 @@ def get_triage_case(case_id: str):
 
 
 
-@router.post("/api/db/triage/{case_id}/delete", tags=["Database"])
+@router.post("/api/db/triage/{case_id}/delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, description="Also delete analysis results for this case")):
     """Delete a triage case from the database.
 
@@ -258,7 +260,7 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="triage")
     finally:
         try:
             db.close()
@@ -266,7 +268,7 @@ def delete_triage_case(case_id: str, delete_analysis: bool = Query(False, descri
             pass
 
 
-@router.post("/api/db/triage/batch-delete", tags=["Database"])
+@router.post("/api/db/triage/batch-delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def batch_delete_triage_cases(payload: Dict[str, Any]):
     """Delete multiple triage cases in one call.
 
@@ -313,6 +315,6 @@ def batch_delete_triage_cases(payload: Dict[str, Any]):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="triage")
 
 

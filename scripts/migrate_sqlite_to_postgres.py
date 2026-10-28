@@ -77,7 +77,7 @@ def migrate(source_url: str, target_url: str, drop_existing: bool) -> dict:
             rows = [dict(row) for row in source_conn.execute(select(source_table)).mappings()]
 
             if drop_existing:
-                target_conn.execute(text(f'TRUNCATE TABLE "{table_name}" RESTART IDENTITY'))
+                target_conn.execute(text(f'TRUNCATE TABLE "{table_name}" RESTART IDENTITY'))  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- table_name comes from SQLAlchemy-reflected metadata intersected with the target inspector allowlist; double-quoted, never from user input
 
             if rows:
                 target_conn.execute(target_table.insert(), rows)

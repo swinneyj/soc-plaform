@@ -1,12 +1,85 @@
 # Session Auth & Role Split Plan — analyst / admin
 
 **Date:** 2026-09-30
-**Status:** BUILT Sept 30, 2026 — C1B.1–C1B.4 landed behind `AUTH_MODE` (Phase C1
+**Status:** ✅ BUILT Sept 30, 2026 — C1B.1–C1B.4 landed behind `AUTH_MODE` (Phase C1
 deliverable of `docs/EXECUTION_PLAYBOOK.md`; build commits `30eae76`, `4d4134e`,
 `c795bdb`, + C1B.4). Flag-off behavior is byte-identical (full suite green with the
 flag unset); the `AUTH_MODE=session` matrix is green; zero new dependencies — the
 scrypt KDF falls back to stdlib PBKDF2-SHA256 on runtimes whose Python build lacks
-OpenSSL scrypt (verify dispatches on the stored scheme prefix).
+OpenSSL scrypt (verify dispatches on the stored scheme prefix). This is a *historical
+plan doc*; the auth seam it describes is the current seam.
+**Activated locally 2026-10-21:** `AUTH_MODE=session` now lives in `.env` (picked up
+by `scripts/dev`/`scripts/start`); accounts were provisioned with
+`scripts/manage_users.py` (passwords in the macOS keychain — `SOC_ADMIN_PASSWORD`,
+`SOC_ANALYST_PASSWORD`); live-verified against shared Neon: anonymous read → 401,
+analyst → 403 on admin routes (registry, jobs-delete), admin → allowed, key-only
+requests keep working, CSRF gate enforced — every event captured by the T3
+`soc.audit` stream. Rollback remains: remove the `AUTH_MODE` line from `.env`,
+restart (`scripts/start --stop && scripts/start`).
+**Local access, fixed 2026-10-23 — the accounts did not survive the local-first switch.**
+Activating session mode on Oct 21 provisioned `dalton`/`analyst-demo` on the
+**shared Neon** database. On Oct 23 local Postgres became primary, so the local
+`users` table was empty — and with `AUTH_MODE=session` on, that meant **nobody
+could log in at all**, while the UI's bootstrap (`GET /api/auth/session`) also
+rejected the API key, so every local visit hit a login modal with no account
+that could ever succeed. Live checks that found it: `users` empty, keychain had
+no `SOC_*_PASSWORD`, `/api/auth/session` 401 with and without the key.
+
+What landed:
+
+* **Role-named local accounts**: `soc-admin` (admin) and `soc-analyst` (analyst)
+  in local Postgres, random passwords generated straight into the keychain as
+  `SOC_ADMIN_PASSWORD` / `SOC_ANALYST_PASSWORD` (never printed, never in argv).
+  `scripts/manage_users.py` remains the management path.
+* **Bootstrap accepts the machine key**: in session mode, an API-key caller now
+  gets `{mode:'session', user:'api-key', role:'admin'}` instead of 401. The key
+  is the admin machine actor by design (SESSION_AUTH_PLAN §2); refusing it at
+  the bootstrap only broke the UI.
+* **`SOC_DEV_LOGIN=1` + `POST /api/auth/dev-login`**: mints a real session for an
+  existing, active account when the caller presents the armed API key. This is
+  how the operator switches roles without typing a password — and it can only
+  ever downgrade (the key is admin already; an analyst session has no key, so it
+  cannot mint anything). Unset ⇒ the route 404s like it does not exist.
+* **UI**: `web/utils/dev_login.js` renders a bottom-right switcher only when the
+  bootstrap reports `dev_login: true`; one click re-mints the session and
+  reloads. **CLI**: `scripts/login <account>` writes a cookie jar for curl.
+* **Exempt from CSRF, not from authorization**: `/api/auth/dev-login` is in
+  `EXEMPT_PATHS` so switching works while a session cookie is present; the
+  handler enforces the armed key itself.
+
+Tests: `tests/test_dev_login.py` (13) — disabled flag 404s, missing/absent key
+401s, unknown and inactive accounts refused, the minted session is subject to
+the role gate (analyst 403 on `/api/tools`, admin 200), the bootstrap answers
+for the key, and the audit line carries `reason:dev_login` with no password
+material. Negative controls (removing the flag check, the key check) reproduce
+three failures.
+
+**SEC-01 (2026-10-23) — third mode: `AUTH_MODE=proxy`.** For deployments where a
+reverse proxy authenticates the human (nginx `auth_request`, oauth2-proxy, Pomerium,
+an ALB with OIDC) and the app should not run its own login. The proxy stamps one
+header — `X-Auth-Request-User` unless `SOC_PROXY_USER_HEADER` names another — carrying
+the **local** `users.id`. Two gates make that safe:
+
+1. The header is read only when the TCP peer (`request.client`, never
+   `X-Forwarded-For`) is inside `SOC_TRUSTED_PROXY_CIDRS` (comma-separated IPs/CIDRs).
+   Unset, empty or malformed entries trust **nobody** — fail closed. Off-proxy, the
+   header is discarded, so an unauthenticated caller cannot assert an identity.
+2. The value must be a bare integer (`^[0-9]{1,18}$`) resolving to an **active** row.
+   No username matching, no auto-provisioning: the proxy can only name accounts that
+   already exist here.
+
+Semantics: every `/api/*` request needs a mapped actor (reads included, exactly like
+session mode); `EXEMPT_PATHS` (`/health`, `/api/health`, `/api/auth/*`) stay reachable;
+`require_role` binds against the row's role, so an admin-gated route still 403s an
+analyst; a valid `API_KEY` still authenticates as the admin machine actor. `GET
+/api/auth/session` answers `{mode:'proxy', user, role, csrf_token:''}` so the UI can
+skip its login modal. **Residual, deliberate:** header auth has no cookie to
+double-submit, so CSRF defence is the proxy's boundary (strip inbound copies of the
+identity header, enforce `Origin`/`SameSite`) — the K8S-03 ingress draft is where that
+lands. Rejection reasons land in the audit stream as `proxy_header_missing`,
+`proxy_untrusted`, `proxy_header_malformed`, `proxy_user_unknown`,
+`proxy_user_inactive`. Tests: `tests/test_proxy_auth.py` (17).
+
 **Goal:** same treatment as `docs/FRONTEND_MODULARIZATION.md` / `docs/BACKEND_MODULARIZATION_PLAN.md` —
 extend the existing `api/auth.py` seam with per-user session auth and an analyst/admin
 role split, additively, with the current API-key behavior byte-identical until a feature
@@ -55,8 +128,9 @@ multi-tenancy/orgs, per-user audit logging (future), login rate limiting (owned 
   `/api/auth/*` routes themselves. The current key gate deliberately leaves reads open —
   that changes only in session mode.
 - **Feature flag.** `AUTH_MODE` env var: unset or `api-key` → today's behavior exactly;
-  `session` → session + CSRF + role gates active (API key still accepted as admin).
-  Rollback = unset the var and restart.
+  `session` → session + CSRF + role gates active (API key still accepted as admin);
+  `proxy` → trusted-proxy header identity (SEC-01, see the status block above;
+  API key still accepted as admin). Rollback = unset the var and restart.
 
 ---
 
@@ -82,15 +156,39 @@ Role→family matrix (families per `docs/API_ENDPOINTS.md`):
 | `/api/db/rules`, `/supportive-queries*`, `/placeholder-aliases*` | analyst | analyst |
 | `/api/code-review*`, `/api/code-reviews*` | analyst | analyst |
 | `/api/reports*`, `/api/tool-artifacts/*` | analyst | — |
-| `/api/splunk/search-one` | analyst | — |
+| `/api/splunk/search-one` | analyst | key (`POST` runs a search — `require_api_key`, no role gate; matrix column previously said “—”, corrected 2026-10-21 in the doc-drift sweep) |
 | `/api/splunk-boundary/status` | analyst | admin (`/admit`, batch release/delete) |
 | `/api/tools*`, `/api/execute`, `/api/registry*`, `/api/tools/regression` | admin | admin |
 | `/api/jobs*` | analyst | admin (delete one / clear all) |
+| `/api/auth/login` | open | — |
+| `/api/auth/session` | open | — |
+| `/api/auth/logout` | any session | any session (own logout only; carries its own audit event) |
 | retention apply, backups | — | CLI only (`scripts/prune_analysis_results.py --apply`, `scripts/start --backup`) |
 
-Roles only bind in `AUTH_MODE=session`. Today's armed-key behavior (key = full access,
+Roles bind in `AUTH_MODE=session` and `AUTH_MODE=proxy` (both resolve a local users
+row, so both carry a real role); flag-off they are inert. Today's armed-key behavior (key = full access,
 reads open) is unchanged until then. (`/api/code-review/zip` accepts uploads and stays
 analyst in v1 — flagged for the C2 hardening review.)
+
+> **Dual-gate routes (observed live 2026-10-21):** several admin routes
+> carry `require_api_key` AND `require_role("admin")` as defense in depth
+> (`/api/jobs` delete/clear, `/api/execute`, `/api/tools/regression`,
+> boundary admit/release). `require_api_key` runs first, so a session
+> cookie WITHOUT the `X-API-Key` header answers **401** before the role
+> check ever fires; the UI never hits this because its axios interceptor
+> always stamps the injected `SOC_CONFIG.apiKey`. Cookie-only clients
+> (curl) must send the header too. Role-only routes (`/api/registry*`)
+> answer **403** directly on role failure — verified live both ways.
+
+> **Owner decision (Oct 14, 2026 — closes API review F4):** analyst delete
+> powers in the matrix above are intentional, not a missing dependency.
+> Cleanup (stale cases, bad evidence rows, superseded rules) is analyst
+> work — an admin round-trip for every delete would grind investigations
+> to a halt. The genuinely cross-system surfaces stay admin-gated
+> (tool execution/registry, boundary admit+purge, job delete/clear), and
+> retention/backups stay CLI-only. Pinned by `test_role_gate_analyst_403`
+> (analyst 403s on the admin families) plus the session read-gate tests.
+> Revisit only if exposure ever widens beyond localhost/Tailscale.
 
 ---
 

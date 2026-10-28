@@ -1,9 +1,19 @@
 #!/usr/bin/env python3
 """Manage operator accounts for session auth (SESSION_AUTH_PLAN.md Piece A).
 
-Stdlib-only CLI on top of api.auth.hash_password. Reads DATABASE_URL exactly
-like the API does, so run it with the same environment you run the platform
-with, e.g. `bws run -- python scripts/manage_users.py list`.
+Stdlib-only CLI on top of api.auth.hash_password. Uses the same database
+resolution as the API: explicit DATABASE_URL, else `db.target`'s local-first
+default (127.0.0.1:5432), so the local invocation is plain and offline:
+
+    .venv314/bin/python scripts/manage_users.py list
+
+Do NOT wrap this in `bws run` unless you deliberately mean the shared Neon
+mirror: `bws run` injects the vault's DATABASE_URL, which is the shared URL,
+and the tool would then edit coworker-visible accounts.
+
+Safety: the `users`/`auth_sessions` tables are created idempotently on import
+(additive `create_all`, shared target refused), so this CLI needs no migration
+step and cannot touch the shared schema.
 
 Subcommands:
   create <username> --role analyst|admin   (--password-env VARNAME or prompt)
@@ -27,10 +37,24 @@ from api.auth import hash_password  # noqa: E402
 
 
 def _ensure_schema():
-    """Idempotent create-if-missing — the same Base.metadata.create_all call
-    the API lifespan makes on startup — so this CLI can provision the first
-    admin on a fresh database."""
-    from db.models import Base, engine
+    """Idempotent create-if-missing, so this CLI can provision the first admin
+    on a fresh local database.
+
+    The **shared** target is refused, exactly like `python -m db.schema`: a
+    launcher-side `create_all` on the Neon project would mutate coworker-visible
+    schema as a side effect of adding a user. Accounts on the shared dataset are
+    provisioned deliberately, by whoever owns that database.
+    """
+    from db import target as db_target
+    from db.models import DATABASE_URL, Base, engine
+
+    if db_target.is_shared_host(DATABASE_URL):
+        print(
+            "note: shared target — skipping schema bootstrap (schema changes "
+            "there are deliberate operations)",
+            file=sys.stderr,
+        )
+        return
 
     Base.metadata.create_all(bind=engine)
 

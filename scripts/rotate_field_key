@@ -1,0 +1,227 @@
+#!/usr/bin/env python3
+"""Backfill and rotate the SEC-03 column-encryption key.
+
+    scripts/rotate_field_key --check      # what state are the columns in?
+    scripts/rotate_field_key --backfill   # encrypt plaintext rows (needs the key)
+    scripts/rotate_field_key --rotate     # SOC_FIELD_KEY_OLD -> SOC_FIELD_KEY
+
+Everything runs through raw SQL on the resolved database, deliberately: the ORM
+would decrypt on read and re-encrypt on write with whatever key is currently in
+the environment, which is exactly wrong during a rotation (the old ciphertext
+would be re-encrypted with the new key without ever being decrypted).
+
+Nothing here prints a value, a key, or a full connection string.
+
+Guards:
+* Refuses the shared target (``SOC_DB_TARGET=shared`` / an explicit
+  ``DATABASE_URL`` pointing off-box) unless ``--allow-shared`` is passed: a key
+  rotation against the mirror is a production operation, not a local one.
+* Refuses to write without a key, and refuses ``--rotate`` without both keys.
+* ``--check`` exits 1 when the columns need attention (key set with plaintext
+  rows left, or ciphertext with no key to read it) so it can gate a script.
+"""
+
+import argparse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from sqlalchemy import text  # noqa: E402
+
+import db.crypto as crypto  # noqa: E402
+
+# table -> (primary key, encrypted column)
+COLUMNS = {
+    "auth_sessions": ("id", "csrf_token"),
+    "code_reviews": ("id", "code_snippet"),
+}
+BATCH = 200
+
+
+def _target_summary():
+    """Host/db one-liner without credentials (db.target strips them)."""
+    try:
+        from db.target import describe, resolve
+
+        url, target, source = resolve()
+        return "%s (target: %s, source: %s)" % (describe(url), target, source)
+    except Exception as exc:  # a broken target is a refusal, not a traceback
+        print("cannot resolve the database target: %s" % exc)
+        raise SystemExit(2)
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "postgres")
+
+
+def _refuse_shared(argv_allows_shared):
+    """Refuse to write anywhere that is not this machine, unless told to.
+
+    Two shapes count as off-box: ``SOC_DB_TARGET=shared`` and an explicit
+    ``DATABASE_URL`` whose host is not loopback/container-local. An explicit
+    Neon URL is the sneaky one — the flag alone would not catch it.
+    """
+    if argv_allows_shared:
+        return
+    from urllib.parse import urlsplit
+
+    from db.target import resolve
+
+    url, target, _source = resolve()
+    parts = urlsplit(url)
+    host = (parts.hostname or "").lower()
+    # A sqlite file URL has no host and is always local (used by tests and the
+    # verification harness); everything else must be loopback or container-local.
+    is_local_sqlite = (parts.scheme or "").startswith("sqlite")
+    if target == "shared" or (
+        target == "explicit" and not is_local_sqlite and host not in LOOPBACK_HOSTS
+    ):
+        print(
+            "refusing to write to %s — that is not this machine, so a key\n"
+            "rotation/backfill there is a production operation. Re-run with\n"
+            "--allow-shared if that is really intended." % (host or target)
+        )
+        raise SystemExit(2)
+
+
+def _engine():
+    from db.models import engine
+
+    return engine
+
+
+def _column_width(conn, table, column):
+    """Declared max length for `column`, or None when unbounded/unknown."""
+    if conn.dialect.name != "postgresql":
+        return None
+    row = conn.execute(
+        text(
+            "select character_maximum_length from information_schema.columns "
+            "where table_name = :t and column_name = :c"
+        ),
+        {"t": table, "c": column},
+    ).first()
+    return None if row is None else row[0]
+
+
+def _rows(conn, table, column):
+    pk = COLUMNS[table][0]
+    return conn.execute(
+        text("select %s, %s from %s where %s is not null" % (pk, column, table, column))  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- table/column/pk come from the in-file COLUMNS allowlist; only values are bound params
+    ).fetchall()
+
+
+def cmd_check(engine):
+    key = crypto.current_key()  # raises on a malformed key: that IS the finding
+    needs_action = 0
+    print("target: %s" % _target_summary())
+    print("SOC_FIELD_KEY: %s" % ("set" if key else "unset (columns stay plaintext)"))
+    with engine.connect() as conn:
+        for table, (_pk, column) in COLUMNS.items():
+            try:
+                rows = _rows(conn, table, column)
+            except Exception as exc:
+                print("%s.%s: unreadable (%s)" % (table, column, type(exc).__name__))
+                needs_action = 1
+                continue
+            encrypted = sum(1 for _pkv, value in rows if crypto.is_encrypted(value))
+            plaintext = len(rows) - encrypted
+            print(
+                "%s.%s: %d rows, %d encrypted, %d plaintext"
+                % (table, column, len(rows), encrypted, plaintext)
+            )
+            width = _column_width(conn, table, column)
+            if key and width is not None and width < 255:
+                print(
+                    "  ⚠ column is varchar(%d) — encrypted values need ~104+ chars.\n"
+                    "    Run first: ALTER TABLE %s ALTER COLUMN %s TYPE varchar(255);"
+                    % (width, table, column)
+                )
+                needs_action = 1
+            if encrypted and key:
+                # A wrong key still *looks* encrypted, so prove it by decrypting
+                # one row: otherwise a stale key reports a healthy database and
+                # the failure surfaces later as broken logins.
+                sample = next(v for _pkv, v in rows if crypto.is_encrypted(v))
+                try:
+                    crypto.decrypt_text(sample)
+                except crypto.FieldKeyError as exc:
+                    print("  ⚠ %s does not decrypt this data (%s)" % (crypto.KEY_ENV, exc))
+                    needs_action = 1
+            if plaintext and key:
+                print("  ⚠ plaintext rows remain — run --backfill")
+                needs_action = 1
+            if encrypted and not key:
+                print("  ⚠ ciphertext with no key configured — these rows cannot be read")
+                needs_action = 1
+    return needs_action
+
+
+def _rewrite(engine, mode):
+    """Rewrite every value: mode is 'backfill' or 'rotate'."""
+    new_key = crypto.current_key()
+    if new_key is None:
+        print("%s is not set — nothing to write with." % crypto.KEY_ENV)
+        return 2
+    old_key = None
+    if mode == "rotate":
+        raw_old = os.environ.get("SOC_FIELD_KEY_OLD", "")
+        if not raw_old.strip():
+            print("--rotate needs SOC_FIELD_KEY_OLD (the key currently in the data).")
+            return 2
+        old_key = crypto.parse_key(raw_old)
+        if old_key == new_key:
+            print("SOC_FIELD_KEY_OLD and SOC_FIELD_KEY are identical — nothing to do.")
+            return 0
+
+    changed = 0
+    try:
+        with engine.begin() as conn:
+            for table, (pk, column) in COLUMNS.items():
+                rows = _rows(conn, table, column)
+                for pkv, value in rows:
+                    if mode == "backfill" and crypto.is_encrypted(value):
+                        continue
+                    plaintext = (
+                        crypto.decrypt_text(value, key=old_key)
+                        if mode == "rotate"
+                        else crypto.decrypt_text(value)
+                    )
+                    replacement = crypto.encrypt_text(plaintext, key=new_key)
+                    if replacement == value:
+                        continue
+                    conn.execute(
+                        text("update %s set %s = :v where %s = :k" % (table, column, pk)),  # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text -- table/column/pk come from the in-file COLUMNS allowlist; values stay bound params
+                        {"v": replacement, "k": pkv},
+                    )
+                    changed += 1
+                print("%s.%s: %d rows in scope" % (table, column, len(rows)))
+    except crypto.FieldKeyError as exc:
+        # Raised before that row was written; the transaction rolls back whole.
+        print("❌ %s — nothing was written (transaction rolled back)" % exc)
+        return 2
+    print("%s complete: %d values rewritten." % (mode, changed))
+    return 0
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--check", action="store_true", help="report column state (read-only)")
+    group.add_argument("--backfill", action="store_true", help="encrypt plaintext rows")
+    group.add_argument("--rotate", action="store_true", help="re-encrypt under a new key")
+    parser.add_argument(
+        "--allow-shared",
+        action="store_true",
+        help="permit writing to the shared target (production operation)",
+    )
+    args = parser.parse_args(argv)
+
+    if args.check:
+        return cmd_check(_engine())
+    _refuse_shared(args.allow_shared)
+    return _rewrite(_engine(), "rotate" if args.rotate else "backfill")
+
+
+if __name__ == "__main__":
+    sys.exit(main())

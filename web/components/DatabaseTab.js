@@ -6,6 +6,7 @@ window.DatabaseTab = {
         'notablePasteSegmentEstimate',
         'notableRedactionEnabled',
         'notableHistorical',
+        'notableAutoPromote',
         'notablePasteSaving',
         'notablePasteResult',
         'showOpenNotablesOnly',
@@ -28,13 +29,17 @@ window.DatabaseTab = {
         'evidenceLedgerItems',
         'evidenceLedgerLoading',
         'evidenceLedgerError',
-        'evidenceLedgerBusyId'
+        'evidenceLedgerBusyId',
+        // HIGH-01/Phase 2.3: destructive deletes require admin; analysts get
+        // a disabled button instead of a 403 surprise.
+        'isAdmin'
     ],
     emits: [
         'change-tab',
         'update:notable-paste-text',
         'update:notable-redaction-enabled',
         'update:notable-historical',
+        'update:notable-auto-promote',
         'save-pasted-notable',
         'load-historical-notables',
         'update:historical-notables-visible',
@@ -77,6 +82,59 @@ window.DatabaseTab = {
             }
         };
     },
+    watch: {
+        // Tier 1: picking a case loads its ledger immediately, so the
+        // dropdown is a single click instead of select-then-Load. The Load
+        // button stays as an explicit reload / error-retry path.
+        evidenceLedgerCaseId(value) {
+            if (value && String(value).trim()) {
+                this.$emit('load-case-evidence-ledger');
+            }
+        },
+        // Zero-click paste loop: when a save attempt finishes, put the
+        // cursor back in the textarea so the next Ctrl+V lands directly.
+        notablePasteSaving(saving) {
+            if (saving) return;
+            this.$nextTick(() => {
+                const el = this.$refs.pasteTextarea;
+                if (el) el.focus();
+            });
+        },
+        // Remember last-used paste checkbox state across sessions.
+        notableRedactionEnabled(value) {
+            try {
+                localStorage.setItem('soc-platform.notable.redaction', value ? '1' : '0');
+            } catch (err) { /* storage may be unavailable */ }
+        },
+        notableHistorical(value) {
+            try {
+                localStorage.setItem('soc-platform.notable.historical', value ? '1' : '0');
+            } catch (err) { /* storage may be unavailable */ }
+        },
+        notableAutoPromote(value) {
+            try {
+                localStorage.setItem('soc-platform.notable.autoPromote', value ? '1' : '0');
+            } catch (err) { /* storage may be unavailable */ }
+        }
+    },
+    mounted() {
+        // Restore saved checkbox state; with nothing stored, redaction keeps
+        // the safe parent default (on).
+        try {
+            const redaction = localStorage.getItem('soc-platform.notable.redaction');
+            if (redaction !== null) {
+                this.$emit('update:notable-redaction-enabled', redaction === '1');
+            }
+            const historical = localStorage.getItem('soc-platform.notable.historical');
+            if (historical !== null) {
+                this.$emit('update:notable-historical', historical === '1');
+            }
+            const autoPromote = localStorage.getItem('soc-platform.notable.autoPromote');
+            if (autoPromote !== null) {
+                this.$emit('update:notable-auto-promote', autoPromote === '1');
+            }
+        } catch (err) { /* storage may be unavailable */ }
+    },
     computed: {
         allPastedSelected() {
             const items = this.filteredRecentNotables || [];
@@ -103,6 +161,13 @@ window.DatabaseTab = {
         }
     },
     methods: {
+        // Single save path for both the button and Ctrl/⌘+Enter.
+        submitPastedNotable() {
+            if (this.notablePasteSaving || !(this.notablePasteText || '').trim()) {
+                return;
+            }
+            this.$emit('save-pasted-notable');
+        },
         handleClosedNotableClick(item) {
             if (!item || !item.id) {
                 return;
@@ -260,9 +325,12 @@ window.DatabaseTab = {
                         <p class="text-sm text-gray-400">Paste Incident Review card text <span class="text-gray-500">or</span> multi-notable export from <code class="text-xs text-amber-200/80">| incident_review</code>. Duplicates are skipped by Rule ID (same notable will not be added twice).</p>
                     </div>
                     <textarea
+                        ref="pasteTextarea"
                         :value="notablePasteText"
                         @input="$emit('update:notable-paste-text', $event.target.value)"
-                        placeholder="Paste the notable block here..."
+                        @keydown.ctrl.enter.prevent="submitPastedNotable"
+                        @keydown.meta.enter.prevent="submitPastedNotable"
+                        placeholder="Paste the notable block here... (Ctrl/⌘+Enter saves)"
                         class="w-full h-56 px-4 py-3 bg-gray-900 border border-gray-600 rounded text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"></textarea>
                     <p
                         v-if="notablePasteSegmentEstimate > 1"
@@ -286,6 +354,20 @@ window.DatabaseTab = {
                             class="form-checkbox h-3 w-3 text-amber-500 bg-gray-900 border-gray-600 rounded" />
                         <span>Mark as closed historical notable</span>
                     </label>
+                    <label
+                        class="flex items-center text-xs text-gray-300 space-x-2"
+                        :title="notableHistorical
+                            ? 'Historical pastes are closed records and cannot be promoted to triage'
+                            : 'Send each newly saved notable straight to triage'"
+                    >
+                        <input
+                            type="checkbox"
+                            :checked="notableAutoPromote"
+                            :disabled="notableHistorical"
+                            @change="$emit('update:notable-auto-promote', $event.target.checked)"
+                            class="form-checkbox h-3 w-3 text-purple-500 bg-gray-900 border-gray-600 rounded disabled:opacity-50" />
+                        <span :class="{ 'text-gray-500': notableHistorical }">Auto-promote saved notables to triage</span>
+                    </label>
                     <div class="flex items-center justify-between gap-3">
                         <div v-if="notablePasteResult" class="text-xs space-y-0.5 min-w-0">
                             <p
@@ -303,7 +385,7 @@ window.DatabaseTab = {
                         </div>
                         <p v-else class="text-xs text-gray-500">Redaction stays local-first: sanitized text goes to the DB, mapping stays in Active_Workspace.</p>
                         <button
-                            @click="$emit('save-pasted-notable')"
+                            @click="submitPastedNotable"
                             :disabled="notablePasteSaving || !(notablePasteText || '').trim()"
                             class="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 rounded text-sm font-semibold transition flex-shrink-0">
                             {{ notablePasteSaving ? 'Saving...' : 'Save Pasted Notable' }}
@@ -336,10 +418,10 @@ window.DatabaseTab = {
                                     class="form-checkbox h-3 w-3 text-blue-500 bg-gray-900 border-gray-600 rounded" />
                                 <span class="whitespace-nowrap">Show open pasted notables only</span>
                             </label>
-                            <button @click="$emit('load-recent-notables')" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
                             <button
                                 @click="$emit('delete-selected-pasted-notables')"
-                                :disabled="!selectedNotableIds || !selectedNotableIds.length"
+                                :disabled="isAdmin === false || !selectedNotableIds || !selectedNotableIds.length"
+                                :title="isAdmin === false ? 'Requires an admin account' : ''"
                                 class="px-3 py-2 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
                                 Delete selected
                             </button>
@@ -397,9 +479,9 @@ window.DatabaseTab = {
                                     </div>
                                     <button
                                         @click="$emit('delete-evidence-ledger-item', item)"
-                                        :disabled="evidenceLedgerBusyId === item.id"
+                                        :disabled="isAdmin === false || evidenceLedgerBusyId === item.id"
                                         class="flex-shrink-0 px-2 py-1 bg-red-900 hover:bg-red-800 disabled:bg-gray-700 rounded text-[11px] font-semibold text-red-100"
-                                        title="Delete this evidence item permanently"
+                                        :title="isAdmin === false ? 'Requires an admin account' : 'Delete this evidence item permanently'"
                                     >{{ evidenceLedgerBusyId === item.id ? '…' : 'Delete' }}</button>
                                 </div>
                                 <pre class="mt-2 whitespace-pre-wrap bg-black/40 rounded p-2 max-h-24 overflow-y-auto text-gray-300 font-mono">{{ ledgerResultPreview(item) }}</pre>
@@ -441,8 +523,9 @@ window.DatabaseTab = {
                             <div class="text-right text-xs text-gray-400">
                                 <button
                                     @click="$emit('delete-pasted-notable', notable)"
-                                    class="text-gray-500 hover:text-red-400 mb-1 ml-2"
-                                    title="Remove this pasted notable from the recent list">
+                                    class="text-gray-500 hover:text-red-400 mb-1 ml-2 disabled:opacity-50"
+                                    :disabled="isAdmin === false"
+                                    :title="isAdmin === false ? 'Requires an admin account' : 'Remove this pasted notable from the recent list'">
                                     ✕
                                 </button>
                                 <p>{{ notable.urgency || 'n/a' }} urgency</p>
@@ -534,9 +617,8 @@ window.DatabaseTab = {
                         <p class="text-xs text-gray-400">Compact summary of closed notables for quick baseline reference.</p>
                     </div>
                     <div class="flex flex-wrap items-center gap-2">
-                        <button @click="$emit('load-historical-notables')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
                         <button @click="toggleSelectAllClosedNotables" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Select All</button>
-                        <button @click="$emit('delete-selected-closed-notables', selectedClosedNotableIds)" :disabled="!selectedClosedNotableIds.length" class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">Delete Selected</button>
+                        <button @click="$emit('delete-selected-closed-notables', selectedClosedNotableIds)" :disabled="isAdmin === false || !selectedClosedNotableIds.length" :title="isAdmin === false ? 'Requires an admin account' : ''" class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">Delete Selected</button>
                         <button v-if="selectedClosedNotableIds.length" @click="selectedClosedNotableIds = []" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
                         <button v-if="Object.values(closedNotableFilters).some(Boolean)" @click="clearClosedNotableFilters" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Filters</button>
                     </div>
@@ -611,8 +693,9 @@ window.DatabaseTab = {
                                 <td class="px-2 py-1 align-top">
                                     <button
                                         @click.stop="$emit('delete-closed-notable', item)"
-                                        class="px-2 py-1 bg-red-700 hover:bg-red-800 rounded text-[11px] font-semibold"
-                                        title="Delete this closed notable from summaries"
+                                        class="px-2 py-1 bg-red-700 hover:bg-red-800 rounded text-[11px] font-semibold disabled:opacity-50"
+                                        :disabled="isAdmin === false"
+                                        :title="isAdmin === false ? 'Requires an admin account' : 'Delete this closed notable from summaries'"
                                     >
                                         Delete
                                     </button>
@@ -694,10 +777,10 @@ window.DatabaseTab = {
                     </select>
                     <button @click="toggleAllTriageFromButton" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Select All</button>
                     <button v-if="selectedTriageCaseIds && selectedTriageCaseIds.length" @click="$emit('update:selected-triage-case-ids', [])" class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded text-xs font-semibold transition">Clear Selection</button>
-                    <button @click="$emit('load-triage-data')" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-xs font-semibold transition">Refresh</button>
                     <button
                         @click="$emit('delete-selected-triage-cases')"
-                        :disabled="!selectedTriageCaseIds || !selectedTriageCaseIds.length"
+                        :disabled="isAdmin === false || !selectedTriageCaseIds || !selectedTriageCaseIds.length"
+                        :title="isAdmin === false ? 'Requires an admin account' : ''"
                         class="px-3 py-1.5 bg-red-700 hover:bg-red-800 disabled:bg-gray-700 rounded text-xs font-semibold transition">
                         Delete Selected
                     </button>
@@ -765,7 +848,9 @@ window.DatabaseTab = {
                         </button>
                         <button
                             @click="$emit('delete-triage-case', case_)"
-                            class="px-3 py-1 bg-red-700 hover:bg-red-800 rounded text-xs font-semibold transition">
+                            :disabled="isAdmin === false"
+                            :title="isAdmin === false ? 'Requires an admin account' : ''"
+                            class="px-3 py-1 bg-red-700 hover:bg-red-800 disabled:opacity-50 rounded text-xs font-semibold transition">
                             Delete case
                         </button>
                     </div>

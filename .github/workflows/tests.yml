@@ -14,19 +14,38 @@ jobs:
     timeout-minutes: 10
     strategy:
       matrix:
-        # Dual-runtime matrix: 3.14 is the pinned dev/production runtime
-        # (.python-version, Dockerfile), 3.9 is the legacy venv still
-        # supported by the test suite. Keep both green until 3.9 retires
-        # (security tracker item #9).
-        python-version: ["3.14", "3.9"]
+        # Single-runtime matrix: 3.14 is the pinned dev/production runtime
+        # (.python-version, Dockerfile). The 3.9 leg was retired Oct 14,
+        # 2026 (owner decision) — 3.9 is EOL and its accepted-risk pins
+        # (security tracker item #9, SBOM-AUDIT F4) die with it. The
+        # <"3.10" pin branches stay in requirements*.txt (marker-dead on
+        # 3.14+) for any local 3.9 venv still around; nothing exercises them.
+        python-version: ["3.14"]
     steps:
       - name: Checkout Project Code
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
         with:
           python-version: ${{ matrix.python-version }}
+
+      - name: Check pins vs markers (PyPI requires_python)
+        # Fails fast when a python_version branch selects a pin that does not
+        # support that interpreter (it once caught hypothesis==6.149.1,
+        # requires >=3.10, pinned to the <"3.10" branch — that used to kill
+        # the retired 3.9 leg deep in pip's resolver). Stdlib only; targets
+        # workflow's own python-version matrix (no hardcoded copy to drift
+        # from), and it runs before any dependency install.
+        run: python scripts/check_requirement_markers.py
+
+      - name: Check SBOM mirrors the pins
+        # docs/SBOM.json is committed alongside the pins it describes, so a
+        # dependency bump (or a CDN tag edit in web/index.modular.html) can
+        # leave it silently describing an older environment. Stdlib only, so
+        # it runs before the install; regenerate with `scripts/sbom` and
+        # commit the result when this fails.
+        run: python scripts/check_sbom_pins.py
 
       - name: Install dependencies
         run: |
@@ -38,6 +57,86 @@ jobs:
         # Fails any F821 before pytest runs — 3.14's lazy annotations mask
         # missing typing imports locally (see scripts/check_undefined_names.sh).
         run: bash scripts/check_undefined_names.sh
+
+      - name: Syntax compile gate (py_compile)
+        # E.5: every api/services/db module must at least compile. This catches
+        # a merge-broken file that no test imports (a green suite once hid
+        # exactly that class of damage). Compile only — nothing is executed.
+        run: |
+          python -m py_compile api/*.py api/helpers/*.py api/routes/*.py services/*.py db/*.py
+          echo "OK: py_compile clean (api/**, helpers, routes, services, db)"
+
+      - name: Shell lint (bash -n on repo bash scripts)
+        # GAP_AUDIT F7: CI previously covered Python only. Add a basic syntax
+        # gate on the repo's bash scripts so a merge marker, broken quoting, or a
+        # typo in a gate/launcher/baseline script cannot slip through undetected.
+        # bash -n is a syntax-only check (no execution); it is a floor, not a
+        # replacement for shellcheck when the team wants one.
+        # Scope: files that are actually bash — *.sh plus the repo's bash scripts
+        # without a .sh extension (baseline, dev, next, start, install-hooks,
+        # secrets-keychain, soc-platform.command, start_soc_api.sh,
+        # sync_shared_logic_to_db.sh, restart_api.sh, start_platform.sh,
+        # git-hooks/pre-push — a gate script had a real logic bug once, so the
+        # hooks count as in-scope).
+        # PowerShell (.ps1) and Python scripts are out of scope for bash -n.
+        run: |
+          set -euo pipefail
+          shopt -s extglob
+          bash_scripts=( scripts/*.sh scripts/!((*.ps1|*.py|*.plist|*.command)) )
+          # dedupe in case a file matched both patterns
+          targets=()
+          for f in scripts/*.sh; do
+            [ -f "$f" ] && targets+=("$f")
+          done
+          for f in \
+            scripts/baseline \
+            scripts/dev \
+            scripts/next \
+            scripts/start \
+            scripts/install-hooks \
+            scripts/secrets-keychain \
+            scripts/sbom \
+            scripts/soc-platform.command \
+            scripts/start_platform.sh \
+            scripts/restart_api.sh \
+            scripts/start_soc_api.sh \
+            scripts/sync_shared_logic_to_db.sh \
+            scripts/git-hooks/pre-push \
+          ; do
+            [ -f "$f" ] && targets+=("$f")
+          done
+          printf '%s\n' "${targets[@]}" | sort -u | while read -r f; do
+            bash -n "$f" || { echo "FAIL: bash -n $f"; exit 1; }
+          done
+          count=$(printf '%s\n' "${targets[@]}" | sort -u | wc -l | tr -d ' ')
+          echo "OK: bash -n passed on $count repo bash scripts"
+
+      - name: Hygiene assertions (counts + delete-case-id absence)
+        # GAP_AUDIT F7: these were greps run by hand, not CI-asserted. Assert
+        # them here so the invariants can't silently drift.
+        run: |
+          set -euo pipefail
+          TEST_FILE_COUNT=$(ls -1 tests/test_*.py | wc -l | tr -d ' ')
+          echo "test files on disk: $TEST_FILE_COUNT"
+          # The playbook publishes a count; re-derive from disk rather than trust
+          # a quoted number (the count grew after Sept 30, 2026).
+          if ! [[ "$TEST_FILE_COUNT" =~ ^[0-9]+$ ]] || [ "$TEST_FILE_COUNT" -lt 1 ]; then
+            echo "FAIL: unexpected test-file count: $TEST_FILE_COUNT"
+            exit 1
+          fi
+          if grep -rn --include='*.py' --include='*.js' --include='*.html' --include='*.md' --include='*.json' -e 'delete_case_id' web/ tests/ api/ 2>/dev/null; then
+            echo "FAIL: delete_case_id still referenced in shipped trees (see playbook A1.3)"
+            exit 1
+          fi
+          echo "OK: hygiene invariants held (test-file count=$TEST_FILE_COUNT, no delete_case_id in trees)"
+
+      - name: Web option-key guard (duplicate object keys silently shadow)
+        # C1B.3 regression: a second `computed:` key inside createApp({...})
+        # silently discarded the first 225-line block — node --check, pytest,
+        # and the harness all stayed green while the case tables rendered
+        # empty. A duplicate key inside any one object literal is parse-time
+        # data loss; fail the build instead of shipping a shadowed UI.
+        run: node scripts/check_web_option_keys.mjs
 
       - name: Run pytest
         run: python -m pytest

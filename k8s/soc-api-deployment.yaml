@@ -1,0 +1,200 @@
+# k8s/soc-api-deployment.yaml — security-list task 4: "Centralized Log Forwarding"
+#
+# Kubernetes Deployment: the SOC FastAPI container alongside a Fluent Bit
+# sidecar, sharing an emptyDir volume. The sidecar tails the application's
+# JSON audit log file (soc.audit stream via AUDIT_LOG_FILE — api/helpers/audit.py)
+# and forwards it over HTTPS with a bearer token to an external webhook endpoint.
+#
+# Secrets are deliberately NOT in this file (public repo). Create them out of band:
+#   kubectl create secret generic soc-api-secrets \
+#     --from-literal=api-key='...' --from-literal=database-url='...'
+#   kubectl create secret generic soc-log-forwarder \
+#     --from-literal=bearer-token='...'
+# Point SOC_LOG_WEBHOOK_* at your external collector before applying.
+#
+# Verification status (recorded honestly):
+#   - schema: VALIDATED — kubeconform -strict, 2/2 resources against official
+#     Kubernetes schemas (2026-10-21)
+#   - structure/consistency: pinned by tests/test_k8s_manifest.py (container
+#     count, shared emptyDir, tail path == AUDIT_LOG_FILE, env vars supplied,
+#     tls On + verify On, bearer from Secret, readiness probe, no embedded
+#     secrets)
+#   - LIVE CLUSTER — VERIFIED end-to-end 2026-10-23 on a local kind cluster
+#     (podman provider, macOS) via scripts/task4_cluster_verify.py:
+#       [ok] apply + rollout green (readiness probe gates on /health)
+#       [ok] app wrote the JSON audit file the sidecar tails
+#       [ok] ungated mutation produced the 401 auth_rejected security event
+#       [ok] Fluent Bit delivered it over TLS (private CA, tls.verify On)
+#           to an EXTERNAL host-side sink outside the cluster
+#       [ok] Authorization: Bearer matched the Secret value at the sink
+#       [ok] payload path intact end-to-end
+#     Re-run: python scripts/task4_cluster_verify.py (--teardown removes
+#     the cluster). The sink CA is injected at render time only (ConfigMap
+#     + tls.ca_file); this checked-in file keeps no custom CA so a real
+#     webhook with a publicly-trusted CA applies as-is.
+#   - Fluent Bit config: EXECUTED with real fluent-bit 5.1.5 — loads clean,
+#     ${VAR} expansion works, tails the app's JSON audit file, builds chunks,
+#     connects to the configured endpoint, and payload + bearer header were
+#     delivered end-to-end to a local HTTPS sink (diagnostic run with
+#     tls.verify Off — the artifact's verify On demonstrably REFUSES an
+#     untrusted CA, which is the correct posture for a real webhook)
+#   - local-harness limitation: a throwaway CA cannot be added to the trust
+#     store this brew fluent-bit build reads (root-owned /etc/ssl/certs);
+#     a real cluster's external webhook uses a publicly-trusted CA, so
+#     verify On applies as-is there
+#   - Still NOT verified here: delivery to a webhook presenting a
+#     publicly-trusted CA (cluster runs used a private-CA sink), and
+#     `kubectl apply --dry-run=server` against production admission chain.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: soc-fluent-bit-config
+  labels:
+    app: soc-api
+data:
+  fluent-bit.conf: |
+    [SERVICE]
+        Flush        5
+        Log_Level    info
+        Parsers_File /fluent-bit/config/parsers.conf
+
+    [INPUT]
+        Name              tail
+        Tag               soc.audit
+        Path              /var/log/soc/audit.json
+        DB                /var/fluentbit/state.db
+        Parser            json
+        Read_From_Head    On
+        Refresh_Interval  5
+
+    [OUTPUT]
+        Name          http
+        Match         soc.audit
+        Host          ${SOC_LOG_WEBHOOK_HOST}
+        Port          ${SOC_LOG_WEBHOOK_PORT}
+        URI           ${SOC_LOG_WEBHOOK_URI}
+        Format        json
+        Json_Date_Key ts
+        tls           On
+        tls.verify    On
+        Header        Authorization Bearer ${SOC_LOG_BEARER_TOKEN}
+        Retry_Limit   False
+  parsers.conf: |
+    [PARSER]
+        Name        json
+        Format      json
+        Time_Key    ts
+        Time_Format %Y-%m-%dT%H:%M:%S.%LZ
+        Time_Keep   On
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: soc-api
+  labels:
+    app: soc-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soc-api
+  template:
+    metadata:
+      labels:
+        app: soc-api
+    spec:
+      # Least privilege: every container runs as a non-root UID, none may
+      # gain privileges, and the fsGroup makes the emptyDir audit volume
+      # writable so the API can log without running as root.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      volumes:
+        - name: audit-logs
+          emptyDir: {}
+        # Fluent Bit keeps its offset DB on a sidecar-private volume: the
+        # shared audit emptyDir is created 0755 root by the api container's
+        # mount, so a rootless sidecar cannot create its DB there. State is
+        # per-pod and disposable, so an emptyDir is correct.
+        - name: fluentbit-state
+          emptyDir: {}
+        - name: config
+          configMap:
+            name: soc-fluent-bit-config
+      containers:
+        - name: api
+          image: soc-platform:latest
+          securityContext:
+            allowPrivilegeEscalation: false
+          # The platform image is side-loaded into the node (ctr import),
+          # not served by a registry — kubelet must use the local copy.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: SOC_PLATFORM_ROOT
+              value: /app
+            - name: AUDIT_LOG_FILE
+              value: /var/log/soc/audit.json
+            - name: AUTH_MODE
+              value: session
+            - name: API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: soc-api-secrets
+                  key: api-key
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: soc-api-secrets
+                  key: database-url
+          volumeMounts:
+            - name: audit-logs
+              mountPath: /var/log/soc
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          # Readiness is distinct from liveness: a container that has
+          # merely *started* is not yet serving (uvicorn binds a beat
+          # later). Without this, a rollout goes green while the app is
+          # unreachable and the first requests race a refused socket.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 2
+            periodSeconds: 5
+        - name: fluent-bit
+          image: fluent/fluent-bit:3.2
+          securityContext:
+            allowPrivilegeEscalation: false
+          args:
+            - --config=/fluent-bit/config/fluent-bit.conf
+          env:
+            # External webhook endpoint — set these to your collector.
+            - name: SOC_LOG_WEBHOOK_HOST
+              value: logs.example.com
+            - name: SOC_LOG_WEBHOOK_PORT
+              value: "443"
+            - name: SOC_LOG_WEBHOOK_URI
+              value: /ingest
+            - name: SOC_LOG_BEARER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: soc-log-forwarder
+                  key: bearer-token
+          volumeMounts:
+            - name: audit-logs
+              mountPath: /var/log/soc
+              readOnly: true
+            - name: fluentbit-state
+              mountPath: /var/fluentbit
+            - name: config
+              mountPath: /fluent-bit/config
+              readOnly: true

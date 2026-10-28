@@ -68,7 +68,8 @@ middleware were removed. Everything else mutating is
 | --- | --- | --- | --- | --- |
 | POST | `/api/auth/login` | — | Open (issues `soc_session` cookie) | Exchange username + password for a session + CSRF token (AUTH_MODE=session). |
 | POST | `/api/auth/logout` | — | Open (destroys the presented session) | Invalidate the server-side session row and clear the cookie. |
-| GET | `/api/auth/session` | — | Session or API key | Echo the signed-in actor: `{user, role, csrf_token}`; 401 when anonymous. |
+| GET | `/api/auth/session` | — | Session or API key | Echo the signed-in actor: `{user, role, csrf_token}`; 401 when anonymous. A key-only caller gets `{user:"api-key", role:"admin"}` so a browser carrying the key can bootstrap. |
+| POST | `/api/auth/dev-login` | — | Armed API key + `SOC_DEV_LOGIN=1` | Mint a session for an existing account (`{account}`) so the local operator can switch roles without a password. 404 when the flag is off; 401 without the key or for unknown/inactive accounts. Only ever downgrades — the key itself is already admin. |
 
 ## Cases (triage) — canonical family `/api/cases`
 
@@ -151,6 +152,8 @@ Readiness evaluation lives under the cases family above
 | POST | — | `/api/splunk-boundary/admit` | Key (middleware + pinned) | Admit a batch through the boundary latch. |
 | DELETE | — | `/api/splunk-boundary/batches/{batch_id}` | Key (middleware + pinned) | Release an admitted batch. |
 | POST | — | `/api/splunk/search-one` | Key (middleware + pinned) | Run one SPL against the configured backend and save `splunk_auto` evidence. |
+| GET | — | `/api/splunk/search-status` | Key when armed (pinned) | Read-only backend introspection: mode, readiness, SPL subset, TLS posture (`tls.verify` / `verification_disabled` / `ca_bundle_configured` / `ca_bundle_readable` / `ca_bundle_certificates` / `ca_bundle_expires_at` / `ca_bundle_days_remaining` / `ca_bundle_expired` / `ca_bundle_warning`). An expired pinned CA fails `ready`; ≤30 days warns. Booleans, counts and dates only — never echoes the URL, token, or bundle path. |
+| GET | — | `/api/splunk/saved-searches` | Key when armed (pinned) | Read-only listing of visible saved searches on the live Splunk instance (409 unless `SEARCH_BACKEND=splunk`). |
 
 ## Tools, execution & reports
 

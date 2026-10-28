@@ -1,6 +1,7 @@
 # TOOL_NAME: Automated_Reporter
 # DESC: Compiles text summaries and sanitized intelligence into a standardized, shareable HTML SOC briefing document.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --mode | Input Mode | 1 for File, 2 for Paste | False
 
 import os

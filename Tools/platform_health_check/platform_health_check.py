@@ -13,7 +13,7 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 tools_dir = os.path.abspath(os.path.join(current_dir, '..'))
 sys.path.append(tools_dir)
 
-from core_lib.utils import Colors, clear_screen, get_platform_root
+from core_lib.utils import Colors, clear_screen, get_platform_root, validated_tool_target
 
 PYTHON_EXT = '.py'
 
@@ -386,6 +386,7 @@ def main():
     # --- AUTO-RELOAD REGISTRY ---
     indexer_path = os.path.join(base_dir, 'Tools', 'tool_indexer', 'tool_indexer.py')
     if os.path.exists(indexer_path):
+        indexer_path = validated_tool_target(indexer_path)
         print(f"\n{Colors.CYAN}[*] Auto-refreshing Commander Registry before health check...{Colors.ENDC}")
         try:
             subprocess.run([sys.executable, indexer_path], check=True, capture_output=True)

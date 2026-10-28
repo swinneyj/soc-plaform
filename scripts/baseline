@@ -17,10 +17,24 @@ cd "$(dirname "$0")/.."
 
 BASELINE_FILE=".baseline.json"
 
+# Interpreter for the stdlib-only heredocs below: honor PYTHON if set,
+# otherwise bare python3 with a fallback to the repo venvs — the gate must
+# pass in a fresh shell with no venv activation.
+PY="${PYTHON:-}"
+if [ -z "$PY" ]; then
+  for cand in python3 .venv314/bin/python .venv/bin/python; do
+    if "$cand" -c "import sys" >/dev/null 2>&1; then PY="$cand"; break; fi
+  done
+fi
+if [ -z "$PY" ]; then
+  echo "❌ no python interpreter found (tried: python3, .venv314/bin/python, .venv/bin/python)"
+  exit 1
+fi
+
 # ---- collectors ----------------------------------------------------------
 
 collect() {
-  python3 - "$@" <<'PYEOF'
+  "$PY" - "$@" <<'PYEOF'
 import json, subprocess, sys, os, glob
 
 def sh(cmd, timeout=15):
@@ -86,7 +100,7 @@ case "${1:-}" in
       echo "❌ No baseline recorded. Run: scripts/baseline --snapshot"; exit 1
     fi
     collect > /tmp/baseline_now.json
-    python3 - "$BASELINE_FILE" <<'PYEOF'
+    "$PY" - "$BASELINE_FILE" <<'PYEOF'
 import json, sys
 
 def flatten(d, prefix=""):

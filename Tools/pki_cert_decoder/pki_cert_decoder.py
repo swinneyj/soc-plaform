@@ -85,7 +85,7 @@ def analyze_certificate(cert_path, silent=False):
     # Get Fingerprints
     from cryptography.hazmat.primitives import hashes
     sha256_fp = format_fingerprint(cert.fingerprint(hashes.SHA256()))
-    sha1_fp = format_fingerprint(cert.fingerprint(hashes.SHA1()))
+    sha1_fp = format_fingerprint(cert.fingerprint(hashes.SHA1()))  # nosemgrep: python.cryptography.security.insecure-hash-algorithms.insecure-hash-algorithm-sha1 -- display-only legacy fingerprint next to SHA-256; never used for trust decisions
 
     # Output formatting
     if not silent:

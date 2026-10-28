@@ -21,6 +21,15 @@ def main():
         print("[!] PowerShell is required for Git_Sync_Manager (install PowerShell 7 as 'pwsh').")
         return
 
+    # shell=False list form; the script is a fixed in-repo file, never input.
+    script_path = os.path.abspath(script_path)
+    if os.path.commonpath([script_path, base_dir]) != base_dir:
+        print("[!] Refusing: script path escapes the repository.")
+        return
+    if not (os.path.isfile(script_path) and script_path.lower().endswith(".ps1")):
+        print("[!] Refusing: git-menu.ps1 is missing or has an unexpected extension.")
+        return
+
     subprocess.run([shell, "-ExecutionPolicy", "Bypass", "-File", script_path], cwd=base_dir, check=False)
 
 if __name__ == "__main__":

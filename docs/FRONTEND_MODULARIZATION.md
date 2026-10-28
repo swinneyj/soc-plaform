@@ -1,6 +1,7 @@
 # Frontend Modularization
 
 **Date:** 2026-09-04  
+**Status:** ✅ COMPLETE (Sept 2026) — historical plan doc. The modular shell is the live UI: `web/index.modular.html` + `web/utils/` + `web/modules/` + `web/components/`, with `web/index.html` a redirect shim. Nothing here is pending; current layout lives in `docs/REPO_MAP.md`.  
 **Scope:** `web/` UI only (Vue 3 SPA). Backend / API unchanged.  
 **Goal:** Break the monolithic `index.html` into small, domain-owned files so troubleshooting and future changes stay local.
 
@@ -183,6 +184,8 @@ cp scripts/attic/web-Old_archive/modules-old/database.js.bak-before-full web/mod
 - Replace global `window.*Methods` with ES modules (`type="module"`) or a small bundler (Vite) when the team wants imports instead of script-tag order.
 - Slim `data()` in `app.modular.js` by grouping related state per domain (still one root instance unless you adopt Pinia/Vuex later).
 - ~~Remove or archive `app.js` / `index.modular.html` / old `.bak` files once the team is confident in the modular live path.~~ **Done Sept 29, 2026** — retired to `scripts/attic/app.js` + `scripts/attic/web-old/`.
+
+> **Doc status:** ✅ COMPLETE — this plan describes the current modular layout; it is a *historical plan doc*, not an active work item.
 
 ---
 

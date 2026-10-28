@@ -7,17 +7,23 @@ dedup keys, and artifact saving.
 """
 import datetime
 import json
+import logging
 import os
 import re
 import sys
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from api.auth import require_role
 
 from api import deps
+from api.helpers.errors import InternalError, raise_internal
+from api.helpers import admission
 
 from api.schemas import NotableFetchSplRequest, PastedNotableRequest
 from db.util import utcnow_naive
+
+logger = logging.getLogger("soc.api")
 
 router = APIRouter()
 
@@ -1218,7 +1224,7 @@ def serialize_recent_notable(event) -> Dict[str, Any]:
 
 
 
-@router.post("/api/db/notables/generate-fetch-spl", tags=["Database"])
+@router.post("/api/db/notables/generate-fetch-spl", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def generate_notable_fetch_spl(request: NotableFetchSplRequest):
     """Generate SPL to pull clean notable fields from Splunk.
 
@@ -1239,10 +1245,10 @@ def generate_notable_fetch_spl(request: NotableFetchSplRequest):
     try:
         return build_notable_fetch_spl(request)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 
 
-@router.get("/api/db/notables/generate-fetch-spl", tags=["Database"])
+@router.get("/api/db/notables/generate-fetch-spl", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def generate_notable_fetch_spl_get(
     correlation_search: Optional[str] = Query(None),
     rule_name: Optional[str] = Query(None),
@@ -1273,17 +1279,53 @@ def generate_notable_fetch_spl_get(
     return generate_notable_fetch_spl(req)
 
 
-@router.post("/api/db/notables/paste", tags=["Database"])
+def _purge_failed_paste_batch(
+    manifest: Optional[Dict[str, Any]], committed: bool
+) -> None:
+    """Undo a C4 boundary admission when the paste pipeline
+    failed before its inserts were committed.
+
+    Without this, a paste that fails between admission
+    (``admit_text``) and ``record_paste_ingest`` leaves the
+    staged ``{batch_id}-pasted.txt`` + manifest in the
+    quarantine directory forever — an orphaned, unlinked
+    copy of the pasted content. Purging is skipped once the
+    inserts have committed (the manifest then carries the
+    undo linkage for those rows), and purge failures are
+    logged, never raised over the original exception.
+    """
+    if manifest is None or committed:
+        return
+    try:
+        from services import splunk_boundary
+        splunk_boundary.purge_batch(manifest["batch_id"])
+    except Exception as exc:
+        logger.warning(
+            "[notables] Could not purge failed paste batch %s: %s",
+            manifest.get("batch_id"), exc,
+        )
+
+
+@router.post("/api/db/notables/paste", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def paste_notable(request: PastedNotableRequest):
     """Parse, sanitize, and store a pasted Splunk notable in the database."""
-    if len(request.raw_text or "") > PASTE_MAX_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Paste payload exceeds {PASTE_MAX_BYTES} bytes",
-        )
+    # The cap is a BYTE budget: measure the UTF-8 encoding, not the
+    # character count, or a multibyte payload can carry up to 4x the
+    # budget in bytes past this gate (the boundary's own size check
+    # downstream measures real bytes).
+    rejection = admission.payload_rejection(
+        len((request.raw_text or "").encode("utf-8")), PASTE_MAX_BYTES
+    )
+    if rejection is not None:
+        raise rejection
     raw_text = normalize_pasted_text(request.raw_text or "").strip()
     if not raw_text:
         raise HTTPException(status_code=400, detail="No notable text was provided")
+
+    # C4 admission bookkeeping — read by the failure paths below so a
+    # failed paste purges the batch it admitted.
+    paste_manifest: Optional[Dict[str, Any]] = None
+    paste_committed = False
 
     try:
         sys.path.insert(0, deps.get_platform_root())
@@ -1517,6 +1559,10 @@ def paste_notable(request: PastedNotableRequest):
         # Single commit for the whole bulk paste (major speed win vs per-row commits)
         if pending_events:
             db.commit()
+            # Rows are durable from here: a later bookkeeping failure
+            # must NOT purge the staged batch (the manifest is the
+            # undo linkage for those rows).
+            paste_committed = True
             for event in pending_events:
                 try:
                     db.refresh(event)
@@ -1576,9 +1622,11 @@ def paste_notable(request: PastedNotableRequest):
             "mapping_entries": total_mapping_entries,
         }
     except HTTPException:
+        _purge_failed_paste_batch(paste_manifest, paste_committed)
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        _purge_failed_paste_batch(paste_manifest, paste_committed)
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1586,7 +1634,7 @@ def paste_notable(request: PastedNotableRequest):
             pass
 
 
-@router.get("/api/db/notables", tags=["Database"])
+@router.get("/api/db/notables", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def list_recent_notables(
     limit: int = Query(20, ge=1, le=200),
     delete_event_id: Optional[int] = Query(None, description="If provided, delete this pasted notable before listing"),
@@ -1641,7 +1689,7 @@ def list_recent_notables(
         visible = [n for n in serialized if not n.get("hidden_from_recent")]
         return visible
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1649,7 +1697,7 @@ def list_recent_notables(
             pass
 
 
-@router.get("/api/db/notables/historical", tags=["Database"])
+@router.get("/api/db/notables/historical", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def list_historical_notables(
     limit: int = Query(20, ge=1, le=500),
 ):
@@ -1701,7 +1749,7 @@ def list_historical_notables(
 
         return summaries
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1709,7 +1757,7 @@ def list_historical_notables(
             pass
 
 
-@router.post("/api/db/notables/backfill-closure-notes", tags=["Database"])
+@router.post("/api/db/notables/backfill-closure-notes", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def backfill_historical_closure_notes():
     """Create concise closure summaries for historical notables missing one.
 
@@ -1781,7 +1829,7 @@ def backfill_historical_closure_notes():
             db.rollback()
         except Exception:
             pass
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise_internal(exc, context="notables")
     finally:
         try:
             db.close()
@@ -1789,7 +1837,7 @@ def backfill_historical_closure_notes():
             pass
 
 
-@router.get("/api/db/notables/{event_id}", tags=["Database"])
+@router.get("/api/db/notables/{event_id}", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_pasted_notable_details(event_id: int):
     """Return full parsed and sanitized details for a closed pasted notable."""
     try:
@@ -1814,7 +1862,7 @@ def get_pasted_notable_details(event_id: int):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise_internal(exc, context="notables")
     finally:
         try:
             db.close()
@@ -1822,7 +1870,7 @@ def get_pasted_notable_details(event_id: int):
             pass
 
 
-@router.delete("/api/db/notables/{event_id}", tags=["Database"])
+@router.delete("/api/db/notables/{event_id}", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_pasted_notable(event_id: int):
     """Delete a pasted Splunk notable from the database.
 
@@ -1882,7 +1930,7 @@ def delete_pasted_notable(event_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
     finally:
         try:
             db.close()
@@ -1890,7 +1938,7 @@ def delete_pasted_notable(event_id: int):
             pass
 
 
-@router.post("/api/db/notables/{event_id}/delete", tags=["Database"])
+@router.post("/api/db/notables/{event_id}/delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def delete_pasted_notable_post(event_id: int):
     """Compatibility endpoint to delete a pasted notable via POST.
 
@@ -1901,7 +1949,7 @@ def delete_pasted_notable_post(event_id: int):
     return delete_pasted_notable(event_id)
 
 
-@router.post("/api/db/notables/batch-delete", tags=["Database"])
+@router.post("/api/db/notables/batch-delete", tags=["Database"], dependencies=[Depends(require_role("admin"))])
 def batch_delete_pasted_notables(payload: Dict[str, Any]):
     """Delete multiple pasted notables in one call.
 
@@ -1970,10 +2018,10 @@ def batch_delete_pasted_notables(payload: Dict[str, Any]):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 
 
-@router.get("/api/db/triage/{case_id}/notable", tags=["Database"])
+@router.get("/api/db/triage/{case_id}/notable", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def get_triage_source_notable(case_id: str):
     """Return the source pasted notable details for a promoted triage case."""
     try:
@@ -1991,5 +2039,5 @@ def get_triage_source_notable(case_id: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="notables")
 

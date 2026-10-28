@@ -1,6 +1,7 @@
 # TOOL_NAME: Splunk_Notable_AI_Helper
 # DESC: Guided helper that takes a sanitized Splunk ES Incident Review notable export and builds an AI prompt asking for SPL, disposition, and a two-sentence closing comment.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Active_Workspace
 # ARG: --evidence | Evidence File | Path to the sanitized notable text or export (optional; will prompt if omitted) | False
 # ARG: --detection-science | Detection Science File | Path to detection science / supportive rules JSON/MD (optional) | False
 

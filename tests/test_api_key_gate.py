@@ -4,7 +4,9 @@ The gate is a no-op unless API_KEY is set in the environment, so these tests
 monkeypatch api.auth._API_KEY (the single auth seam) to exercise both modes.
 """
 
+import asyncio
 import os
+import threading
 
 # CORS middleware is mounted at api.main import time only when CORS_ORIGINS
 # is set; set it here, before the import, so the CORS test below can run.
@@ -61,6 +63,41 @@ def test_cors_allows_x_api_key_header(client):
     assert "x-api-key" in allow.lower(), f"X-API-Key not allowed by CORS: {allow}"
 
 
+def test_cors_allows_x_csrf_token_header(client):
+    """Session-mode mutations send X-CSRF-Token; the preflight must admit it.
+
+    Regression for F15 (2026-10-23): the header was missing from
+    allow_headers, so a cross-origin UI could read (GETs need no CSRF) but
+    never mutate — every preflight came back 400.
+    """
+    resp = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": CORS_TEST_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type,x-csrf-token",
+        },
+    )
+    assert resp.status_code in (200, 204), resp.text
+    allow = resp.headers.get("access-control-allow-headers", "")
+    assert "x-csrf-token" in allow.lower(), f"X-CSRF-Token not allowed by CORS: {allow}"
+
+
+def test_cors_preflight_still_refuses_unlisted_headers(client):
+    """Negative control: adding CSRF must not turn the allowlist into a wildcard."""
+    resp = client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": CORS_TEST_ORIGIN,
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "x-not-allowed",
+        },
+    )
+    assert resp.status_code == 400, resp.text
+    allow = resp.headers.get("access-control-allow-headers", "")
+    assert "x-not-allowed" not in allow.lower()
+
+
 def test_execute_rejected_without_key(client, with_api_key):
     resp = client.post("/api/execute", json={"tool_name": "anything"})
     assert resp.status_code == 401
@@ -85,11 +122,25 @@ def test_execute_accepted_with_header_key(client, with_api_key):
     assert resp.status_code == 404
 
 
-def test_execute_accepted_with_query_key(client, with_api_key):
+def test_execute_rejected_with_query_key_by_default(client, with_api_key):
+    """F2: ?api_key= is ignored unless AUTH_ALLOW_QUERY_KEY=1 — a
+    query-only request 401s even with the right key (it would otherwise
+    leak via access logs, history, Referer and proxy logs)."""
     resp = client.post(
         "/api/execute?api_key=test-secret-key",
         json={"tool_name": "definitely-not-a-real-tool"},
     )
+    assert resp.status_code == 401
+
+
+def test_execute_accepted_with_query_key_when_flagged(client, with_api_key, monkeypatch):
+    """F2 opt-in: AUTH_ALLOW_QUERY_KEY=1 restores the smoke-test path."""
+    monkeypatch.setenv("AUTH_ALLOW_QUERY_KEY", "1")
+    resp = client.post(
+        "/api/execute?api_key=test-secret-key",
+        json={"tool_name": "definitely-not-a-real-tool"},
+    )
+    # Auth passed; handler runs and 404s on the unknown tool name.
     assert resp.status_code == 404
 
 
@@ -179,9 +230,11 @@ def session_client(monkeypatch):
     engine.dispose()
 
 
-def _make_user(db, username="alice", role="analyst", password="pw123"):
+def _make_user(db, username="alice", role="analyst", password=None):
     from db.models import User
 
+    if password is None:
+        password = "%s-test-password" % username
     user = User(username=username, role=role, password_hash=api_auth.hash_password(password))
     db.add(user)
     db.commit()
@@ -306,11 +359,31 @@ def test_expired_session_401(session_client):
 # C2.1.x — route-level hardening gates (signed-off limits)
 # ---------------------------------------------------------------------------
 
+def _isolated_db_session(monkeypatch):
+    """Override db.models.SessionLocal with an empty in-memory
+    sqlite session so DB-touching admission paths stay hermetic."""
+    import db.models as db_models
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    db_models.Base.metadata.create_all(bind=engine)
+    test_session = sessionmaker(
+        autocommit=False, autoflush=False, bind=engine
+    )
+    monkeypatch.setattr(db_models, "SessionLocal", test_session)
+    return engine, test_session
+
+
 def test_job_queue_cap_429(client, with_api_key, monkeypatch):
     """C2.1.2: a full in-memory job queue rejects admission with 429 BEFORE
     registry lookup (unknown tool would 404; the cap must win)."""
     import api.routes.tools as tools_route
 
+    _isolated_db_session(monkeypatch)
     monkeypatch.setattr(tools_route, "JOB_QUEUE_MAX", 2)
     seeded = [f"queued-{i}" for i in range(2)]
     for job_id in seeded:
@@ -336,6 +409,437 @@ def test_job_queue_cap_429(client, with_api_key, monkeypatch):
             tools_route.jobs.pop(job_id, None)
 
 
+def test_job_queue_cap_429_counts_persisted_jobs(client, with_api_key, monkeypatch):
+    """Regression: the C2.1.2 cap counted only the process-local
+    jobs dict, so after a daemon restart (dict empty, persisted
+    ToolRun rows still unfinished) admission silently reset to
+    zero and accepted work past the cap."""
+    import api.routes.tools as tools_route
+    import db.models as db_models
+    from db.util import utcnow_naive
+
+    engine, test_session = _isolated_db_session(monkeypatch)
+
+    # Simulate the post-restart state: empty in-memory queue,
+    # one unfinished run persisted by the previous process.
+    tools_route.jobs.clear()
+    db = test_session()
+    db.add(db_models.ToolRun(job_id="persisted-pending", tool_name="x",
+                             status="pending", created_at=utcnow_naive()))
+    db.commit()
+    db.close()
+
+    monkeypatch.setattr(tools_route, "JOB_QUEUE_MAX", 1)
+    try:
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 429
+        assert "queue is full" in resp.json()["detail"]
+
+        # A finished persisted row does NOT consume a slot.
+        db = test_session()
+        db.query(db_models.ToolRun).update({"status": "completed"})
+        db.commit()
+        db.close()
+        resp = client.post("/api/execute", json={"tool_name": "anything"},
+                           headers={"X-API-Key": "test-secret-key"})
+        assert resp.status_code == 404  # admitted; unknown tool
+    finally:
+        tools_route.jobs.clear()
+        engine.dispose()
+
+
+def test_unfinished_job_count_uses_db_side_count(monkeypatch):
+    """API security review, optimization #4: the persisted
+    half of the admission count must be a DB-side func.count()
+    filtered on unfinished statuses — never a fetch of every
+    ToolRun row — while keeping the row-scan semantics: legacy
+    persisted enum strings still count, finished rows do not,
+    and a job present in BOTH stores counts exactly once."""
+    import api.routes.tools as tools_route
+    import db.models as db_models
+    from sqlalchemy import event
+    from db.util import utcnow_naive
+
+    engine, test_session = _isolated_db_session(monkeypatch)
+    tools_route.jobs.clear()
+
+    statements = []
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _capture(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    db = test_session()
+    db.add_all([
+        db_models.ToolRun(job_id="db-pending", tool_name="x",
+                          status="pending", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-running", tool_name="x",
+                          status="running", created_at=utcnow_naive()),
+        # Legacy persisted enum strings must still count.
+        db_models.ToolRun(job_id="db-legacy", tool_name="x",
+                          status="JobStatus.PENDING", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-legacy-upper", tool_name="x",
+                          status="PENDING", created_at=utcnow_naive()),
+        # Finished rows must not consume a slot.
+        db_models.ToolRun(job_id="db-completed", tool_name="x",
+                          status="completed", created_at=utcnow_naive()),
+        db_models.ToolRun(job_id="db-failed", tool_name="x",
+                          status="failed", created_at=utcnow_naive()),
+        # Unfinished in BOTH stores: counts once, not twice.
+        db_models.ToolRun(job_id="both-stores", tool_name="x",
+                          status="pending", created_at=utcnow_naive()),
+    ])
+    db.commit()
+    db.close()
+
+    tools_route.jobs["dict-pending"] = {"status": "pending"}
+    tools_route.jobs["dict-completed"] = {"status": "completed"}
+    tools_route.jobs["both-stores"] = {"status": "running"}
+
+    try:
+        # dict contributes 2 (dict-pending, both-stores); the DB
+        # contributes 4 more (db-pending, db-running, db-legacy,
+        # db-legacy-upper) — both-stores is deduped, finished
+        # rows excluded.
+        assert tools_route._unfinished_job_count() == 6
+
+        # The persisted tally must be a SQL COUNT aggregate, not
+        # a row fetch: every tool_runs SELECT is a count(...), and
+        # none selects the row columns the old code shipped.
+        tool_run_selects = [
+            statement
+            for statement in statements
+            if statement.lstrip().upper().startswith("SELECT")
+            and "tool_runs" in statement
+        ]
+        assert tool_run_selects, "expected a persisted-count query"
+        assert all(
+            "count(" in statement.lower() for statement in tool_run_selects
+        ), "persisted tally must be a DB-side func.count()"
+        assert not any(
+            "tool_runs.status" in statement and "count(" not in statement.lower()
+            for statement in tool_run_selects
+        ), "must not fetch ToolRun rows to count them"
+    finally:
+        tools_route.jobs.clear()
+        engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# API security review, optimization #3 — running semaphore on the tool
+# execution path. The job QUEUE may admit JOB_QUEUE_MAX unfinished jobs,
+# but simultaneous SUBPROCESSES are capped separately at
+# TOOL_CONCURRENCY_MAX: waiting for a permit parks on the event loop
+# (no anyio threadpool token), and only the subprocess run itself,
+# under a permit, occupies one.
+# ---------------------------------------------------------------------------
+
+def _seed_tool_job(job_id, tool_name="probe"):
+    """A pending job in the process-local jobs dict."""
+    import api.routes.tools as tools_route
+
+    tools_route.deleted_job_ids.discard(job_id)
+    tools_route.jobs[job_id] = {
+        "job_id": job_id,
+        "status": "pending",
+        "tool_name": tool_name,
+        "created_at": "2026-10-05T00:00:00",
+        "completed_at": None,
+        "stdout": None,
+        "stderr": None,
+        "exit_code": None,
+        "arguments": {},
+        "artifacts": [],
+    }
+
+
+def _isolated_file_db_session(monkeypatch, tmp_path):
+    """File-backed sqlite SessionLocal (plus engine for the lifespan
+    create_all) so concurrent request handlers each get their own
+    connection and never touch the configured runtime DB."""
+    import db.models as db_models
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'concurrency.db'}")
+    db_models.Base.metadata.create_all(bind=engine)
+    test_session = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+    monkeypatch.setattr(db_models, "SessionLocal", test_session)
+    monkeypatch.setattr(db_models, "engine", engine)
+    return engine
+
+
+def test_tool_execution_concurrency_capped_by_semaphore(
+    with_api_key, monkeypatch, tmp_path
+):
+    """Optimization #3, end to end: five simultaneous /api/execute
+    requests with TOOL_CONCURRENCY_MAX=2 run at most two tool
+    subprocesses at once. The other three park on the running
+    semaphore (admission is untouched — all five are accepted, the
+    queue cap is separate) and every job still completes."""
+    import json
+
+    import api.routes.tools as tools_route
+
+    _isolated_file_db_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 2)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    out_dir = tmp_path / "probe-out"
+    out_dir.mkdir()
+    probe = tmp_path / "slow_probe.py"
+    probe.write_text(
+        "import argparse, json, pathlib, time\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('--run_id', required=True)\n"
+        "p.add_argument('--out_dir', required=True)\n"
+        "a = p.parse_args()\n"
+        "start = time.time()\n"
+        "time.sleep(0.4)\n"
+        "pathlib.Path(a.out_dir, 'run-%s.json' % a.run_id).write_text(\n"
+        "    json.dumps({'start': start, 'end': time.time()}))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "slow-probe",
+        "file_name": "slow_probe.py",
+        "category": "test",
+        "description": "test probe",
+        "path": str(probe),
+        "arguments": [],
+    }])
+
+    submitted = {}
+    barrier = threading.Barrier(5, timeout=120)
+
+    def _submit(i):
+        barrier.wait()
+        submitted[i] = client_post(
+            "/api/execute",
+            json={
+                "tool_name": "slow-probe",
+                "arguments": {"run_id": str(i), "out_dir": str(out_dir)},
+            },
+            headers={"X-API-Key": "test-secret-key"},
+        )
+
+    job_ids = []
+    try:
+        # One shared TestClient lifespan == one event loop == one
+        # permit pool, exactly like the single-loop production API.
+        api_main._RATE_HITS.clear()
+        with TestClient(api_main.app) as shared_client:
+            client_post = shared_client.post
+            threads = [
+                threading.Thread(target=_submit, args=(i,)) for i in range(5)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            for i in range(5):
+                assert submitted[i].status_code == 200
+                job_ids.append(submitted[i].json()["job_id"])
+
+            runs = [
+                json.loads((out_dir / f"run-{i}.json").read_text())
+                for i in range(5)
+            ]
+            # Event-point sweep over the recorded intervals. The probe
+            # stamps with time.time() (wall clock): unlike monotonic(), it
+            # is comparable across processes, which is what comparing
+            # subprocess start/end times requires.
+            points = []
+            for run in runs:
+                points.append((run["start"], 1))
+                points.append((run["end"], -1))
+            concurrent = peak = 0
+            for _, delta in sorted(points, key=lambda p: (p[0], p[1])):
+                concurrent += delta
+                peak = max(peak, concurrent)
+            assert peak == 2, (
+                f"running-semaphore must cap simultaneous subprocesses at 2, "
+                f"observed {peak}"
+            )
+
+            # Every admitted job completed despite the cap.
+            for job_id in job_ids:
+                status = shared_client.get(f"/api/jobs/{job_id}")
+                assert status.status_code == 200
+                body = status.json()
+                assert body["status"] == "completed"
+                assert body["exit_code"] == 0
+    finally:
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_parked_tool_jobs_hold_no_threadpool_tokens(monkeypatch):
+    """The point of optimization #3: with the concurrency cap
+    exhausted, jobs waiting for a permit must NOT borrow anyio
+    threadpool tokens — only the subprocesses running under a
+    permit do. Four live jobs with TOOL_CONCURRENCY_MAX=2 hold
+    exactly 2 of the ~40 default tokens while two park; the old
+    design (whole background task in the threadpool) held one
+    token per job for the full run and starved sync endpoints."""
+    import anyio
+
+    import api.routes.tools as tools_route
+
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 2)
+
+    entered = []
+    release = threading.Event()
+
+    def _slow_tool(tool_path, args, silent=False, tool_name=None):
+        entered.append(args["n"])
+        release.wait(timeout=30)
+        return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
+
+    monkeypatch.setattr(tools_route, "execute_tool_sync", _slow_tool)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    job_ids = [f"parked-{i}" for i in range(4)]
+    for job_id in job_ids:
+        _seed_tool_job(job_id)
+    try:
+        async def _scenario():
+            tasks = [
+                asyncio.create_task(
+                    tools_route.execute_tool_async(job_id, "probe", {"n": i})
+                )
+                for i, job_id in enumerate(job_ids)
+            ]
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while len(entered) < 2 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert len(entered) == 2, "both permits should be taken"
+            limiter = anyio.to_thread.current_default_thread_limiter()
+            # Give parked tasks every chance to (wrongly) borrow a token.
+            await asyncio.sleep(0.2)
+            assert limiter.borrowed_tokens == 2, (
+                "parked jobs must hold zero threadpool tokens; only the "
+                "subprocesses under a permit may borrow"
+            )
+            release.set()
+            await asyncio.gather(*tasks)
+            assert limiter.borrowed_tokens == 0
+
+        asyncio.run(_scenario())
+        assert sorted(entered) == [0, 1, 2, 3]
+        for job_id in job_ids:
+            assert tools_route.jobs[job_id]["status"] == "completed"
+    finally:
+        release.set()
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_deleted_while_waiting_job_never_starts_subprocess(monkeypatch):
+    """A job cancelled while queued behind the semaphore must never
+    start its subprocess: the deletion is re-checked once a permit
+    is finally acquired."""
+    import api.routes.tools as tools_route
+
+    monkeypatch.setattr(tools_route, "TOOL_CONCURRENCY_MAX", 1)
+
+    entered = []
+    release = threading.Event()
+
+    def _slow_tool(tool_path, args, silent=False, tool_name=None):
+        entered.append(args["n"])
+        release.wait(timeout=30)
+        return {"stdout": "", "stderr": "", "exit_code": 0, "artifacts": []}
+
+    monkeypatch.setattr(tools_route, "execute_tool_sync", _slow_tool)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    holder, waiter = "job-holder", "job-waiter"
+    _seed_tool_job(holder)
+    _seed_tool_job(waiter)
+    try:
+        async def _scenario():
+            first = asyncio.create_task(
+                tools_route.execute_tool_async(holder, "probe", {"n": holder})
+            )
+            loop = asyncio.get_running_loop()
+            deadline = loop.time() + 10
+            while len(entered) < 1 and loop.time() < deadline:
+                await asyncio.sleep(0.01)
+            assert len(entered) == 1, "the holder should be running"
+            second = asyncio.create_task(
+                tools_route.execute_tool_async(waiter, "probe", {"n": waiter})
+            )
+            # The waiter is now parked on the semaphore; cancel the job
+            # while it waits, then let the holder finish.
+            await asyncio.sleep(0.1)
+            tools_route.deleted_job_ids.add(waiter)
+            release.set()
+            await asyncio.gather(first, second)
+
+        asyncio.run(_scenario())
+        assert entered == [holder], "the deleted job must never start"
+        assert tools_route.jobs[waiter]["status"] == "pending"
+        assert tools_route.jobs[holder]["status"] == "completed"
+    finally:
+        release.set()
+        for job_id in (holder, waiter):
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
+def test_tool_run_semaphore_pool_is_per_event_loop(
+    with_api_key, monkeypatch, tmp_path
+):
+    """Regression guard for the per-loop permit cache: every
+    TestClient lifespan runs on its own event loop and an
+    asyncio.Semaphore binds to its loop, so two sequential
+    lifespans (two loops) must each get their own pool — a single
+    module-level semaphore would raise 'bound to a different event
+    loop' on the second client."""
+    import api.routes.tools as tools_route
+
+    _isolated_file_db_session(monkeypatch, tmp_path)
+    monkeypatch.setattr(tools_route, "_persist_tool_run", lambda job: None)
+
+    probe = tmp_path / "echo_tool.py"
+    probe.write_text("print('probe-ok')\n", encoding="utf-8")
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "echo-probe",
+        "file_name": "echo_tool.py",
+        "category": "test",
+        "description": "test probe",
+        "path": str(probe),
+        "arguments": [],
+    }])
+
+    job_ids = []
+    try:
+        for _ in range(2):  # two fresh event loops, two permit pools
+            api_main._RATE_HITS.clear()
+            with TestClient(api_main.app) as loop_client:
+                resp = loop_client.post(
+                    "/api/execute",
+                    json={"tool_name": "echo-probe"},
+                    headers={"X-API-Key": "test-secret-key"},
+                )
+                assert resp.status_code == 200
+                job_ids.append(resp.json()["job_id"])
+                status = loop_client.get(f"/api/jobs/{job_ids[-1]}")
+                assert status.status_code == 200
+                assert status.json()["status"] == "completed"
+                assert status.json()["exit_code"] == 0
+    finally:
+        for job_id in job_ids:
+            tools_route.jobs.pop(job_id, None)
+            tools_route.deleted_job_ids.discard(job_id)
+
+
 def test_paste_payload_cap_413(client, monkeypatch):
     """C2.1.4: an oversized raw paste is rejected 413 before any parsing."""
     import api.routes.notables as notables_route
@@ -349,6 +853,73 @@ def test_paste_payload_cap_413(client, monkeypatch):
     resp = client.post("/api/notables/paste", json={"raw_text": " " * 10})
     assert resp.status_code == 400
     assert "No notable text" in resp.json()["detail"]
+
+
+def test_failed_paste_purges_boundary_batch(client, monkeypatch):
+    """Regression: a paste that failed after boundary admission
+    (e.g. the DB died mid-pipeline) left the staged
+    {batch_id}-pasted.txt + manifest in the quarantine
+    directory forever — an orphaned, unlinked copy of the
+    pasted content. The failure path must purge the batch
+    when the pipeline failed before its inserts committed."""
+    import db.models as db_models
+    from services import splunk_boundary
+
+    def _boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(db_models, "SessionLocal", _boom)
+
+    resp = client.post("/api/notables/paste",
+                       json={"raw_text": "Notable\n\nTitle: t\nHost: h\n"})
+    assert resp.status_code == 500
+    # The admitted batch (staged .txt + manifest) is gone —
+    # nothing is left behind in the quarantine directory.
+    assert splunk_boundary.list_batches() == []
+    assert list(splunk_boundary.staging_dir().glob("*")) == []
+
+
+def test_paste_payload_cap_413_multibyte(client, monkeypatch):
+    """Regression: PASTE_MAX_BYTES is a BYTE budget. A multibyte
+    payload that is under the cap in characters but over it in
+    UTF-8 bytes must still 413 — the gate used to measure
+    len(raw_text), letting ~4x the budget past it."""
+    import api.routes.notables as notables_route
+
+    monkeypatch.setattr(notables_route, "PASTE_MAX_BYTES", 10)
+    # 6 characters (a character-count gate admits this) but
+    # 12 UTF-8 bytes (over the 10-byte budget).
+    resp = client.post("/api/notables/paste", json={"raw_text": "é" * 6})
+    assert resp.status_code == 413
+    assert "exceeds" in resp.json()["detail"]
+
+
+def test_tool_subprocess_env_is_minimal(tmp_path, monkeypatch):
+    """C2.1.6: a registered tool subprocess runs on an explicit
+    env allowlist (PATH/HOME/COMMANDER_BOOT), never a copy of
+    the API environment — DATABASE_URL, API_KEY and
+    OLLAMA_API_KEY must be unreadable by the tool even when
+    they are set in the API process."""
+    import json
+
+    import api.routes.tools as tools_route
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://leak:leak@db/neon")
+    monkeypatch.setenv("API_KEY", "leaked-api-key")
+    monkeypatch.setenv("OLLAMA_API_KEY", "leaked-ollama-key")
+
+    probe = tmp_path / "env_probe.py"
+    probe.write_text(
+        "import json, os\nprint(json.dumps(sorted(os.environ)))\n",
+        encoding="utf-8",
+    )
+    result = tools_route.execute_tool_sync(str(probe), {})
+    assert result["exit_code"] == 0
+    tool_env_keys = json.loads(result["stdout"])
+    for required in ("PATH", "HOME", "COMMANDER_BOOT"):
+        assert required in tool_env_keys
+    for secret in ("DATABASE_URL", "API_KEY", "OLLAMA_API_KEY"):
+        assert secret not in tool_env_keys
 
 
 def test_analysis_draft_roundtrip(client, with_api_key, monkeypatch):
@@ -397,7 +968,9 @@ def test_rate_limit_429(client, monkeypatch):
     """C2.1.5: Ollama-backed POSTs are limited to RATE_LIMIT_PER_MIN per IP.
     The limiter counts requests before handlers run, so handler outcomes
     (500 without a DB here) do not matter."""
-    monkeypatch.setattr(api_main, "RATE_LIMIT_PER_MIN", 2)
+    # E.5: the limiter reads its config from api.middleware (api.main only
+    # re-exports the value), so patch the module that runs it.
+    monkeypatch.setattr("api.middleware.RATE_LIMIT_PER_MIN", 2)
     api_main._RATE_HITS.clear()
     try:
         for _ in range(2):
@@ -409,3 +982,765 @@ def test_rate_limit_429(client, monkeypatch):
         assert client.get("/api/health").status_code == 200
     finally:
         api_main._RATE_HITS.clear()
+
+
+# ---------------------------------------------------------------------------
+# F5 — login throttling + constant-time user resolution
+# (API security review: /api/auth/login short-circuited on a missing
+# user — a valid username cost a full KDF run, an invalid one returned
+# in microseconds, a reliable username-enumeration timing side channel —
+# and the endpoint had no brute-force protection)
+# ---------------------------------------------------------------------------
+
+import time as _time
+
+import api.routes.auth as auth_route
+
+
+@pytest.fixture()
+def clean_login_throttle_state():
+    """Login failure windows are module-global; keep every
+    F5 test hermetic and leave no state behind for others."""
+    auth_route._LOGIN_FAILURES.clear()
+    yield
+    auth_route._LOGIN_FAILURES.clear()
+
+
+def _spy_verify_password(monkeypatch):
+    """Wrap api.auth.verify_password, recording the hash each
+    attempt was verified against, and return the recording list."""
+    verify_calls = []
+    real_verify = api_auth.verify_password
+
+    def _spy(password, encoded):
+        verify_calls.append(encoded)
+        return real_verify(password, encoded)
+
+    monkeypatch.setattr(api_auth, "verify_password", _spy)
+    return verify_calls
+
+
+def test_missing_user_login_runs_full_kdf(session_client, monkeypatch):
+    """Regression: the login fast-path used to short-circuit on a
+    missing user, so no password verification ran at all. Every
+    attempt — valid username or not — must now pay one full KDF
+    run, verifying against the dummy hash when the user is absent."""
+    verify_calls = _spy_verify_password(monkeypatch)
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "ghost-user", "password": "anything"},
+    )
+    assert resp.status_code == 401
+    assert len(verify_calls) == 1
+    # Verified against the dummy hash — same KDF, same parameters
+    # as a real hash, so a missing user costs a real user's time.
+    assert verify_calls[0] == auth_route._dummy_password_hash()
+    assert verify_calls[0].startswith(("scrypt$", "pbkdf2$"))
+
+
+def test_inactive_user_login_verifies_dummy_hash(session_client, monkeypatch):
+    """An inactive account also resolves in constant time: verifying
+    its real hash would leak that the username exists but is disabled."""
+    db = session_client.test_session()
+    user = _make_user(db, username="sleeping", password="pw123")
+    user.is_active = False
+    db.commit()
+
+    verify_calls = _spy_verify_password(monkeypatch)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "sleeping", "password": "pw123"},
+    )
+    assert resp.status_code == 401
+    assert verify_calls[0] == auth_route._dummy_password_hash()
+    assert verify_calls[0] != user.password_hash
+
+
+def test_active_user_login_verifies_real_hash(session_client, monkeypatch):
+    """Constant-time resolution applies to missing/inactive users;
+    a real active user still verifies against their stored hash."""
+    db = session_client.test_session()
+    user = _make_user(db, username="awake", password="pw123")
+
+    verify_calls = _spy_verify_password(monkeypatch)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "awake", "password": "pw123"},
+    )
+    assert resp.status_code == 200
+    assert verify_calls == [user.password_hash]
+
+
+def test_missing_and_present_user_login_cost_the_same(session_client):
+    """Timing sanity for the enumeration fix: a missing-user login
+    and a real-user (wrong-password) login each pay exactly one KDF
+    run, so neither is reliably faster. The 40% floor is generous —
+    the real-user path additionally does the DB lookup, which only
+    makes it slower, so any real asymmetry fails this test."""
+    db = session_client.test_session()
+    _make_user(db, username="paced", password="pw123")
+
+    def _timed(username, password):
+        t0 = _time.perf_counter()
+        session_client.post(
+            "/api/auth/login",
+            json={"username": username, "password": password},
+        )
+        return _time.perf_counter() - t0
+
+    # Warm both paths once (lazy dummy-hash build, connection pools).
+    _timed("paced", "wrong")
+    _timed("ghost-timing", "wrong")
+
+    present = _timed("paced", "wrong")
+    missing = _timed("ghost-timing", "wrong")
+    assert missing >= 0.4 * present, (
+        f"missing-user login ({missing:.4f}s) is suspiciously faster "
+        f"than real-user login ({present:.4f}s) — enumeration channel"
+    )
+
+
+def test_login_throttled_after_repeat_failures(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failed attempts are counted; once a window is full the login
+    answers 429 — checked BEFORE user resolution, so even the correct
+    password is refused while throttled."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 3)
+    db = session_client.test_session()
+    _make_user(db, username="throttled-user", password="pw123")
+
+    for _ in range(3):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "throttled-user", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "throttled-user", "password": "pw123"},
+    )
+    assert resp.status_code == 429
+    assert resp.json()["detail"] == "Too many login attempts"
+
+
+def test_unknown_username_failures_throttle_that_username(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failed logins for a username that does not exist still count
+    against that username's window — the enumeration target itself
+    gets throttled."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    for _ in range(2):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "enumerated", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "enumerated", "password": "pw123"},
+    )
+    assert resp.status_code == 429
+
+
+def test_login_throttle_windows_are_independent(
+    monkeypatch, clean_login_throttle_state
+):
+    """Per-IP and per-username windows are separate: a full IP
+    window throttles every username from that IP, a full username
+    window throttles that username from every IP, and neither
+    affects unrelated (ip, username) pairs."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    for _ in range(2):
+        auth_route._record_login_failure("10.0.0.1", "bob")
+
+    assert auth_route._login_throttled("10.0.0.1", "bob")       # both full
+    assert auth_route._login_throttled("10.0.0.1", "alice")     # IP full
+    assert auth_route._login_throttled("10.0.0.2", "bob")       # user full
+    assert not auth_route._login_throttled("10.0.0.2", "alice")  # neither
+
+
+def test_login_success_clears_failure_windows(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """A successful login resets both windows. With the cap at 3:
+    two failures leave the login admitted (2 < 3), the successful
+    login clears, and afterwards a single new failure leaves the
+    window at 1 — had the clear not happened, the count would be
+    3 and the next (correct) login would 429."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 3)
+    db = session_client.test_session()
+    _make_user(db, username="recovered", password="pw123")
+
+    for _ in range(2):
+        resp = session_client.post(
+            "/api/auth/login",
+            json={"username": "recovered", "password": "wrong"},
+        )
+        assert resp.status_code == 401
+
+    ok = session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "pw123"},
+    )
+    assert ok.status_code == 200
+    # One new failure does not re-arm the throttle (window was cleared).
+    session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "wrong"},
+    )
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "recovered", "password": "pw123"},
+    )
+    assert resp.status_code == 200
+
+
+def test_login_failure_window_expires(
+    session_client, monkeypatch, clean_login_throttle_state
+):
+    """Failures age out of the sliding window: once the window
+    collapses, stale failures are pruned and login re-admits."""
+    monkeypatch.setattr(auth_route, "LOGIN_MAX_FAILURES", 2)
+    db = session_client.test_session()
+    _make_user(db, username="expired-window", password="pw123")
+
+    for _ in range(2):
+        session_client.post(
+            "/api/auth/login",
+            json={"username": "expired-window", "password": "wrong"},
+        )
+    assert session_client.post(
+        "/api/auth/login",
+        json={"username": "expired-window", "password": "pw123"},
+    ).status_code == 429
+
+    # Collapse the window to zero: every recorded failure is now
+    # stale and must be pruned on the next probe.
+    monkeypatch.setattr(auth_route, "LOGIN_WINDOW_SECONDS", 0)
+    resp = session_client.post(
+        "/api/auth/login",
+        json={"username": "expired-window", "password": "pw123"},
+    )
+    assert resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Optimization #1 (API security review): actor-resolution cache
+#
+# resolve_actor runs two DB queries (AuthSession + User) on every
+# /api/* request in session mode. The short-TTL _actor_cache spares
+# them: the first request for a cookie pays the queries, later ones
+# within the TTL answer from the cache. These tests pin the contract:
+# cache hits spare the DB, expiry/logout/TTL=0 fall back to the DB,
+# and CSRF is still evaluated per request (never cached).
+# ---------------------------------------------------------------------------
+
+class _StubRequest:
+    """Minimal stand-in for a Starlette Request: resolve_actor only
+    reads .cookies and .headers."""
+
+    def __init__(self, cookies=None, headers=None):
+        self.cookies = cookies or {}
+        self.headers = headers or {}
+
+
+@pytest.fixture()
+def actor_cache_isolated(monkeypatch):
+    """Hermetic actor-cache state for one test: empty cache, TTL
+    armed, and a counting wrapper around _session_from_request so
+    tests can prove exactly how many DB resolutions ran."""
+    api_auth._actor_cache.clear()
+    monkeypatch.setattr(api_auth, "ACTOR_CACHE_TTL", 30.0)
+    resolutions = []
+    real_resolve = api_auth._session_from_request
+
+    def counting_resolve(request):
+        resolutions.append(request)
+        return real_resolve(request)
+
+    monkeypatch.setattr(api_auth, "_session_from_request", counting_resolve)
+    yield resolutions
+    api_auth._actor_cache.clear()
+
+
+def _login(session_client, username="cache-user", password=None, role="analyst"):
+    """Create a user, log in, and return (login response, cookie token)."""
+    if password is None:
+        password = "%s-test-password" % username
+    db = session_client.test_session()
+    _make_user(db, username=username, password=password, role=role)
+    login = session_client.post(
+        "/api/auth/login", json={"username": username, "password": password}
+    )
+    assert login.status_code == 200
+    token = session_client.cookies.get(api_auth.SESSION_COOKIE)
+    assert token
+    return login, token
+
+
+def test_first_resolution_pays_db_and_warms_cache(
+    session_client, actor_cache_isolated
+):
+    """The first request for a cookie resolves via the two DB
+    queries and populates the cache; the entry is keyed by the
+    token HASH and carries only plain values."""
+    login, token = _login(session_client)
+    assert api_auth._actor_cache == {}  # login sets no cookie request-side
+
+    resp = session_client.get("/api/auth/session")
+    assert resp.status_code == 200
+    assert resp.json()["user"] == "cache-user"
+    # Exactly one DB resolution ran (AuthSession + User queries).
+    assert len(actor_cache_isolated) == 1
+
+    entry = api_auth._actor_cache[api_auth.hash_token(token)]
+    assert len(entry) == 5  # (expires_at, user_id, role, username, csrf_token)
+    assert entry[3] == "cache-user" and entry[2] == "analyst"
+
+
+def test_cache_hits_spare_db_queries(session_client, actor_cache_isolated):
+    """Within the TTL, repeated requests resolve the same actor with
+    zero additional DB queries — the UI polls frequently, so this is
+    the load the optimization removes."""
+    _login(session_client)
+    session_client.get("/api/auth/session")  # warm the cache
+    assert len(actor_cache_isolated) == 1
+
+    for _ in range(4):
+        resp = session_client.get("/api/auth/session")
+        assert resp.status_code == 200
+        assert resp.json()["user"] == "cache-user"
+    # No DB resolution for any of the four follow-up requests.
+    assert len(actor_cache_isolated) == 1
+
+
+def test_cached_session_expiry_drops_entry(session_client, actor_cache_isolated):
+    """A cached entry whose session has expired is never served: it
+    is dropped and the actor is re-resolved from the DB."""
+    from datetime import timedelta
+
+    from db.util import utcnow_naive
+
+    _, token = _login(session_client)
+    session_client.get("/api/auth/session")  # warm
+    assert len(actor_cache_isolated) == 1
+
+    # Age the cached session out from under the cache (the
+    # session TTL is 12 h, so a full day is safely past it).
+    key = api_auth.hash_token(token)
+    expires_at = api_auth._actor_cache[key][0]
+    api_auth._actor_cache[key] = (
+        expires_at - timedelta(hours=24),) + api_auth._actor_cache[key][1:]
+
+    resp = session_client.get("/api/auth/session")
+    assert resp.status_code == 200  # re-resolved, not served stale
+    assert len(actor_cache_isolated) == 2  # paid the DB queries again
+    # The re-populated entry carries the real future expiry again.
+    assert api_auth._actor_cache[key][0] > utcnow_naive()
+
+
+def test_logout_evicts_cached_actor(session_client, actor_cache_isolated):
+    """Logout evicts the cached resolution so the cookie cannot ride
+    out its TTL as an authenticated actor — including the in-request
+    race where the gate middleware cached it moments earlier."""
+    login, token = _login(session_client)
+    session_client.get("/api/auth/session")  # warm the cache
+    assert api_auth.hash_token(token) in api_auth._actor_cache
+
+    out = session_client.post(
+        "/api/auth/logout", headers={"X-CSRF-Token": login.json()["csrf_token"]}
+    )
+    assert out.status_code == 200
+    # Evicted: the cached resolution is gone even though its TTL
+    # (30 s) has not elapsed.
+    assert api_auth.hash_token(token) not in api_auth._actor_cache
+    # And the logged-out cookie no longer authenticates anything.
+    assert session_client.get("/api/auth/session").status_code == 401
+
+
+def test_actor_cache_disabled_when_ttl_zero(
+    session_client, actor_cache_isolated, monkeypatch
+):
+    """ACTOR_CACHE_TTL=0 opts out entirely: every request pays the
+    DB queries (the pre-optimization behavior), byte for byte."""
+    monkeypatch.setattr(api_auth, "ACTOR_CACHE_TTL", 0.0)
+    # HIGH-01: /api/db/stats is admin — exercise the double-resolve path as admin.
+    _login(session_client, role="admin")
+
+    # /api/db/stats resolves the actor twice per request (the middleware
+    # gate + the SEC-02 require_role dependency), so with the cache off
+    # every request pays twice.
+    for _ in range(3):
+        resp = session_client.get("/api/db/stats")
+        assert resp.status_code == 200
+    assert len(actor_cache_isolated) == 6
+    assert api_auth._actor_cache == {}
+
+
+def test_cache_hit_evaluates_csrf_per_request(
+    session_client, actor_cache_isolated
+):
+    """CSRF validity is never cached: the same cached session yields
+    csrf_ok False without the header and True with it, and a bogus
+    header fails the constant-time compare."""
+    login, token = _login(session_client)
+    csrf = login.json()["csrf_token"]
+    session_client.get("/api/auth/session")  # warm the cache
+
+    no_header = api_auth.resolve_actor(
+        _StubRequest(cookies={api_auth.SESSION_COOKIE: token})
+    )
+    assert no_header.kind == "session"
+    assert no_header.csrf_ok is False
+
+    with_header = api_auth.resolve_actor(
+        _StubRequest(
+            cookies={api_auth.SESSION_COOKIE: token},
+            headers={"X-CSRF-Token": csrf},
+        )
+    )
+    assert with_header.csrf_ok is True
+    assert with_header.csrf_token == csrf
+
+    bogus = api_auth.resolve_actor(
+        _StubRequest(
+            cookies={api_auth.SESSION_COOKIE: token},
+            headers={"X-CSRF-Token": csrf + "x"},
+        )
+    )
+    assert bogus.csrf_ok is False
+
+
+def test_cache_serves_cached_user_shape(session_client, actor_cache_isolated):
+    """Cache hits return a plain CachedUser (id/username/role) —
+    no ORM row — and every current consumer field is present."""
+    db = session_client.test_session()
+    _make_user(db, username="shape-user", role="analyst", password="pw123")
+    login = session_client.post(
+        "/api/auth/login", json={"username": "shape-user", "password": "pw123"}
+    )
+    token = session_client.cookies.get(api_auth.SESSION_COOKIE)
+    session_client.get("/api/auth/session")  # warm the cache
+
+    actor = api_auth.resolve_actor(
+        _StubRequest(cookies={api_auth.SESSION_COOKIE: token})
+    )
+    assert actor.kind == "session"
+    assert actor.role == "analyst"
+    assert type(actor.user).__name__ == "CachedUser"
+    assert actor.user.username == "shape-user"
+    from db.models import User
+
+    assert actor.user.id == db.query(User).first().id
+    assert actor.user.role == "analyst"
+
+
+# --- Optimization #5: registry-scoped artifact snapshots -------------------
+
+
+def test_declared_tool_snapshot_walks_only_its_output_dirs(tmp_path, monkeypatch):
+    """Optimization #5: a tool with registry-declared output_dirs is
+    snapshotted against ONLY those directories. A file planted in a
+    declared dir is found; one planted in an undeclared tree is not —
+    even when that tree is one of the legacy candidates."""
+    import api.routes.tools as tools_route
+
+    (tmp_path / "Data" / "Active_Workspace").mkdir(parents=True)
+    (tmp_path / "Data" / "Reports").mkdir(parents=True)
+    (tmp_path / "Tools" / "probe").mkdir(parents=True)
+    declared_file = tmp_path / "Data" / "Active_Workspace" / "declared.txt"
+    undeclared_file = tmp_path / "Data" / "Reports" / "undeclared.txt"
+    declared_file.write_text("x", encoding="utf-8")
+    undeclared_file.write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "scoped-probe",
+        "output_dirs": ["Data/Active_Workspace"],
+    }])
+
+    found = tools_route._tool_artifact_snapshot("scoped-probe")
+    assert os.path.realpath(str(declared_file)) in found
+    assert os.path.realpath(str(undeclared_file)) not in found
+
+
+def test_undeclared_tool_keeps_legacy_sweep(tmp_path, monkeypatch):
+    """Optimization #5 must never silently narrow detection: a tool with
+    no registry entry (or no output_dirs) keeps the full five-tree
+    legacy sweep, seeing files in every legacy candidate directory."""
+    import api.routes.tools as tools_route
+
+    candidates = ["Reports", os.path.join("Data", "Reports"),
+                  os.path.join("Data", "Archive"),
+                  os.path.join("Data", "Active_Workspace"),
+                  os.path.join("Data", "Exports")]
+    for rel in candidates:
+        os.makedirs(os.path.join(tmp_path, rel), exist_ok=True)
+        (tmp_path / rel / "f.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "unrelated-tool",  # registry exists, probe has no entry
+        "arguments": [],
+    }])
+
+    found = tools_route._tool_artifact_snapshot("probe-with-no-entry")
+    for rel in candidates:
+        expected = os.path.realpath(str(tmp_path / rel / "f.txt"))
+        assert expected in found, f"legacy sweep missed {rel}"
+    # Registry failures degrade the same way.
+    def _boom():
+        raise RuntimeError("registry unavailable")
+    monkeypatch.setattr(tools_route, "load_registry", _boom)
+    found = tools_route._tool_artifact_snapshot("probe-with-no-entry")
+    assert os.path.realpath(str(tmp_path / "Data" / "Active_Workspace" / "f.txt")) in found
+
+
+def test_declared_tool_artifacts_detected_end_to_end(tmp_path, monkeypatch):
+    """Optimization #5 end to end: execute_tool_sync for a declared tool
+    still reports a file the tool writes into its declared dir — and the
+    walk really stayed scoped (an undeclared-tree file stays invisible)."""
+    import api.routes.tools as tools_route
+
+    out_dir = tmp_path / "Data" / "Reports"
+    out_dir.mkdir(parents=True)
+    probe = tmp_path / "artifact_probe.py"
+    probe.write_text(
+        "import argparse, pathlib\n"
+        "p = argparse.ArgumentParser()\n"
+        "p.add_argument('--out_dir', required=True)\n"
+        "a = p.parse_args()\n"
+        "pathlib.Path(a.out_dir, 'e2e-artifact.json').write_text('{}')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "artifact-probe",
+        "output_dirs": ["Data/Reports"],
+        "arguments": [],
+    }])
+
+    result = tools_route.execute_tool_sync(
+        str(probe), {"out_dir": str(out_dir)}, silent=True,
+        tool_name="artifact-probe",
+    )
+    assert result["exit_code"] == 0
+    assert result["artifacts"], "declared-dir artifact must be detected"
+    assert any("e2e-artifact.json" in rel for rel in result["artifacts"])
+
+    # Scoped walk: the tool created an undeclared file too (not reported).
+    (tmp_path / "Data" / "Active_Workspace").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "Data" / "Active_Workspace" / "invisible.txt").write_text(
+        "x", encoding="utf-8"
+    )
+    result = tools_route.execute_tool_sync(
+        str(probe), {"out_dir": str(out_dir)}, silent=True,
+        tool_name="artifact-probe",
+    )
+    assert result["exit_code"] == 0
+    assert not any(
+        "invisible.txt" in rel for rel in result["artifacts"]
+    ), "undeclared-tree file must not leak into the artifact list"
+
+
+def test_output_dir_traversal_and_abs_outside_root_refused(tmp_path, monkeypatch):
+    """Declarations must not aim the snapshot outside the platform root:
+    relative `..` escapes and absolute paths outside the root are both
+    refused (falling back to the legacy sweep when nothing survives),
+    while in-root absolutes are honored."""
+    import api.routes.tools as tools_route
+
+    # A directory genuinely outside the platform root (tmp_path itself).
+    outside = tmp_path.parent / "opt5_outside_root"
+    outside.mkdir(exist_ok=True)
+    (outside / "planted.txt").write_text("x", encoding="utf-8")
+    legacy = tmp_path / "Data" / "Active_Workspace"
+    legacy.mkdir(parents=True)
+    (legacy / "f.txt").write_text("x", encoding="utf-8")
+    insider = tmp_path / "Data" / "Exports"
+    insider.mkdir(parents=True)
+    (insider / "in.txt").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(
+        tools_route.deps, "get_platform_root", lambda: str(tmp_path)
+    )
+
+    # Mixed: escaping declarations refused, in-root absolute honored.
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "escape-probe",
+        "output_dirs": ["../opt5_outside_root", str(outside), "Data/Exports"],
+    }])
+    found = tools_route._tool_artifact_snapshot("escape-probe")
+    assert os.path.realpath(str(outside / "planted.txt")) not in found, (
+        "declaration escaping the root must never be walked"
+    )
+    assert os.path.realpath(str(insider / "in.txt")) in found
+    assert os.path.realpath(str(legacy / "f.txt")) not in found
+
+    # All declarations refused -> legacy sweep fallback.
+    monkeypatch.setattr(tools_route, "load_registry", lambda: [{
+        "name": "escape-probe",
+        "output_dirs": ["../opt5_outside_root", str(outside)],
+    }])
+    found = tools_route._tool_artifact_snapshot("escape-probe")
+    assert os.path.realpath(str(legacy / "f.txt")) in found
+
+
+def test_indexer_output_dir_header_round_trip(tmp_path, monkeypatch):
+    """The indexer parses '# OUTPUT_DIR:' headers into output_dirs,
+    normalizes separators, refuses ../ declarations, and omits the key
+    when nothing valid remains."""
+    import importlib.util
+
+    root = tmp_path / "root"
+    tools_dir = root / "Tools"
+    tools_dir.mkdir(parents=True)
+    indexer_path = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), os.pardir,
+                     "Tools", "tool_indexer", "tool_indexer.py")
+    )
+    spec = importlib.util.spec_from_file_location("tool_indexer", indexer_path)
+    indexer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(indexer)
+    monkeypatch.setattr(indexer, "get_platform_root", lambda: str(root))
+
+    def _write(rel, body):
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(body, encoding="utf-8")
+        return str(p)
+
+    good = _write("Tools/good/good.py", "# TOOL_NAME: good\n"
+                  "# DESC: d\n# CATEGORY: C\n"
+                  "# OUTPUT_DIR: Data/Reports, Data\\Exports\n"
+                  "# ARG: --x | X | x | False\n" + "print(1)\n")
+    escaping = _write("Tools/bad/bad.py", "# TOOL_NAME: bad\n"
+                      "# DESC: d\n# CATEGORY: C\n"
+                      "# OUTPUT_DIR: ../etc, Data/Reports\n"
+                      + "print(1)\n")
+    no_dirs = _write("Tools/none/none.py", "# TOOL_NAME: none\n"
+                     "# DESC: d\n# CATEGORY: C\n" + "print(1)\n")
+
+    assert indexer.parse_tool_headers(good)["output_dirs"] == [
+        "Data/Exports", "Data/Reports"
+    ]
+    parsed = indexer.parse_tool_headers(escaping)
+    assert parsed["output_dirs"] == ["Data/Reports"]
+    assert "output_dirs" not in indexer.parse_tool_headers(no_dirs)
+
+    indexer.rebuild_registry()
+    import json
+    reg = json.loads((root / "Commander_Registry.json").read_text())
+    by_name = {t["name"]: t for t in reg}
+    assert by_name["good"]["output_dirs"] == ["Data/Exports", "Data/Reports"]
+    assert by_name["bad"]["output_dirs"] == ["Data/Reports"]
+    assert "output_dirs" not in by_name["none"]
+
+
+# ---------------------------------------------------------------------------
+# API security review hardening: F9 body cap, F8 limiter bound, F13 headers,
+# F12 session vacuum (F2 covered above; F7 is a launch-time bind default).
+# ---------------------------------------------------------------------------
+
+def test_body_cap_rejects_huge_declared_length(client, with_api_key):
+    """F9: a declared Content-Length over MAX_BODY_BYTES 413s before any
+    parsing or auth work — even with a valid key."""
+    big = 11 * 1024 * 1024
+    resp = client.post(
+        "/api/execute",
+        content=b"x" * 100,  # body small; the declared length is the attack
+        headers={
+            "X-API-Key": "test-secret-key",
+            "Content-Length": str(big),
+        },
+    )
+    assert resp.status_code == 413
+    assert "too large" in resp.json()["detail"].lower()
+
+
+def test_body_cap_allows_normal_mutation(client, with_api_key):
+    """F9 negative control: an ordinary small body passes the cap and
+    reaches the handler (404 = unknown tool, i.e. auth + routing ran)."""
+    resp = client.post(
+        "/api/execute",
+        json={"tool_name": "definitely-not-a-real-tool"},
+        headers={"X-API-Key": "test-secret-key"},
+    )
+    assert resp.status_code == 404
+
+
+def test_rate_limiter_sweeps_fully_stale_ips(client):
+    """F8: any request on a limited path sweeps every fully-stale IP key,
+    so never-again-seen source IPs cannot accumulate without bound."""
+    import time as _time
+
+    api_main._RATE_HITS["9.9.9.9"] = [_time.time() - 120.0]
+    resp = client.post("/api/code-review", json={})
+    assert resp.status_code != 429  # admitted, not throttled
+    assert "9.9.9.9" not in api_main._RATE_HITS
+
+
+def test_security_headers_on_api_and_ui(client):
+    """F13: nosniff everywhere; no-store on /api/* but not on static UI."""
+    api_resp = client.get("/api/health")
+    assert api_resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert api_resp.headers.get("Cache-Control") == "no-store"
+    ui_resp = client.get("/index.modular.html")
+    assert ui_resp.headers.get("X-Content-Type-Options") == "nosniff"
+    assert ui_resp.headers.get("Cache-Control") != "no-store"
+    # Narrow CSP (F13): the four directives that cannot break the UI.
+    csp = api_resp.headers.get("Content-Security-Policy", "")
+    assert "frame-ancestors 'none'" in csp
+    assert "object-src 'none'" in csp
+    assert "base-uri 'self'" in csp
+    assert "form-action 'self'" in csp
+    # Deliberately no script/style source policy: the UI is the Vue runtime
+    # compiler plus the Tailwind Play CDN, which need 'unsafe-eval' and
+    # inline styles. If one is ever added, this test should change with it.
+    assert "script-src" not in csp and "default-src" not in csp
+    assert ui_resp.headers.get("Content-Security-Policy") == csp
+
+
+def test_successful_login_vacuums_expired_sessions(session_client):
+    """F12: a successful login deletes expired AuthSession rows (bounded
+    table without a scheduler); live sessions survive."""
+    from datetime import timedelta
+
+    from db.models import AuthSession
+    from db.util import utcnow_naive
+
+    db = session_client.test_session()
+    user = _make_user(db, username="vacuum", password="pw123")
+    stale = AuthSession(
+        token_hash="0" * 64,
+        csrf_token="c" * 32,
+        user_id=user.id,
+        expires_at=utcnow_naive() - timedelta(hours=1),
+    )
+    live = AuthSession(
+        token_hash="1" * 64,
+        csrf_token="c" * 32,
+        user_id=user.id,
+        expires_at=utcnow_naive() + timedelta(hours=11),
+    )
+    db.add_all([stale, live])
+    db.commit()
+
+    resp = session_client.post(
+        "/api/auth/login", json={"username": "vacuum", "password": "pw123"}
+    )
+    assert resp.status_code == 200
+    remaining = {r.token_hash for r in db.query(AuthSession).all()}
+    assert "0" * 64 not in remaining  # expired row vacuumed
+    assert "1" * 64 in remaining  # live row untouched

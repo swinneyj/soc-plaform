@@ -236,8 +236,8 @@ $databaseName = if ($env:POSTGRES_DB) { $env:POSTGRES_DB } else { "soc_platform"
 $env:COMPOSE_DATABASE_URL = "postgresql+psycopg://$databaseUser`:$encodedPassword@postgres:5432/$databaseName"
 $env:DATABASE_URL = "postgresql+psycopg://$databaseUser`:$encodedPassword@localhost`:$PostgresHostPort/$databaseName"
 
-Write-Host "[*] Starting postgres and redis via docker compose..."
-docker compose up -d postgres redis
+Write-Host "[*] Starting postgres via docker compose..."
+docker compose up -d postgres
 if ($LASTEXITCODE -ne 0) {
     Release-ShareLock
     Write-Error "docker compose up failed."

@@ -1,6 +1,7 @@
 # TOOL_NAME: mde_triage_aggregator
 # DESC: Designed EXCLUSIVELY for raw Microsoft Defender (MDE) CSV exports. Use this to deduplicate incident storms, prune false positive noise, and format High-Severity alerts for shift handoff.
 # CATEGORY: Reporting
+# OUTPUT_DIR: Data/Reports
 # ARG: --file | CSV File | Path to the raw MDE Incident or Alert CSV export | True
 
 import os

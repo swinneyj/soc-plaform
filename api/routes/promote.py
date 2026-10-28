@@ -9,9 +9,11 @@ import json
 import sys
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import require_role
 
 from api import deps
+from api.helpers.errors import raise_internal
 from api.helpers.correlation import _resolve_correlation_rule
 from api.helpers.triage_keys import _field_lookup
 from db.util import utcnow_naive
@@ -81,7 +83,7 @@ def derive_triage_confidence(disposition: str) -> float:
     return 0.8
 
 
-@router.post("/api/db/notables/{event_id}/promote", tags=["Database"])
+@router.post("/api/db/notables/{event_id}/promote", tags=["Database"], dependencies=[Depends(require_role("analyst"))])
 def promote_notable_to_triage(event_id: int):
     """Promote a pasted notable into the triage_results table."""
     try:
@@ -177,7 +179,7 @@ def promote_notable_to_triage(event_id: int):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="promote")
     finally:
         try:
             db.close()

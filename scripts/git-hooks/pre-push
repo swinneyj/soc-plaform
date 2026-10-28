@@ -1,0 +1,153 @@
+#!/usr/bin/env bash
+# Pre-push gate — TRACKED at scripts/git-hooks/pre-push.
+# Installed per clone by scripts/install-hooks (sets core.hooksPath so git
+# runs hooks straight from this tracked directory — no copies to go stale).
+# Runs the platform baseline, then the requirement pin/marker check.
+# Bypass with: git push --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+
+# Interpreter resolution (DEV-01, decided 2026-10-23) — resolves BEFORE the
+# baseline so a typo'd or missing interpreter is named here instead of
+# surfacing as a harness failure further down.
+#
+# The pin/SBOM gates must run under a REPO VENV or not at all. Bare `python3`
+# used to be the last resort, but on this Mac that is 3.9.6, so the SBOM gate
+# evaluated the marker-dead `<3.10` branch against a 3.14-shaped
+# docs/SBOM.json and failed every push (re-verified 2026-10-23:
+# `python3 scripts/check_sbom_pins.py` reports drift and exits 1, while
+# `.venv314/bin/python` passes 42 pins on the same tree). The marker gate is
+# version-agnostic — it targets `.python-version`, not the running runtime —
+# so the SBOM check is the one the interpreter choice actually decides. A
+# fallback that can only produce a false verdict is worse than no fallback — it
+# teaches people to push with --no-verify. So: no approved venv => push
+# blocked, with the install command printed. `PYTHON=` overrides, and is
+# validated (a typo must not silently disable the gates).
+REQ_PY="${PYTHON:-}"
+if [ -n "$REQ_PY" ]; then
+  if ! "$REQ_PY" -c "import sys" >/dev/null 2>&1; then
+    echo "❌ PYTHON=$REQ_PY is not a usable interpreter — push BLOCKED."
+    exit 1
+  fi
+elif [ -f scripts/check_requirement_markers.py ]; then
+  for cand in .venv314/bin/python .venv/bin/python; do
+    if [ -x "$cand" ] && "$cand" -c "import sys" >/dev/null 2>&1; then REQ_PY="$cand"; break; fi
+  done
+fi
+if [ -f scripts/check_requirement_markers.py ] && [ -z "$REQ_PY" ]; then
+  echo ""
+  echo "❌ No usable repo venv (.venv314 or .venv) — push BLOCKED."
+  echo "   The pin, SBOM and security gates must run under a repo interpreter."
+  echo "   Create one, then push again:"
+  echo "     python3 -m venv .venv314"
+  echo "     .venv314/bin/pip install -r requirements.txt -r requirements-dev.txt"
+  echo "   Or name one explicitly: PYTHON=/path/to/python git push …"
+  exit 1
+fi
+
+export PYTHON="$REQ_PY"
+
+if [ -x scripts/baseline ]; then
+  echo "── baseline pre-push check ──"
+  if ! bash scripts/baseline --verify; then
+    echo ""
+    echo "❌ Baseline drifted — push BLOCKED."
+    echo "   Investigate, or bypass with: git push --no-verify"
+    exit 1
+  fi
+else
+  echo "scripts/baseline not found — skipping (this clone may not be the dev Mac)"
+fi
+
+# Pin/marker gate: every requirement pin must support the interpreter its
+# python_version branch selects (PyPI requires_python). Stdlib-only script.
+if [ -f scripts/check_requirement_markers.py ]; then
+  echo "── requirement pin/marker check ──"
+  if ! "$REQ_PY" scripts/check_requirement_markers.py; then
+    echo ""
+    echo "❌ Requirement pin/marker mismatch — push BLOCKED."
+    echo "   Fix requirements*.txt, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
+# SBOM drift gate (mirrors the CI step): the committed docs/SBOM.json must
+# still mirror the pins this interpreter selects, plus the UI's CDN versions.
+if [ -f scripts/check_sbom_pins.py ] && [ -n "${REQ_PY:-}" ]; then
+  echo "── SBOM drift check ──"
+  if ! "$REQ_PY" scripts/check_sbom_pins.py; then
+    echo ""
+    echo "❌ docs/SBOM.json drifted from the pins — push BLOCKED."
+    echo "   Regenerate with scripts/sbom, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
+# Syntax compile gate (mirrors the CI "Syntax compile gate" step): every
+# api/services/db module must at least compile, so a merge-broken file that no
+# test imports cannot slip through a green suite. Compile only — nothing runs.
+if [ -n "${REQ_PY:-}" ] && [ -f api/main.py ]; then
+  echo "── syntax compile gate ──"
+  if ! "$REQ_PY" -m py_compile api/*.py api/helpers/*.py api/routes/*.py services/*.py db/*.py; then
+    echo ""
+    echo "❌ Syntax compile gate failed — push BLOCKED."
+    echo "   Fix the broken module, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
+# Hygiene assertions (mirrors the CI "Hygiene assertions" step).
+# These are invariant checks that must not silently drift: the test-file
+# count must be a positive integer, and delete_case_id must be absent from
+# the shipped trees (web/ tests/ api/) per playbook stage A1.3.
+if command -v bash >/dev/null 2>&1; then
+  echo "── hygiene assertions ──"
+  if ! bash -c '
+    set -euo pipefail
+    count=
+    for f in tests/test_*.py; do
+      [ -f "$f" ] && count=$((count + 1))
+    done
+    if [ -z "$count" ] || [ "$count" -lt 1 ]; then
+      echo "❌ hygiene: unexpected test-file count: ${count:-0}" >&2
+      exit 1
+    fi
+    if grep -rn --include=*.py --include=*.js --include=*.html --include=*.md --include=*.json -e "delete_case_id" web/ tests/ api/ >/dev/null 2>&1; then
+      echo "❌ hygiene: delete_case_id still referenced in shipped trees (web/ tests/ api/)" >&2
+      exit 1
+    fi
+    echo "OK: hygiene invariants held (test-file count=$count, no delete_case_id in trees)"
+  '; then
+    echo ""
+    echo "❌ Hygiene assertion failed — push BLOCKED."
+    echo "   Fix the drift, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+# Web option-key guard (mirrors the CI step): a duplicate key inside any one
+# object literal silently shadows at parse time — the C1B.3 `computed` bug
+# that emptied every case table while all checks stayed green.
+if command -v node >/dev/null 2>&1 && [ -f scripts/check_web_option_keys.mjs ]; then
+  echo "── web option-key check ──"
+  if ! node scripts/check_web_option_keys.mjs; then
+    echo ""
+    echo "❌ Duplicate object-literal key(s) — push BLOCKED."
+    echo "   Remove the shadowed key, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
+# Live security posture probe. The API is a deliberate on-demand service, so
+# the probe skips cleanly when it is down; when it is up, an ungated server
+# (anonymous 200s, exposed docs, wildcard CORS) blocks the push. This is the
+# runtime half of the gate: static checks cannot see a gate that stopped
+# enforcing.
+if [ -n "${REQ_PY:-}" ] && [ -f scripts/security_smoke.py ]; then
+  if ! "$REQ_PY" scripts/security_smoke.py; then
+    echo ""
+    echo "❌ Security posture probe failed — push BLOCKED."
+    echo "   Fix the regression, or bypass with: git push --no-verify"
+    exit 1
+  fi
+fi
+
+exit 0

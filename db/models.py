@@ -10,14 +10,30 @@ import os
 from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, String, Text, create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+from db.crypto import EncryptedText
+
 
 def get_default_postgres_url() -> str:
-    if os.path.exists("/app"):
-        return "postgresql+psycopg://soc_platform@postgres:5432/soc_platform"
-    return "postgresql+psycopg://soc_platform@localhost:5433/soc_platform"
+    """URL used when `DATABASE_URL` is unset — the same rule as the launchers.
+
+    Delegates to `db.target` so a bare process (a one-off script, a manually
+    started uvicorn, `python scripts/manage_users.py`) lands on the **local
+    primary** — 127.0.0.1:5432 — and honours `SOC_DB_TARGET`. It used to
+    hardcode the compose host port 5433, which meant tools run outside the
+    launchers quietly aimed at a port nothing was serving (or, worse, at a
+    second database). `db.target` is stdlib-only, so importing it here costs
+    nothing and cannot recurse (it deliberately does not import this module).
+
+    The container default (`/app` → host `postgres`) is handled inside
+    `db.target.local_url()`; docker-compose always sets `DATABASE_URL` itself,
+    so the exposed host port 5433 is unaffected.
+    """
+    from db.target import resolve
+
+    return resolve()[0]
 
 
-DATABASE_URL = os.environ.get("DATABASE_URL", get_default_postgres_url())
+DATABASE_URL = os.environ.get("DATABASE_URL") or get_default_postgres_url()
 
 
 def _utcnow() -> datetime:
@@ -35,13 +51,18 @@ def normalize_database_url(database_url: str) -> str:
     return database_url
 
 
-def create_database_engine(database_url: str):
+def create_database_engine(database_url: str, connect_args: dict | None = None):
     """Create a SQLAlchemy engine for the configured runtime database.
 
     The supported runtime backend is PostgreSQL. Other drivers are not
-    configured or tested here.
+    configured or tested here. `connect_args` (e.g. {"connect_timeout": 2})
+    is passed through to the DBAPI — used by the /api/health probe so it
+    fails fast instead of hanging on a dead database.
     """
-    return create_engine(normalize_database_url(database_url), pool_pre_ping=True)
+    kwargs = {"pool_pre_ping": True}
+    if connect_args:
+        kwargs["connect_args"] = connect_args
+    return create_engine(normalize_database_url(database_url), **kwargs)
 
 
 engine = create_database_engine(DATABASE_URL)
@@ -191,11 +212,15 @@ class PlaceholderAlias(Base):
 
 
 class CodeReview(Base):
-    """Code review results from Ollama LLM analysis."""
+    """Code review results from Ollama LLM analysis.
+
+    ``code_snippet`` is encrypted at rest (SEC-03, ``db.crypto``) — it is the
+    most sensitive free text this platform stores.
+    """
     __tablename__ = "code_reviews"
 
     id = Column(Integer, primary_key=True, index=True)
-    code_snippet = Column(Text)
+    code_snippet = Column(EncryptedText)
     language = Column(String, default="python")
     review_result = Column(Text)
     model_name = Column(String, default="llama3.1:latest")
@@ -243,7 +268,11 @@ class AuthSession(Base):
 
     id = Column(Integer, primary_key=True)
     token_hash = Column(String(64), unique=True, nullable=False, index=True)  # sha256 hex
-    csrf_token = Column(String(64), nullable=False)
+    # SEC-03: encrypted at rest. The ciphertext (~104 chars for a 43-char
+    # token) does not fit the old String(64); the decorator's impl is TEXT, so
+    # fresh databases are fine and existing ones need the ALTER in
+    # docs/COLUMN_ENCRYPTION.md before a key is enabled.
+    csrf_token = Column(EncryptedText, nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
     expires_at = Column(DateTime, nullable=False)

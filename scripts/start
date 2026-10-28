@@ -6,15 +6,18 @@
 #
 #   1. Ollama (local LLM server, port 11434) — launched only if not running
 #   2. Secrets preflight — BWS token + CLI present? (.env fallback per scripts/dev)
-#   3. API (uvicorn, port 8000, secrets via `bws run`) — daemonized so it
-#      survives the launching shell (double-fork/setsid pattern; plain nohup
-#      does NOT survive tool-shell teardown on this machine — see AGENTS.md)
+#   3. API (uvicorn, port 8000) — daemonized so it survives the launching shell
+#      (double-fork/setsid pattern; plain nohup does NOT survive tool-shell
+#      teardown on this machine — see AGENTS.md)
 #   4. Health verification — /api/health until 200 or fail with log tail
 #
-# Neon (the database) is cloud-side: nothing to start locally, only reach.
+# Database: LOCAL Postgres is primary and starts with the platform (the
+# Homebrew service); nothing cloud-side is required. The shared Neon project is
+# an optional mirror reached with `--shared` (docs/LOCAL_FIRST_DATABASE.md).
 #
 # Usage:
-#   scripts/start              # start everything, verify, exit (daemon stays)
+#   scripts/start              # start everything on local Postgres, verify, exit
+#   scripts/start --shared     # same, but target the shared Neon mirror
 #   scripts/start --check      # report status of every piece, start nothing
 #   scripts/start --stop       # stop the API daemon (Ollama left running)
 #   scripts/start --port 8001  # custom API port
@@ -34,12 +37,14 @@ PORT="${SOC_PORT:-8000}"
 DO_CHECK=0
 DO_STOP=0
 DO_BACKUP=0
+SHARED_REQUEST=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --check) DO_CHECK=1 ;;
         --stop)  DO_STOP=1 ;;
         --backup) DO_BACKUP=1 ;;
+        --shared) SHARED_REQUEST=1 ;;
         --port)  PORT="$2"; shift ;;
         *) echo "unknown arg: $1" >&2; exit 1 ;;
     esac
@@ -50,16 +55,33 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$ROOT"
 
+if [ -x ".venv314/bin/python" ]; then
+    PY=".venv314/bin/python"
+elif [ -x ".venv/bin/python" ]; then
+    PY=".venv/bin/python"
+else
+    PY="python3"
+fi
+
 LOG_FILE="/tmp/soc-api.log"
 API_BASE="http://127.0.0.1:${PORT}"
 API_TIMEOUT_SECS=45
 
+# Both helpers must emit EXACTLY one code. The old `curl … || echo 000` shape
+# emitted "000\n000" on a refused connection (curl prints 000 via -w *and*
+# fails, so the fallback appended a second one), which made every
+# `= "000"` comparison false — `--stop` then reported "still responding" after
+# a successful kill, and the wait loop never exited early.
 api_health() {
-    curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${API_BASE}/api/health" 2>/dev/null || echo "000"
+    local code
+    code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "${API_BASE}/api/health" 2>/dev/null)" || code="000"
+    printf '%s' "${code:-000}"
 }
 
 ollama_health() {
-    curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:11434/api/version 2>/dev/null || echo "000"
+    local code
+    code="$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 http://127.0.0.1:11434/api/version 2>/dev/null)" || code="000"
+    printf '%s' "${code:-000}"
 }
 
 report() {
@@ -72,7 +94,13 @@ if [ "$DO_STOP" -eq 1 ]; then
         # kill the whole process group of the daemonized launcher (bws + uvicorn)
         pkill -f "bws run -- .*uvicorn api.main" 2>/dev/null || true
         pkill -f "uvicorn api.main" 2>/dev/null || true
-        sleep 1
+        # Wait for the port to actually close. A fixed 1s sleep raced the
+        # process teardown (witnessed Oct 23: "✗ API still responding" then a
+        # restart that could not bind), so poll instead of guessing.
+        for _ in $(seq 1 20); do
+            [ "$(api_health)" = "000" ] && break
+            sleep 0.5
+        done
     fi
     [ "$(api_health)" = "000" ] && echo "✓ API stopped." || echo "✗ API still responding on :${PORT}" >&2
     exit 0
@@ -88,7 +116,13 @@ if [ "$DO_CHECK" -eq 1 ]; then
         source .env
         set +a
     fi
-    # Keychain fallback (read-only retrieval) so the database line is accurate.
+    # Database target: local Postgres is primary; --shared opts into Neon mirror.
+    TARGET="${SOC_DB_TARGET:-local}"
+    [ "$SHARED_REQUEST" -eq 1 ] && TARGET="shared"
+    # shellcheck source=scripts/lib/db_target.sh
+    . "$SCRIPT_DIR/lib/db_target.sh"
+    resolve_db_target "$TARGET"
+    # Keychain fallback (read-only retrieval) so the API_KEY line is accurate.
     if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
         eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
     fi
@@ -96,19 +130,26 @@ if [ "$DO_CHECK" -eq 1 ]; then
     [ "$OH" = "200" ] && report "ollama" "running (:11434)" || report "ollama" "not running"
     if [ ! -f ".env" ]; then
         report "secrets" "✗ no .env found — run scripts/pull-secrets after BWS setup"
-    elif [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
+    elif [ "$TARGET" = "shared" ] && [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
         report "secrets" "BWS mode (token + cli present)"
+    elif [ "$TARGET" = "shared" ]; then
+        report "secrets" "env/keychain only (.env values, no BWS injection)"
     else
-        report "secrets" "env-only mode (.env values, no BWS injection)"
+        report "secrets" "keychain/env (local target — BWS deliberately unused)"
     fi
-    if [ -n "${DATABASE_URL:-}" ]; then
-        case "$DATABASE_URL" in
-            *neon.tech*) report "database" "Neon (cloud) — nothing to start locally" ;;
-            *localhost*) report "database" "local Postgres — expected on :5432/:5433" ;;
-            *)           report "database" "custom target" ;;
-        esac
+    # Read-only: pg_isready only — --check must never start a service.
+    if [ "$TARGET" = "local" ] && command -v pg_isready >/dev/null 2>&1; then
+        PG_DSN="$(printf '%s' "$DATABASE_URL" | sed -E 's#^(postgres(ql)?)(\+[^:]+)?:#\1:#')"
+        if pg_isready -q -d "$PG_DSN"; then
+            report "postgres" "local server accepting connections"
+        else
+            report "postgres" "✗ service down — 'scripts/start' starts it (brew services start postgresql@16)"
+        fi
+    fi
+    if DB_PING="$("$PY" -m db.target --ping 2>&1)"; then
+        report "database" "$DB_SUMMARY ✓ ($DB_PING)"
     else
-        report "database" "⚠ no DATABASE_URL — API will run degraded (health-only)"
+        report "database" "$DB_SUMMARY ✗ ($DB_PING)"
     fi
     [ "$(api_health)" = "200" ] && report "api" "running (:${PORT})" || report "api" "not running"
     echo "──────────────────────────────────────────────────────"
@@ -161,13 +202,25 @@ set -a
 # shellcheck disable=SC1090
 source .env
 set +a
+# Database target resolution (same helper as scripts/dev): local Postgres is
+# primary, `--shared` opts into the Neon mirror. Runs before keychain injection
+# so `inject` only supplies API_KEY in local mode.
+TARGET="${SOC_DB_TARGET:-local}"
+[ "$SHARED_REQUEST" -eq 1 ] && TARGET="shared"
+# shellcheck source=scripts/lib/db_target.sh
+. "$SCRIPT_DIR/lib/db_target.sh"
+resolve_db_target "$TARGET"
+
 # Keychain fallback: fill unset credential keys (DATABASE_URL, API_KEY) from
-# the macOS Keychain (scripts/secrets-keychain). Explicit env values win;
-# BWS-injected values still win over everything at launch time.
+# the macOS Keychain (scripts/secrets-keychain). DATABASE_URL is already set for
+# the chosen target, so this supplies API_KEY and leaves the target alone.
 if [ -x "$SCRIPT_DIR/secrets-keychain" ]; then
     eval "$("$SCRIPT_DIR/secrets-keychain" inject 2>/dev/null || true)"
 fi
-if [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
+
+# `bws run` injects every vault secret as env, which would override the local
+# DATABASE_URL — so BWS is only used for the shared target.
+if [ "$TARGET" = "shared" ] && [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$HOME/.local/bin/bws" ]; }; then
     report "secrets" "BWS mode (token + cli present)"
     BWS_BIN="$(command -v bws || echo "$HOME/.local/bin/bws")"
     if ! "$BWS_BIN" project list >/dev/null 2>&1; then
@@ -175,20 +228,52 @@ if [ -n "${BWS_ACCESS_TOKEN:-}" ] && { command -v bws >/dev/null 2>&1 || [ -x "$
         exit 1
     fi
 else
-    report "secrets" "env-only mode (.env values, no BWS injection)"
+    if [ "$TARGET" = "shared" ]; then
+        report "secrets" "env/keychain only (.env values, no BWS injection)"
+    else
+        report "secrets" "keychain/env (local target — BWS deliberately unused)"
+    fi
     BWS_BIN=""
 fi
 
-# NOTE: BWS-injected values win at launch time (bws run), so this local
-# DATABASE_URL read is only a status hint — the launcher's copy is what matters.
-if [ -n "${DATABASE_URL:-}" ]; then
-    case "$DATABASE_URL" in
-        *neon.tech*) report "database" "Neon (cloud) — nothing to start locally" ;;
-        *localhost*) report "database" "local Postgres — expected on :5432/:5433" ;;
-        *)           report "database" "custom target" ;;
-    esac
+# ── 2.5 Local Postgres: wake the primary if the service is stopped ──────
+# Local is the primary database, so "one-command start" should not fail just
+# because the Homebrew service was stopped at reboot. Idempotent (pg_isready
+# first) and non-fatal on failure: the DB ping below names the real problem.
+if [ "$TARGET" = "local" ]; then
+    PG_DSN="$(printf '%s' "$DATABASE_URL" | sed -E 's#^(postgres(ql)?)(\+[^:]+)?:#\1:#')"
+    if ! command -v pg_isready >/dev/null 2>&1; then
+        report "postgres" "pg_isready unavailable (client tools not on PATH) — relying on the DB ping"
+    elif pg_isready -q -d "$PG_DSN"; then
+        report "postgres" "local server accepting connections"
+    elif command -v brew >/dev/null 2>&1; then
+        report "postgres" "not accepting connections — starting postgresql@16…"
+        # `brew services start` reports exit 5 on this machine even when the
+        # server comes up (stale postmaster.pid / launchd quirk — AGENTS.md).
+        # Trust pg_isready and the log, never the exit code.
+        brew services start postgresql@16 >/dev/null 2>&1 || true
+        for _ in $(seq 1 10); do
+            sleep 1
+            pg_isready -q -d "$PG_DSN" && break
+        done
+        if pg_isready -q -d "$PG_DSN"; then
+            report "postgres" "started"
+        else
+            report "postgres" "✗ still not accepting connections (see tail /opt/homebrew/var/log/postgresql@16.log)"
+            echo "    stale postmaster.pid? Follow the quirk procedure in AGENTS.md —" >&2
+            echo "    confirm no postgres process exists before deleting the lock." >&2
+        fi
+    else
+        report "postgres" "✗ not accepting connections (no brew to start it)"
+    fi
+fi
+
+if DB_PING="$("$PY" -m db.target --ping 2>&1)"; then
+    report "database" "$DB_SUMMARY ✓ ($DB_PING)"
 else
-    report "database" "⚠ no DATABASE_URL — API will run degraded (health-only)"
+    report "database" "$DB_SUMMARY ✗ ($DB_PING)"
+    echo "  local target: start Postgres (brew services start postgresql@16) or set LOCAL_DATABASE_URL." >&2
+    exit 1
 fi
 
 # ── 3. API (idempotent: skip if already healthy) ────────────────────────
@@ -226,8 +311,11 @@ fi
 
 # ── 3.5 Ops maintenance — Phase 5 without a scheduler ───────────────────
 # Every platform start brings the ops pass with it (or --backup forces one):
-#   • backup_db.sh — gzipped pg_dump into local-backups/, skipped when the
-#     newest dump is < 20h old so restart-heavy days don't multiply dumps.
+#   • backup_db.sh — gzipped pg_dump of whatever DATABASE_URL points at, into
+#     local-backups/; skipped when the newest dump is < 20h old so restart-heavy
+#     days don't multiply dumps. In --shared mode that dump is the mirror, not
+#     the primary: run `scripts/start --backup` on the local target to protect
+#     the primary.
 #   • retention — dry-run report only; apply-time pruning stays manual
 #     (RETENTION_APPLY=1 .venv314/bin/python scripts/prune_analysis_results.py --apply).
 # Non-fatal by design: a failed backup must never take the platform down.
@@ -251,8 +339,14 @@ if [ "$DO_STOP" -eq 0 ]; then
               || report "backup" "✗ failed (see /tmp/soc-backup.log)"
         fi
     fi
+    # Local mode has no bws binary by design, so run the report directly —
+    # otherwise the local-first default would silently drop the ops pass.
     if [ -n "${BWS_BIN:-}" ]; then
         "$BWS_BIN" run -- "$MAINT_PY" scripts/prune_analysis_results.py > /tmp/soc-retention.log 2>&1 \
+          && report "retention" "dry-run report (/tmp/soc-retention.log)" \
+          || report "retention" "✗ report failed (see /tmp/soc-retention.log)"
+    else
+        "$MAINT_PY" scripts/prune_analysis_results.py > /tmp/soc-retention.log 2>&1 \
           && report "retention" "dry-run report (/tmp/soc-retention.log)" \
           || report "retention" "✗ report failed (see /tmp/soc-retention.log)"
     fi

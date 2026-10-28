@@ -3,7 +3,10 @@
 The boundary (\"the latch\") is the single doorway for Splunk data — see the
 banner above the routes. search-one runs one supportive query end-to-end and
 ledgers the outcome as `splunk_auto` evidence, with per-case inflight
-de-duplication and a hard timeout.
+de-duplication and a hard timeout. The tail of the file adds read-only
+search-backend introspection (`/api/splunk/search-status`,
+`/api/splunk/saved-searches`) so backend readiness and live saved searches are
+inspectable without executing a query.
 """
 import concurrent.futures
 import json
@@ -19,6 +22,8 @@ from typing import Any, Dict, List
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from api import deps
+from api.helpers.errors import raise_internal
+from api.helpers import admission
 from services import splunk_boundary
 
 from api.auth import require_api_key, require_role
@@ -47,7 +52,7 @@ router = APIRouter()
 # ---------------------------------------------------------------------------
 
 
-@router.get("/api/splunk-boundary/status", tags=["System"])
+@router.get("/api/splunk-boundary/status", tags=["System"], dependencies=[Depends(require_role("analyst"))])
 def get_splunk_boundary_status():
     """Inspect the latch: mode, staging, and admitted batches."""
     return splunk_boundary.status()
@@ -57,14 +62,16 @@ def get_splunk_boundary_status():
              dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def admit_splunk_file(file: UploadFile = File(...)):
     """Admit a Splunk export through the boundary (validate -> quarantine -> ingest)."""
-    if splunk_boundary.current_mode() == "quarantined":
-        raise HTTPException(
-            status_code=403,
-            detail=(
-                "Splunk boundary is quarantined: HTTP admission is disabled. "
-                "Use host-local ingest tooling, or set SPLUNK_BOUNDARY_MODE=restricted."
-            ),
-        )
+    rejection = admission.latch_rejection(
+        splunk_boundary.current_mode(),
+        permitted_modes=("restricted", "open"),
+        refusal_detail=(
+            "Splunk boundary is quarantined: HTTP admission is disabled. "
+            "Use host-local ingest tooling, or set SPLUNK_BOUNDARY_MODE=restricted."
+        ),
+    )
+    if rejection is not None:
+        raise rejection
     import tempfile
 
     suffix = Path(file.filename or "upload").suffix.lower()
@@ -101,7 +108,7 @@ _SEARCH_ONE_INFLIGHT: set = set()
 _SEARCH_ONE_INFLIGHT_LOCK = threading.Lock()
 
 
-@router.post("/api/splunk/search-one", tags=["Splunk"], dependencies=[Depends(require_api_key)])
+@router.post("/api/splunk/search-one", tags=["Splunk"], dependencies=[Depends(require_api_key), Depends(require_role("analyst"))])
 def splunk_search_one(payload: SplunkSearchOnePayload):
     """Run one supportive query end-to-end and ledger the outcome as `splunk_auto` evidence."""
     from services.search_backend import get_search_backend, map_search_outcome, summarize_search_rows
@@ -114,12 +121,18 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
         raise HTTPException(status_code=400, detail="case_id and query_title are required")
 
     # Per-case concurrency cap: one running search per case.
+    # 409 (not 429): the conflict is with work on THIS case,
+    # so retrying another case is fine but re-issuing this
+    # one is not — that distinction lives in the helper.
     with _SEARCH_ONE_INFLIGHT_LOCK:
-        if case_id in _SEARCH_ONE_INFLIGHT:
-            raise HTTPException(
-                status_code=409,
-                detail="A search is already running for this case (per-case concurrency cap is 1)",
-            )
+        rejection = admission.concurrency_rejection(
+            case_id in _SEARCH_ONE_INFLIGHT,
+            label="search",
+            resource="case",
+            cap=1,
+        )
+        if rejection is not None:
+            raise rejection
         _SEARCH_ONE_INFLIGHT.add(case_id)
 
     db = None
@@ -306,7 +319,7 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
     except Exception as e:
         if db is not None:
             db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise_internal(e, context="splunk")
     finally:
         with _SEARCH_ONE_INFLIGHT_LOCK:
             _SEARCH_ONE_INFLIGHT.discard(case_id)
@@ -315,5 +328,115 @@ def splunk_search_one(payload: SplunkSearchOnePayload):
                 db.close()
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Read-only search-backend introspection (E.3)
+#
+# The backend choice is configuration (`SEARCH_BACKEND`), and misconfiguration
+# used to be discoverable only by running a real query. These two endpoints
+# make the posture inspectable without executing anything: `status` reports
+# which backend is active, whether it is ready, and the SPL subset the mock
+# accepts; `saved-searches` lists the live instance's visible saved searches
+# (a convenience for picking an existing SPL). Both are read-only, both sit
+# behind the API-key dependency, and neither ever echoes a credential value.
+# ---------------------------------------------------------------------------
+
+_SEARCH_SUBSET = (
+    "base free-text and key=value terms",
+    "| search k=v",
+    "| where k OP v (==, =, !=, >, <, >=, <=)",
+    "| stats count by field",
+    "| head N",
+)
+
+
+def _search_backend_choice() -> str:
+    return (os.environ.get("SEARCH_BACKEND", "mock") or "mock").strip().lower()
+
+
+@router.get("/api/splunk/search-status",
+    tags=["Splunk"],
+    dependencies=[Depends(require_api_key), Depends(require_role("analyst"))],
+)
+def splunk_search_status():
+    """Describe the active search backend: readiness, scope, never the secret."""
+    from services.search_backend import tls_settings
+
+    chosen = _search_backend_choice()
+    url_configured = bool((os.environ.get("SPLUNK_URL") or "").strip())
+    token_configured = bool((os.environ.get("SPLUNK_TOKEN") or "").strip())
+    # TLS posture is part of readiness: a CA bundle pointing at a missing file
+    # is a configuration error the rehearsal would otherwise hit mid-search.
+    tls = tls_settings()
+    if chosen == "mock":
+        ready, problem = True, ""
+    elif chosen == "splunk":
+        ready = url_configured and token_configured and not tls["problem"]
+        if url_configured and token_configured and tls["problem"]:
+            problem = tls["problem"]
+        elif ready:
+            problem = ""
+        else:
+            problem = "SEARCH_BACKEND=splunk requires SPLUNK_URL and SPLUNK_TOKEN"
+    else:
+        ready = False
+        problem = f"Unknown SEARCH_BACKEND '{chosen}' (expected 'mock' or 'splunk')"
+    return {
+        "backend": chosen,
+        "ready": ready,
+        "problem": problem,
+        "read_only": True,
+        # Booleans only — never the URL or token themselves.
+        "credentials": {
+            "splunk_url_configured": url_configured,
+            "splunk_token_configured": token_configured,
+        },
+        # Booleans only. `verify` is always true (a disable request is
+        # refused, surfaced via `problem`); `ca_bundle_configured` means
+        # trust is widened for this connection via SPLUNK_CA_BUNDLE.
+        "tls": {
+            "verify": tls["verify"],
+            "verification_disabled": tls["verification_disabled"],
+            "ca_bundle_configured": tls["ca_bundle_configured"],
+            "ca_bundle_readable": tls["ca_bundle_readable"],
+            # Expiry pre-flight: an expired bundle makes ready false (the
+            # handshake already fails), a near-expiry one warns without
+            # blocking. Both surface here before a query is attempted.
+            "ca_bundle_certificates": tls["ca_bundle_certificates"],
+            "ca_bundle_expires_at": tls["ca_bundle_expires_at"],
+            "ca_bundle_days_remaining": tls["ca_bundle_days_remaining"],
+            "ca_bundle_expired": tls["ca_bundle_expired"],
+            "ca_bundle_warning": tls["ca_bundle_warning"],
+        },
+        "timeout_seconds": _SEARCH_ONE_TIMEOUT_SECONDS,
+        "supported_spl_subset": list(_SEARCH_SUBSET),
+        "scope": "Search jobs only — no notables, no writes, no configuration endpoints.",
+    }
+
+
+@router.get("/api/splunk/saved-searches",
+    tags=["Splunk"],
+    dependencies=[Depends(require_api_key), Depends(require_role("analyst"))],
+)
+def splunk_saved_searches():
+    """List visible saved searches on the live Splunk instance (read-only)."""
+    from services.search_backend import SplunkSearchError, get_search_backend
+
+    chosen = _search_backend_choice()
+    if chosen != "splunk":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Live saved-search listing needs SEARCH_BACKEND=splunk plus "
+                f"SPLUNK_URL/SPLUNK_TOKEN (active backend: '{chosen}')."
+            ),
+        )
+    try:
+        backend = get_search_backend()
+        items = backend.list_saved_searches()
+    except SplunkSearchError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"success": True, "count": len(items), "items": items}
 
 

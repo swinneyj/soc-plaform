@@ -31,16 +31,60 @@ Three services:
 
 1. **api-service** (default): FastAPI on `0.0.0.0:8000`
    - Auto-reload on code changes
-   - Redis backend for async job queuing
    - Volume-mounted data directories
 
 2. **postgres**: Default runtime database backend
-  - Exposed on configurable host port (default `5433`)
-  - Intended for repo-managed local runtime use
+  - Image: `postgres:16-alpine` (compose default).
+  - Exposed on configurable host port (default `5433`).
+  - Intended for repo-managed local runtime use.
+  - **Version skew warning:** this compose image is PostgreSQL 16, but the live
+    system-of-record database (Neon) runs PostgreSQL 18. That matters when you
+    restore a prod dump locally: `pg_dump` must be at least the server's major
+    version, so a 16-era client will refuse a 18 dump. The backup doc
+    (`docs/BACKUP_AND_RESTORE.md`) covers the `pg_dump` version requirement and
+    the `libpq`/matching-`postgresql@N` fix. If you restore a Neon dump into the
+    compose 16 container, expect a version-mismatch failure, not a silent success.
 
-3. **redis**: Job queue and state management
-   - Alpine-based, minimal footprint
-   - Persisted data volume
+### Cross-Platform Runtime Scripts
+
+In addition to the Docker Compose path, the repo ships native startup/backup scripts
+written once in PowerShell Core (`#!/usr/bin/env pwsh`) so they run on the same
+code base on Windows, macOS, and Linux without separate per-platform copies.
+
+The bash originals are still present for macOS-only environments; the pwsh versions
+are the cross-platform equivalents.
+
+| Task | Bash (macOS-native) | PowerShell Core (cross-platform) |
+|------|---------------------|----------------------------------|
+| Start the API after Postgres is up | `scripts/start_soc_api.sh` | `scripts/start_soc_api.ps1` |
+| Daily pg_dump backup + gzip + retention | `scripts/backup_db.sh` | `scripts/backup_db.ps1` |
+
+Key differences from the bash originals:
+
+- **No hardcoded Homebrew paths.** `start_soc_api.ps1` probes `ollama` on `PATH`
+  and then checks common install locations across Windows, Homebrew-on-Intel,
+  Homebrew-on-Apple-Silicon, and the macOS app bundle. `backup_db.ps1` finds
+  `gzip` the same way and falls back to system `/usr/bin/gzip` on Linux.
+- **Port probing uses .NET `TcpClient`** instead of `nc -z`, so it works wherever
+  PowerShell Core runs.
+- **`.env` loading** is shared logic between the two scripts (same repo-root-first
+  fallback as the bash originals).
+- **Uvicorn runs as a foreground child process** rather than `exec` — functionally
+  equivalent for interactive use; only the process-tree shape under a Windows
+  service manager differs from the bash `exec` version.
+- **Backup delegates to `scripts/export_postgres_dump.ps1`**, which already handles
+  driver-suffix stripping and the Docker fallback, then adds gzip + retention on top.
+
+Limitations (same as the bash originals, carried forward):
+
+- PostgreSQL must be listening on `127.0.0.1:5432` (the scripts do not start it).
+- A working venv Python must be present for uvicorn.
+- `backup_db.ps1` needs `pg_dump` (or Docker + a running `postgres` service) and
+  `gzip` on PATH.
+- Temp files for the backup pipeline land in `$env:TEMP` (`TEMP` on Windows,
+  `/tmp` on Unix) and are cleaned up on success and in `finally` on error. A
+  `kill -9` between gzip and move can leave a partial `.sql.gz.tmp` — same window
+  as the bash version.
 
 ### Core Libraries (Enhanced)
 
@@ -253,6 +297,48 @@ spec:
           claimName: soc-playbooks
 ```
 
+### Kubernetes + log-forwarding sidecar (task 4) — `k8s/soc-api-deployment.yaml`
+
+The strict task-4 artifact lives in the repo as an apply-able manifest: the
+FastAPI container plus a **Fluent Bit sidecar** sharing an **emptyDir**
+(`/var/log/soc`). The app writes its `soc.audit` JSON stream to
+`AUDIT_LOG_FILE=/var/log/soc/audit.json` (dual sink: stdout + file), the
+sidecar tails that file and forwards each event **over HTTPS**
+(`tls On`, `tls.verify On`) with an **`Authorization: Bearer …`** header
+to an external webhook (`SOC_LOG_WEBHOOK_HOST/PORT/URI`), with the token
+from a Secret.
+
+```bash
+# secrets (never committed — see the manifest header):
+kubectl create secret generic soc-api-secrets \
+  --from-literal=api-key='…' --from-literal=database-url='…'
+kubectl create secret generic soc-log-forwarder \
+  --from-literal=bearer-token='…'
+# then point SOC_LOG_WEBHOOK_* at your collector and apply:
+kubectl apply --dry-run=server -f k8s/soc-api-deployment.yaml
+```
+
+**Verified (2026-10-21, no cluster on the dev Mac):** kubeconform `-strict`
+2/2 resources valid; the Fluent Bit config was executed with real
+fluent-bit 5.1.5 — parses, `${VAR}` expansion, tails the app's JSON file,
+and delivered payload + bearer header end-to-end to a local HTTPS sink
+(diagnostic run; the artifact's `tls.verify On` demonstrably refuses an
+untrusted CA — correct posture for a real webhook). Pinned by
+`tests/test_k8s_manifest.py`.
+
+**Verified live on a cluster (2026-10-23):** `scripts/task4_cluster_verify.py`
+stands up a local kind cluster (podman provider), applies the manifest and
+proves the whole path end-to-end: rollout green behind the readiness probe;
+the app wrote the `AUDIT_LOG_FILE` the sidecar tails; an ungated mutation
+produced the `401 auth_rejected` security event; Fluent Bit delivered it
+over **HTTPS with `tls.verify On`** (private CA injected at render time
+only — the checked-in manifest keeps no custom CA) to an **external
+host-side sink outside the cluster**; the sink saw the `Authorization:
+Bearer` value matching the Secret and the payload intact. **Still not
+verified:** delivery to a webhook presenting a publicly-trusted CA (the
+cluster runs used a private-CA sink) and `kubectl apply --dry-run=server`
+against the production admission chain.
+
 ---
 
 ## Improvements Over CLI-Only
@@ -285,7 +371,7 @@ PYTHONUNBUFFERED=1                        # Real-time logs
 ## Stopping Services
 
 ```bash
-# Stop API and Redis
+# Stop API
 docker compose --profile api down
 
 # Stop and remove volumes
@@ -311,20 +397,13 @@ docker exec soc-api-service python -c "from api.main import app; print('Import O
 ```bash
 docker compose ps -a          # Check volume mounts
 docker volume ls              # List all volumes
-docker volume inspect soc_platform_release_20260812_0943_redis-data
+docker volume inspect soc_platform_release_20260812_0943_postgres-data
 ```
 
 ### Tool execution failing?
 
 ```bash
 docker exec soc-api-service python Tools/base64_decoder/base64_decoder.py --target "test=="
-```
-
-### Redis connection issues?
-
-```bash
-docker exec soc-redis redis-cli ping
-docker logs soc-redis
 ```
 
 ---
@@ -334,7 +413,6 @@ docker logs soc-redis
 1. **Webhook Integration**: Trigger tool execution from SOAR platforms (Splunk, Demisto, etc.)
 2. **Authentication**: Add JWT or API key support
 3. **Rate Limiting**: Protect against abuse
-4. **Async Queue**: Use Celery or Bull for distributed job processing
 5. **Metrics**: Export Prometheus metrics for monitoring
 6. **CLI Client**: Python CLI tool to interact with API from terminal
 7. **Front-End**: React/Vue dashboard for job submission and report viewing
@@ -344,12 +422,14 @@ docker logs soc-redis
 ## Files Modified/Created
 
 - ✅ **Dockerfile** — Multi-stage, ~216MB final image
-- ✅ **docker-compose.yml** — API + Redis + CLI services
+- ✅ **docker-compose.yml** — API + CLI services
 - ✅ **requirements.txt** — Python dependencies
 - ✅ **.dockerignore** — Exclude unnecessary files
 - ✅ **Tools/core_lib/utils.py** — Enhanced for containerization
 - ✅ **api/main.py** — Full FastAPI service (600+ lines)
 - ✅ **api/__init__.py** — Package initialization
+- ✅ **scripts/start_soc_api.ps1** — Cross-platform API starter (PowerShell Core)
+- ✅ **scripts/backup_db.ps1** — Cross-platform daily backup (PowerShell Core)
 
 ---
 

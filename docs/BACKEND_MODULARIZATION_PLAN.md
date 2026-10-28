@@ -1,7 +1,8 @@
 # Backend Modularization Plan — api/main.py
 
 **Date:** 2026-09-11  
-**Status:** complete (Sept 29–30, 2026) — Pieces A–D all landed: 11 routers in api/routes/, api/schemas.py + api/helpers/ in place, api/main.py is a thin app shell, REPO_MAP.md points at the new layout.  
+**Status:** ✅ COMPLETE (Sept 29–30, 2026) — Pieces A–D all landed: 11 routers in api/routes/, api/schemas.py + api/helpers/ in place, api/main.py is a thin app shell, REPO_MAP.md points at the new layout. This is a *historical plan doc*; the layout it describes is the current layout.  
+**Second pass (E.5, Oct 23, 2026):** the HTTP middleware stack (request-id, API-key/session gate, CORS, canonical-path rewriter, body cap, rate limiter) moved to `api/middleware.py`, and UI serving (SOC_CONFIG-injecting index route + static mount) to `api/routes/ui.py`. `api/main.py` is now ~207 lines of app shell. Both modules are re-exported through `api.main`, so callers and tests are unchanged — with one documented exception: the middleware's *scalar* config (`RATE_LIMIT_PER_MIN`, `MAX_BODY_BYTES`) must be patched on `api.middleware`, since rebinding a re-exported int does not reach the running middleware.  
 **Progress (Sept 29):** split COMPLETE — every endpoint cluster lives in `api/routes/*` (`system`, `promote`, `analyze`, `evidence`, `closure`, `notables`, `triage`, `splunk`, `rules`, `tools`, `code_review`); shared payload models are centralized in `api/schemas.py` (the Piece-A duplicate is now the live single source of truth); pure helpers live in `api/helpers/*` (triage_keys, phase2, evidence, correlation — the `helpers/` split of the transient `api/flow_support.py`); the auth seam is `api/auth.py`; the naive-UTC clock is `db/util.py`. `api/main.py` is a thin app shell (6,410 → ~255; grows again only with middleware). Dead `api/db_routes.py` retired to `scripts/attic/db_routes.py`; three dead flow helpers (`_load_data_source_catalog`, `_format_catalog_for_prompt`, the `_looks_like_spl_query` wrapper) deleted.  
 **Goal:** Same treatment as `docs/FRONTEND_MODULARIZATION.md` — take a 5314-line monolith and split it into domain-owned files without downtime. Additive first, then cutover.
 
@@ -90,11 +91,11 @@ Total ~59 route handlers → 7 files, ~300-600 lines each.
 | Each `api/routes/*.py` | 300-600 |
 | `api/routes/analysis.py` | ~800-1000 (still largest; okay — evidence + analyze live together) |
 
-## Fast checks to add with this plan (no runtime needed)
+## Fast checks (all added — no runtime needed)
 
-- `scripts/check_no_merge_markers.ps1` / `.sh` — `grep -R "<<<<<<<"` fails CI if any marker remains.
-- `docker compose config` — validates compose after API reshuffle.
-- `python -m py_compile api/main.py api/routes/*.py api/helpers/*.py` — syntax gate (runs once CLT/Python lands).
+- `scripts/check_no_merge_markers.ps1` / `.sh` — `grep -R "<<<<<<<"` fails CI if any marker remains. ✅ live
+- `docker compose config` — validates compose after API reshuffle. (Manual; the file is untouched by the splits.)
+- **Syntax compile gate** — ✅ added in E.5: `python -m py_compile api/*.py api/helpers/*.py api/routes/*.py services/*.py db/*.py` runs as a CI step ("Syntax compile gate") **and** in the tracked pre-push hook, so a merge-broken module that no test imports cannot pass a green suite.
 
 ## Related
 

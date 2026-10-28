@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOC Platform (Modular)</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js"></script>
+    <script src="https://cdn.tailwindcss.com/3.4.17" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js" integrity="sha384-VekiXfVDZuqx75T/YaGfn7/p6+e+D0f/G8UoZ5GBOCMZ89kMW4wTo8PSn6GSzOEl" crossorigin="anonymous"></script>
     <style>
         [v-cloak] { display: none; }
         .fade-enter-active, .fade-leave-active { transition: opacity 0.3s; }
@@ -53,12 +53,14 @@
             <!-- Database -->
             <database-tab
                 v-if="currentTab === 'database'"
+                :is-admin="isAdmin"
                 :db-stats="dbStats"
                 :operations-stats="operationsStats"
                 :notable-paste-text="notablePasteText"
                 :notable-paste-segment-estimate="notablePasteSegmentEstimate"
                 :notable-redaction-enabled="notableRedactionEnabled"
                 :notable-historical="notableHistorical"
+                :notable-auto-promote="notableAutoPromote"
                 :notable-paste-saving="notablePasteSaving"
                 :notable-paste-result="notablePasteResult"
                 :show-open-notables-only="showOpenNotablesOnly"
@@ -86,6 +88,7 @@
                 @update:notable-paste-text="notablePasteText = $event"
                 @update:notable-redaction-enabled="notableRedactionEnabled = $event"
                 @update:notable-historical="notableHistorical = $event"
+                @update:notable-auto-promote="notableAutoPromote = $event"
                 @save-pasted-notable="savePastedNotable"
                 @load-historical-notables="loadHistoricalNotables"
                 @update:historical-notables-visible="historicalNotablesVisible = $event"
@@ -120,6 +123,7 @@
             <analysis-tab
                 v-if="currentTab === 'analysis'"
                 ref="analysisTabRef"
+                :is-admin="isAdmin"
                 :ollama-health="ollamaHealth"
                 :analysis-case-search="analysisCaseSearch"
                 :analysis-case-id="analysisCaseId"
@@ -184,6 +188,7 @@
                 @on-analysis-case-changed="onAnalysisCaseChanged"
                 @run-analysis="runAnalysis"
                 @run-phase2-analysis="runPhase2Analysis"
+                @start-next-follow-up="startNextFollowUpPhase"
                 @cancel-analysis="cancelAnalysis"
                 @save-analysis-state="saveAnalysisState"
                 @copy-analysis-result="copyAnalysisResult"
@@ -330,11 +335,13 @@
     </div>
 
     <!-- Vue -->
-    <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.5.43/dist/vue.global.js" integrity="sha384-3fGr3FIdIO2AhcaRn/kxgkleHx8iIpLpre5rOjhEUGsoNBcYOlt5mPX0lEA/4qGC" crossorigin="anonymous"></script>
 
     <!-- utils (pure helpers) -->
     <script src="utils/keys.js?v=9"></script>
     <script src="utils/auth.js?v=2"></script>
+    <!-- local-only role switcher: renders only when /api/auth/session says dev_login -->
+    <script src="utils/dev_login.js?v=1"></script>
     <script src="utils/queryRender.js?v=9"></script>
     <script src="utils/selection.js?v=9"></script>
     <script src="utils/pocSummary.js?v=9"></script>
@@ -343,7 +350,7 @@
 
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=13"></script>
-    <script src="modules/database.js?v=20"></script>
+    <script src="modules/database.js?v=21"></script>
     <script src="modules/analysis.js?v=20"></script>
     <script src="modules/tools.js?v=12"></script>
     <script src="modules/closure.js?v=10"></script>
@@ -354,14 +361,14 @@
     <script src="components/LoginModal.js?v=1"></script>
     <script src="components/SplunkBoundaryWidget.js?v=2"></script>
     <script src="components/ToolsTab.js?v=12"></script>
-    <script src="components/DatabaseTab.js?v=28"></script>
+    <script src="components/DatabaseTab.js?v=30"></script>
     <script src="components/AnalysisTab.js?v=20"></script>
     <script src="components/ClosureTab.js?v=10"></script>
-    <script src="components/JobsTab.js?v=16"></script>
+    <script src="components/JobsTab.js?v=17"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=21"></script>
+    <script src="app.modular.js?v=25"></script>
 </body>
 </html>

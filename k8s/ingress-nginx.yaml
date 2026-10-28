@@ -1,0 +1,56 @@
+# k8s/ingress-nginx.yaml — K8S-03: NGINX Ingress (TLS) for frontend + soc-api.
+#
+# Routes TLS to the frontend Service and the soc-api Service. The critical
+# security control is the header strip: clients must never assert
+# X-Auth-Request-User / X-SSL-Client-S-DN directly — only the trusted proxy
+# (auth_request / oauth2-proxy in front of this Ingress) may stamp them.
+# The configuration-snippet below drops inbound copies unconditionally, then
+# the proxy re-adds the verified identity upstream. Trusted proxy CIDRs are
+# enforced at the network layer (see netpol-api-ingress.yaml); this snippet
+# is defense-in-depth at L7.
+#
+# TLS: expects Secret `soc-tls` (create out of band). Hosts are placeholders —
+# set your real host before applying.
+#
+# Verification: structural tests in tests/test_k8s_security.py;
+# kubeconform -strict 2026-10-26: VALID (this file's 1 resource).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: soc-ingress
+  labels:
+    app: soc-api
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    # Strip any client-supplied identity headers before proxying. The trusted
+    # auth proxy re-stamps them after verifying the user (SEC-01/01B).
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header X-Auth-Request-User "";
+      proxy_set_header X-SSL-Client-S-DN "";
+      # Only the auth_request proxy may re-add these; direct client values
+      # never survive past this hop.
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - soc.example.com
+      secretName: soc-tls
+  rules:
+    - host: soc.example.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-api
+                port:
+                  number: 8000
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: soc-frontend
+                port:
+                  number: 80
