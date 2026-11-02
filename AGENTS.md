@@ -23,7 +23,7 @@ Then read: `docs/BACKLOG.md` (the single live prioritized list), `SETUP.md` (net
 ## Who's who
 
 - **Dalton Lewis** — this Mac's owner. Tailnet identity `malgrath@gmail.com`. GitHub pushes to `dev-dalton`. `[V]` (witnessed: pushes, tailnet status, shell whoami)
-- **Jay** (file-share partner, `jayswin143@gmail.com`, Mac `justins-macbook-pro`) — likely the same person as **Justin Swinney** (`swinneyj`, repo owner, coworker: Splunk/Vercel/BWS admin). `[A]` — evidence: same first-name register ("Jay"/Justin), shares-with-me arrived the same week as his repo pushes, macOS + Mac workflow familiarity. **Confirm with one sentence to either party, then rewrite this line as `[V]`.** If they are *different people*, the secrets/git protocols need re-review (a third party may be implied).
+- **Jay = Justin Swinney — one person, not two.** Jay is the short name; same human as **Justin Swinney** (`swinneyj`, repo owner, coworker: Splunk/Vercel/BWS admin). Jay's details: file-share partner, `jayswin143@gmail.com`, Mac `justins-macbook-pro`. `[V]` — confirmed by Justin directly, 2026-11-02 ("Jay and Justin Swinney are the same person"), which settles the earlier `[A]`. Supporting evidence, now moot: same first-name register, shares-with-me arrived the same week as his repo pushes, macOS + Mac workflow familiarity. **No third party is implied, so the secrets/git protocols need no re-review on identity grounds** — the previous caveat ("if they are different people…") is retired.
 - Communication: casual chat is fine; credentials are not (see protocols). `[V]`
 
 ## Machine quirks — Dalton's MacBook (macOS 26) — hard-won, do not re-learn
