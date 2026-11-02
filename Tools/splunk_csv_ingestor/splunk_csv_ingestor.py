@@ -2,6 +2,7 @@
 # TOOL_NAME: splunk_csv_ingestor
 # DESC: Parses Splunk CSV exports and loads events into the active database backend.
 # CATEGORY: Uncategorized
+# REQUIRES_DB: true
 """
 Splunk CSV Ingestion Tool
 Parses Splunk exports (CSV) and loads events into the active database backend.

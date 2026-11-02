@@ -64,6 +64,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      tools-worker:
+        condition: service_healthy
     environment:
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required}
       API_KEY: ${API_KEY:?API_KEY is required}
@@ -74,10 +76,14 @@ services:
       SESSION_SECURE: ${SESSION_SECURE:-1}
       SOC_PORT: "8000"
       OLLAMA_URL: http://llm:11434
+      TOOLS_WORKER_URL: http://tools-worker:8001
+      TOOLS_WORKER_HMAC_SECRET: ${TOOLS_WORKER_HMAC_SECRET:?TOOLS_WORKER_HMAC_SECRET is required}
+      TOOLS_WORKER_HMAC_SECRET_SECONDARY: ${TOOLS_WORKER_HMAC_SECRET_SECONDARY:-}
     ports:
       - "8000:8000"
     volumes:
       - soc-data:/app/Data
+      - soc-reports:/app/Reports
       - soc-backups:/app/local-backups
     networks:
       - frontend
@@ -90,6 +96,31 @@ services:
       retries: 3
       start_period: 15s
 
+  # Tools worker: same image, no secrets (no DATABASE_URL/API_KEY/field
+  # key). Shares the Data volume so tool artifacts persist; the api
+  # enforces auth before proxying here over the internal backend net.
+  tools-worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      SOC_PLATFORM_ROOT: /app
+      LOG_LEVEL: INFO
+      COMMANDER_BOOT: "1"
+      TOOLS_WORKER_HMAC_SECRET: ${TOOLS_WORKER_HMAC_SECRET:?TOOLS_WORKER_HMAC_SECRET is required}
+      TOOLS_WORKER_HMAC_SECRET_SECONDARY: ${TOOLS_WORKER_HMAC_SECRET_SECONDARY:-}
+    volumes:
+      - soc-data:/app/Data
+      - soc-reports:/app/Reports
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    command: ["python", "-m", "uvicorn", "tools_worker.app:app", "--host", "0.0.0.0", "--port", "8001"]
+
 networks:
   frontend:
   backend:
@@ -100,4 +131,5 @@ networks:
 volumes:
   pgdata:
   soc-data:
+  soc-reports:
   soc-backups:

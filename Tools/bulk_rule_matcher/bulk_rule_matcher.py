@@ -2,6 +2,7 @@
 # TOOL_NAME: bulk_rule_matcher
 # DESC: Matches triage cases to enabled ES correlation rules by exact or fuzzy rule name.
 # CATEGORY: Uncategorized
+# REQUIRES_DB: true
 """
 Bulk Rule Matcher
 Matches triage cases to ES correlation rules by rule_name.

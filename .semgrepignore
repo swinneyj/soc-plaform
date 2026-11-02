@@ -3,3 +3,6 @@
 # which also excludes it) — its old UI copies and one-off scripts must not
 # fail the security gate for the live tree.
 scripts/attic/
+# Vendored Tailwind Play CDN (byte-identical, SRI-verified): third-party
+# bundle, not project code. Scanners assess our code, not this artifact.
+web/vendor/

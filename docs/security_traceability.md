@@ -101,8 +101,8 @@ Verification status at generation: **606 passed** (`pytest tests/
 - Proof: structural green + kubeconform valid.
 
 ### MED-04 Session security, hashing, CSRF
-- Implementation: `api/auth.py:116` (scrypt-N16384 / PBKDF2-600k,
-  salted, memory-hard — stdlib equivalent of bcrypt/argon2, documented
+- Implementation: `api/auth.py:116` (PBKDF2-HMAC-SHA256 600k,
+  salted — FIPS-approved, documented
   in docstring); `api/routes/auth.py:117` (`httponly`, `samesite=lax`,
   `secure` behind HTTPS); `api/auth.py:438` (double-submit
   `X-CSRF-Token`); login throttle in `api/routes/auth.py`.

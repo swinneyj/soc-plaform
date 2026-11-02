@@ -4,7 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SOC Platform (Modular)</title>
-    <script src="https://cdn.tailwindcss.com/3.4.17" integrity="sha384-igm5BeiBt36UU4gqwWS7imYmelpTsZlQ45FZf+XBn9MuJbn4nQr7yx1yFydocC/K" crossorigin="anonymous"></script>
+    <!-- Vendored: cdn.tailwindcss.com sends no ACAO header, so the SRI+crossorigin combo above made browsers block it and killed all Tailwind styling (black-and-white page). This local copy is byte-identical (sha384 verified at vendor time), so no third-party fetch and no styling regression. -->
+    <script src="vendor/tailwind-3.4.17.js?v=1"></script>
     <script src="https://cdn.jsdelivr.net/npm/axios@1.6.0/dist/axios.min.js" integrity="sha384-VekiXfVDZuqx75T/YaGfn7/p6+e+D0f/G8UoZ5GBOCMZ89kMW4wTo8PSn6GSzOEl" crossorigin="anonymous"></script>
     <style>
         [v-cloak] { display: none; }
@@ -186,9 +187,13 @@
                 @update:follow-up-phase="followUpPhase = $event"
                 @update:show-phase1-analysis="showPhase1Analysis = $event"
                 @on-analysis-case-changed="onAnalysisCaseChanged"
+                :auto-follow-up-running="autoFollowUpRunning"
+                :auto-follow-up-message="autoFollowUpMessage"
                 @run-analysis="runAnalysis"
                 @run-phase2-analysis="runPhase2Analysis"
                 @start-next-follow-up="startNextFollowUpPhase"
+                @auto-follow-up-start="startAutoFollowUp"
+                @auto-follow-up-stop="stopAutoFollowUp"
                 @cancel-analysis="cancelAnalysis"
                 @save-analysis-state="saveAnalysisState"
                 @copy-analysis-result="copyAnalysisResult"
@@ -351,7 +356,7 @@
     <!-- modules (API + domain) -->
     <script src="modules/api.js?v=13"></script>
     <script src="modules/database.js?v=21"></script>
-    <script src="modules/analysis.js?v=20"></script>
+    <script src="modules/analysis.js?v=21"></script>
     <script src="modules/tools.js?v=12"></script>
     <script src="modules/closure.js?v=10"></script>
     <script src="modules/codeReview.js?v=10"></script>
@@ -362,13 +367,13 @@
     <script src="components/SplunkBoundaryWidget.js?v=2"></script>
     <script src="components/ToolsTab.js?v=12"></script>
     <script src="components/DatabaseTab.js?v=30"></script>
-    <script src="components/AnalysisTab.js?v=20"></script>
+    <script src="components/AnalysisTab.js?v=21"></script>
     <script src="components/ClosureTab.js?v=10"></script>
     <script src="components/JobsTab.js?v=17"></script>
     <script src="components/ReportsTab.js?v=9"></script>
     <script src="components/CodeReviewTab.js?v=9"></script>
 
     <!-- root app (full logic from live, with component registration) -->
-    <script src="app.modular.js?v=25"></script>
+    <script src="app.modular.js?v=26"></script>
 </body>
 </html>

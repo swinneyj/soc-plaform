@@ -161,17 +161,16 @@ def test_health_stays_open_when_gated(client, with_api_key):
 
 
 # ---------------------------------------------------------------------------
-# C1B.1 — scrypt password hashing (SESSION_AUTH_PLAN.md Piece A)
+# C1B.1 — PBKDF2 password hashing (SESSION_AUTH_PLAN.md Piece A)
 # ---------------------------------------------------------------------------
 
-def test_scrypt_roundtrip():
+def test_pbkdf2_roundtrip():
     encoded = api_auth.hash_password("correct horse battery staple")
-    # scrypt is preferred; runtimes without OpenSSL scrypt fall back to pbkdf2.
-    assert encoded.startswith(("scrypt$", "pbkdf2$"))
+    assert encoded.startswith("pbkdf2$")
     assert api_auth.verify_password("correct horse battery staple", encoded)
 
 
-def test_scrypt_wrong_password_fails():
+def test_pbkdf2_wrong_password_fails():
     encoded = api_auth.hash_password("hunter2")
     assert not api_auth.verify_password("hunter3", encoded)
     assert not api_auth.verify_password("", encoded)
@@ -186,8 +185,7 @@ def test_password_never_stored_plaintext():
 
 
 def test_pbkdf2_scheme_verify_path():
-    """Exercise the pbkdf2 branch directly so both schemes verify on every
-    runtime (C1B.1 fallback — some Python 3.9 builds lack hashlib.scrypt)."""
+    """Exercise the pbkdf2 encoding directly with a fixed salt vector."""
     import hashlib as _hashlib
 
     salt = bytes.fromhex("ab" * 16)
@@ -1036,7 +1034,7 @@ def test_missing_user_login_runs_full_kdf(session_client, monkeypatch):
     # Verified against the dummy hash — same KDF, same parameters
     # as a real hash, so a missing user costs a real user's time.
     assert verify_calls[0] == auth_route._dummy_password_hash()
-    assert verify_calls[0].startswith(("scrypt$", "pbkdf2$"))
+    assert verify_calls[0].startswith("pbkdf2$")
 
 
 def test_inactive_user_login_verifies_dummy_hash(session_client, monkeypatch):

@@ -451,7 +451,8 @@
         "ext": ".py",
         "path": "Tools/workspace_cleaner/workspace_cleaner.py",
         "category": "System Utilities",
-        "description": "Organizes legacy tools into archives, consolidates paperwork, and safely removes empty directories."
+        "description": "Organizes legacy tools into archives, consolidates paperwork, and safely removes empty directories.",
+        "requires_approval": true
     },
     {
         "name": "bulk_rule_matcher",
@@ -459,7 +460,8 @@
         "ext": ".py",
         "path": "Tools/bulk_rule_matcher/bulk_rule_matcher.py",
         "category": "Uncategorized",
-        "description": "Matches triage cases to enabled ES correlation rules by exact or fuzzy rule name."
+        "description": "Matches triage cases to enabled ES correlation rules by exact or fuzzy rule name.",
+        "requires_db": true
     },
     {
         "name": "closure_notes_generator",
@@ -475,7 +477,9 @@
         "ext": ".py",
         "path": "Tools/es_rules_importer/es_rules_importer.py",
         "category": "Uncategorized",
-        "description": "Imports and lists Splunk ES correlation rules and supportive queries."
+        "description": "Imports and lists Splunk ES correlation rules and supportive queries.",
+        "requires_db": true,
+        "requires_approval": true
     },
     {
         "name": "filecheck",
@@ -491,7 +495,8 @@
         "ext": ".py",
         "path": "Tools/splunk_csv_ingestor/splunk_csv_ingestor.py",
         "category": "Uncategorized",
-        "description": "Parses Splunk CSV exports and loads events into the active database backend."
+        "description": "Parses Splunk CSV exports and loads events into the active database backend.",
+        "requires_db": true
     },
     {
         "name": "splunk_folder_watcher",

@@ -4,9 +4,8 @@
 **Status:** ✅ BUILT Sept 30, 2026 — C1B.1–C1B.4 landed behind `AUTH_MODE` (Phase C1
 deliverable of `docs/EXECUTION_PLAYBOOK.md`; build commits `30eae76`, `4d4134e`,
 `c795bdb`, + C1B.4). Flag-off behavior is byte-identical (full suite green with the
-flag unset); the `AUTH_MODE=session` matrix is green; zero new dependencies — the
-scrypt KDF falls back to stdlib PBKDF2-SHA256 on runtimes whose Python build lacks
-OpenSSL scrypt (verify dispatches on the stored scheme prefix). This is a *historical
+flag unset); the `AUTH_MODE=session` matrix is green; zero new dependencies —
+password hashing is PBKDF2-HMAC-SHA256 (stdlib). This is a *historical
 plan doc*; the auth seam it describes is the current seam.
 **Activated locally 2026-10-21:** `AUTH_MODE=session` now lives in `.env` (picked up
 by `scripts/dev`/`scripts/start`); accounts were provisioned with
@@ -220,8 +219,8 @@ class AuthSession(Base):
 for every `created_at`; add `Boolean` and `ForeignKey` to its `from sqlalchemy import …`
 line. `db/util.py:utcnow_naive` is the api-side clock used by `session_expiry` below.)
 
-**Password hashing — stdlib `hashlib.scrypt` only** (no new deps): `n=2**14, r=8, p=1`,
-16-byte random salt, `dklen=32`, encoded as `scrypt$n$r$p$salthex$hashhex`. Helpers
+**Password hashing — PBKDF2-HMAC-SHA256 only** (no new deps, FIPS-approved): 600k
+iterations, 16-byte random salt, `dklen=32`, encoded as `pbkdf2$iterations$salthex$hashhex`. Helpers
 `hash_password(pw)` / `verify_password(pw, encoded)` live in `api/auth.py` (keeps the seam
 single) and compare with `hmac.compare_digest`.
 
@@ -234,7 +233,7 @@ by name so automation never puts a secret in argv or shell history).
 
 ## 5. Step plan (Pieces — additive-first, same as the modularization plans)
 
-**Piece A — Models + user CLI (S).** `User` + `AuthSession` in `db/models.py`; scrypt
+**Piece A — Models + user CLI (S).** `User` + `AuthSession` in `db/models.py`; PBKDF2
 helpers in `api/auth.py`; `scripts/manage_users.py`. No behavior change anywhere (flag is
 off; tables inert). Verify: create a user on the dev DB via the CLI, `list` shows it.
 
@@ -298,7 +297,7 @@ literally in `docs/API_ENDPOINTS.md`; full suite green on 3.14 **and** 3.9 with 
 off; `AUTH_MODE=session` matrix green; all UI harness scenarios still green (23 at C1B
 time — the count grows to 24 when the playbook's C3.3 lands).
 
-**Fast checks (no runtime needed):** deterministic scrypt verify unit test (fixed salt
+**Fast checks (no runtime needed):** deterministic PBKDF2 verify unit test (fixed salt
 vector); `bash scripts/check_undefined_names.sh`; `node --check` on touched web files.
 
 ---

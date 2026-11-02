@@ -15,7 +15,7 @@ keeps working exactly as before.
 
 | Column | Reason |
 |---|---|
-| `users.password_hash` | Already one-way (scrypt, PBKDF2 fallback) **and** `UNIQUE`. Encrypting it breaks equality lookup on login and buys nothing an attacker with the key could not also read. |
+| `users.password_hash` | Already one-way (PBKDF2) **and** `UNIQUE`. Encrypting it breaks equality lookup on login and buys nothing an attacker with the key could not also read. |
 | `auth_sessions.token_hash` | Already SHA-256, `UNIQUE`, looked up by value on every request. |
 | `splunk_events.host`, `.source`, `.timestamp`, status/severity columns | Filtered, sorted and grouped in SQL. Ciphertext cannot be indexed or `LIKE`-matched; encrypting them would mean decrypting the whole table in Python per query. |
 | `investigation_states.payload`, `closure_notes.*` | Contain case evidence, but are also read/merged by `services/` code that compares structure. Left plaintext by decision (2026-10-23) to keep the blast radius of this change small; revisit if the threat model changes. |

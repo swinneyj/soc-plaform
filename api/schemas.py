@@ -31,6 +31,8 @@ class ToolRequest(BaseModel):
     tool_name: str = Field(..., description="Name of the tool to execute")
     arguments: Optional[Dict[str, str]] = Field(default={}, description="Tool CLI arguments")
     silent: bool = Field(default=False, description="Suppress stdout output")
+    requires_approval: bool = Field(default=False, description="Caller declares this run needs human approval")
+    approved: bool = Field(default=False, description="Human approval granted for this run")
 
 
 class JobResponse(BaseModel):
@@ -53,6 +55,8 @@ class ToolInfo(BaseModel):
     description: str
     path: str
     arguments: Optional[List[Dict[str, Any]]] = None
+    requires_approval: bool = False
+    requires_db: bool = False
 
 
 # ---------------------------------------------------------------------------

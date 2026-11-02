@@ -10,17 +10,53 @@ from typing import Optional, Dict, Any
 import os
 
 OLLAMA_BASE_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL', 'llama3.1:latest')
 OLLAMA_API_KEY = os.environ.get('OLLAMA_API_KEY', '').strip()
 
-# Preference order used when auto-resolving an installed model tag. The
-# historical default 'llama3.1:8b' is kept in the list so explicit legacy
-# requests still resolve to something runnable instead of erroring.
-MODEL_PREFERENCES = [
+# Model names live in config/models.json (not hardcoded):
+#   {"default_model": "llama3.1:latest",
+#    "preferences": ["llama3.1:latest", "llama3.1:8b", "llama3.1"]}
+# OLLAMA_MODEL env still overrides the configured default at runtime.
+_FALLBACK_DEFAULT_MODEL = 'llama3.1:latest'
+_FALLBACK_PREFERENCES = [
     'llama3.1:latest',
     'llama3.1:8b',
     'llama3.1',
 ]
+
+
+def _config_path() -> str:
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(os.path.dirname(here), 'config', 'models.json')
+
+
+def _load_model_config(path: Optional[str] = None) -> Dict[str, Any]:
+    cfg_path = path or _config_path()
+    try:
+        with open(cfg_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        default = str(data.get('default_model') or _FALLBACK_DEFAULT_MODEL).strip()
+        prefs = data.get('preferences') or []
+        prefs = [str(p).strip() for p in prefs if str(p or '').strip()]
+        return {
+            'default_model': default or _FALLBACK_DEFAULT_MODEL,
+            'preferences': prefs or list(_FALLBACK_PREFERENCES),
+            'path': cfg_path,
+        }
+    except (OSError, ValueError):
+        return {
+            'default_model': _FALLBACK_DEFAULT_MODEL,
+            'preferences': list(_FALLBACK_PREFERENCES),
+            'path': cfg_path,
+        }
+
+
+_MODEL_CONFIG = _load_model_config()
+DEFAULT_MODEL = os.environ.get('OLLAMA_MODEL') or _MODEL_CONFIG['default_model']
+
+# Preference order used when auto-resolving an installed model tag. The
+# historical default 'llama3.1:8b' is kept in the list so explicit legacy
+# requests still resolve to something runnable instead of erroring.
+MODEL_PREFERENCES = list(_MODEL_CONFIG['preferences'])
 
 # Allow the request timeout to be tuned via environment while failing clearly
 # instead of leaving an analyst workflow spinning indefinitely.

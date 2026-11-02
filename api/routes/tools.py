@@ -23,6 +23,7 @@ from api.helpers import admission
 
 from api.auth import require_api_key, require_role
 from api.schemas import JobResponse, JobStatus, ToolInfo, ToolRequest
+from api import tools_proxy
 from db.util import utcnow_naive
 
 logger = logging.getLogger("soc.api")
@@ -158,6 +159,73 @@ def _unfinished_job_count() -> int:
         logger.warning("[tool_runs] Admission could not count persisted jobs: %s", exc)
     return count
 
+def reconcile_orphaned_tool_runs() -> int:
+    """Mark persisted RUNNING tool runs as failed on API startup.
+
+    The worker keeps jobs in memory only, and the API's own background
+    tasks die with the process — so any ToolRun row still RUNNING when
+    the app boots is orphaned: no thread or worker will ever complete
+    it. Polling it forever (or counting it against the admission cap
+    indefinitely) is worse than failing it with a clear note. PENDING
+    rows are left alone: they may still be legitimately queued behind
+    the background-task handoff rather than abandoned mid-run.
+    Best-effort by design: a DB outage must never block startup.
+    Returns the number of rows marked failed.
+    """
+    try:
+        from db.models import SessionLocal, ToolRun
+        db = SessionLocal()
+        try:
+            normalized_status = func.lower(
+                func.trim(func.replace(ToolRun.status, "JobStatus.", ""))
+            )
+            rows = db.query(ToolRun).filter(
+                normalized_status == JobStatus.RUNNING.value
+            ).all()
+            count = 0
+            for row in rows:
+                row.status = JobStatus.FAILED.value
+                note = "API restarted; orphaned RUNNING job marked interrupted on startup."
+                row.stderr = ((row.stderr or "") + ("\n" if row.stderr else "") + note)
+                if row.exit_code is None:
+                    row.exit_code = -1
+                if row.completed_at is None:
+                    row.completed_at = utcnow_naive()
+                count += 1
+            if count:
+                db.commit()
+            return count
+        finally:
+            db.close()
+    except Exception as exc:
+        logger.warning("[tool_runs] Startup reconciliation skipped: %s", exc)
+        return 0
+
+
+# Mirrors tools_worker/app.py: tools that import db.models / splunk_boundary
+# must run in-process on the main backend where DATABASE_URL lives.
+# Registry entries can set requires_db via `# REQUIRES_DB:`; this fallback
+# covers the known tools until they are reindexed.
+DB_TOOLS = frozenset({
+    "bulk_rule_matcher",
+    "es_rules_importer",
+    "splunk_csv_ingestor",
+})
+
+
+def _tool_requires_db(tool_name: str) -> bool:
+    try:
+        wanted = str(tool_name).strip().lower()
+        for entry in load_registry():
+            if str(entry.get("name", "")).strip().lower() == wanted:
+                if bool(entry.get("requires_db", False)):
+                    return True
+                return wanted in DB_TOOLS
+    except Exception:
+        pass
+    return str(tool_name).strip().lower() in DB_TOOLS
+
+
 def load_registry() -> List[Dict]:
     """Load tool registry from JSON."""
     registry_path = os.path.join(deps.get_platform_root(), 'Commander_Registry.json')
@@ -225,22 +293,87 @@ def _resolve_output_dirs(declared: List[str], root: str) -> List[str]:
     """Resolve declared output locations, refusing escapes from the root.
 
     Relative declarations join the platform root; absolutes are honored
-    only when already inside it. Containment is checked on realpath (so
-    symlinks cannot smuggle the snapshot outside) — the same
-    traversal-stance as the reports/artifact endpoints (#15). Declared
-    lists that resolve to nothing fall back to the legacy sweep at the
-    caller.
+    only when already inside it. Containment is checked on the resolved
+    path with Path.is_relative_to (so symlinks cannot smuggle the
+    snapshot outside) — the same traversal-stance as the
+    reports/artifact endpoints (#15). Declared lists that resolve to
+    nothing fall back to the legacy sweep at the caller.
     """
-    real_root = os.path.realpath(root)
+    real_root = Path(root).resolve()
     resolved = []
     for declared_dir in declared:
         candidate = (
-            declared_dir if os.path.isabs(declared_dir) else os.path.join(root, declared_dir)
+            Path(declared_dir) if os.path.isabs(declared_dir) else Path(root) / declared_dir
         )
-        real = os.path.realpath(candidate)
-        if real == real_root or real.startswith(real_root + os.sep):
-            resolved.append(candidate)
+        try:
+            real = candidate.resolve()
+        except OSError:
+            continue
+        if real == real_root or real.is_relative_to(real_root):
+            resolved.append(str(candidate))
     return resolved
+
+
+def _allowed_artifact_roots() -> List[Path]:
+    """Resolved directories worker artifacts may live in.
+
+    The platform Reports directory is the canonical artifact root;
+    the four legacy Data trees stay allowed so older tools keep
+    working. Every entry is resolved so symlink escapes are seen
+    through before any is_relative_to check.
+    """
+    root = Path(deps.get_platform_root()).resolve()
+    return [(root / Path(*parts)).resolve() for parts in _LEGACY_ARTIFACT_DIRS]
+
+
+def _sanitize_worker_artifacts(artifacts: Any) -> List[str]:
+    """Revalidate artifact paths returned by the tools worker.
+
+    The worker shares the Reports/Data volumes, so its `artifacts` list
+    is only a claim about what it wrote — a compromised or buggy worker
+    must not be able to plant `../../etc/passwd`-style entries that the
+    main backend then persists in ToolRun rows or serves for download.
+    Each entry is resolved against the platform root and kept only when
+    the resolved path stays inside the Reports directory (or one of the
+    legacy allowed artifact roots) via Path.is_relative_to(). Anything
+    else — absolute escapes, `..` climbs, non-string entries,
+    unresolvable paths — is dropped. Returns normalized
+    repo-relative posix paths.
+    """
+    if not artifacts or not isinstance(artifacts, list):
+        return []
+    try:
+        root = Path(deps.get_platform_root()).resolve()
+        allowed_roots = _allowed_artifact_roots()
+    except Exception:
+        return []
+    clean: List[str] = []
+    for entry in artifacts:
+        if not isinstance(entry, str) or not entry.strip():
+            continue
+        # Normalize Windows separators; absolute entries are resolved
+        # directly, relative ones against the platform root.
+        normalized = entry.replace("\\", "/").strip()
+        candidate_path = Path(normalized)
+        candidate = (
+            candidate_path if candidate_path.is_absolute()
+            else (root / normalized)
+        )
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            continue
+        if not any(
+            resolved == allowed or resolved.is_relative_to(allowed)
+            for allowed in allowed_roots
+        ):
+            logger.warning("[tool_runs] Dropped worker artifact outside artifact roots: %r", entry)
+            continue
+        try:
+            clean.append(resolved.relative_to(root).as_posix())
+        except ValueError:
+            continue
+    return clean
 
 
 def _tool_artifact_snapshot(tool_name: Optional[str] = None) -> set:
@@ -399,6 +532,8 @@ def _persist_tool_run(job: Dict[str, Any]) -> None:
            dependencies=[Depends(require_role("analyst"))])
 def list_tools():
     """List all available tools with metadata."""
+    if tools_proxy.is_enabled():
+        return [ToolInfo(**t) for t in tools_proxy.list_tools()]
     registry = load_registry()
     return [
         ToolInfo(
@@ -407,7 +542,10 @@ def list_tools():
             category=t.get("category", "Uncategorized"),
             description=t.get("description", "No description"),
             path=_fix_tool_path(t["path"]),
-            arguments=t.get("arguments", [])
+            arguments=t.get("arguments", []),
+            requires_approval=bool(t.get("requires_approval", False)),
+            requires_db=bool(t.get("requires_db", False))
+            or str(t.get("name", "")).strip().lower() in DB_TOOLS,
         )
         for t in registry
     ]
@@ -416,6 +554,8 @@ def list_tools():
            dependencies=[Depends(require_role("analyst"))])
 def get_tool(tool_name: str):
     """Get metadata for a specific tool."""
+    if tools_proxy.is_enabled():
+        return ToolInfo(**tools_proxy.get_tool(tool_name))
     registry = load_registry()
     tool = next((t for t in registry if t["name"].lower() == tool_name.lower()), None)
     if not tool:
@@ -426,7 +566,10 @@ def get_tool(tool_name: str):
         category=tool.get("category", "Uncategorized"),
         description=tool.get("description", "No description"),
         path=_fix_tool_path(tool["path"]),
-        arguments=tool.get("arguments", [])
+        arguments=tool.get("arguments", []),
+        requires_approval=bool(tool.get("requires_approval", False)),
+        requires_db=bool(tool.get("requires_db", False))
+        or str(tool.get("name", "")).strip().lower() in DB_TOOLS,
     )
 
 @router.post("/api/tools/regression", tags=["Tools"],
@@ -460,6 +603,36 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
     )
     if rejection is not None:
         raise rejection
+    if request.requires_approval and not request.approved:
+        raise HTTPException(status_code=403, detail="Tool requires approval before running")
+    # DB-touching tools run in-process where DATABASE_URL lives — never
+    # in the secret-free worker. The worker also rejects them with 409 as
+    # a backstop; a 409 here falls through to the local path below.
+    use_worker = tools_proxy.is_enabled() and not _tool_requires_db(request.tool_name)
+    if use_worker:
+        try:
+            worker_job = tools_proxy.execute_tool(
+                request.tool_name,
+                request.arguments or {},
+                request.silent,
+                request.requires_approval,
+                request.approved,
+            )
+        except HTTPException as exc:
+            if exc.status_code != 409 or "database" not in str(exc.detail).lower():
+                raise
+            use_worker = False
+        else:
+            # Mirror the worker job locally so /api/jobs + the ToolRun trail
+            # keep working when execution lives in the worker container.
+            # Revalidate the worker's artifact claims before persisting:
+            # only paths resolving inside the Reports/artifact roots
+            # survive (Path.is_relative_to containment).
+            worker_job = dict(worker_job)
+            worker_job["artifacts"] = _sanitize_worker_artifacts(worker_job.get("artifacts"))
+            jobs[worker_job["job_id"]] = dict(worker_job)
+            _persist_tool_run(jobs[worker_job["job_id"]])
+            return JobResponse(**worker_job)
     registry = load_registry()
     tool = next((t for t in registry if t["name"].lower() == request.tool_name.lower()), None)
     if not tool:
@@ -495,6 +668,43 @@ def execute_tool(request: ToolRequest, background_tasks: BackgroundTasks):
 @router.get("/api/jobs/{job_id}", response_model=JobResponse, tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def get_job_status(job_id: str):
     """Retrieve job status and results."""
+    if tools_proxy.is_enabled() and job_id not in jobs:
+        try:
+            worker_job = tools_proxy.get_job(job_id)
+            worker_job = dict(worker_job)
+            worker_job["artifacts"] = _sanitize_worker_artifacts(worker_job.get("artifacts"))
+            jobs[job_id] = dict(worker_job)
+            return JobResponse(**worker_job)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+    if tools_proxy.is_enabled() and job_id in jobs:
+        # Refresh from the worker so polling sees running -> completed.
+        try:
+            worker_job = tools_proxy.get_job(job_id)
+            worker_job = dict(worker_job)
+            worker_job["artifacts"] = _sanitize_worker_artifacts(worker_job.get("artifacts"))
+            jobs[job_id].update(worker_job)
+            return JobResponse(**jobs[job_id])
+        except HTTPException as exc:
+            # Worker restarted and lost its in-memory job: fail the local
+            # mirror instead of polling a stale pending forever.
+            if exc.status_code == 404 and jobs[job_id].get("status") in (
+                JobStatus.PENDING.value,
+                JobStatus.RUNNING.value,
+            ):
+                jobs[job_id].update({
+                    "status": JobStatus.FAILED.value,
+                    "stderr": (
+                        (jobs[job_id].get("stderr") or "")
+                        + ("\n" if jobs[job_id].get("stderr") else "")
+                        + "Tools worker restarted and lost this job; marked interrupted."
+                    ),
+                    "exit_code": -1,
+                    "completed_at": utcnow_naive().isoformat(),
+                })
+                _persist_tool_run(jobs[job_id])
+                return JobResponse(**jobs[job_id])
     if job_id not in jobs:
         try:
             from db.models import SessionLocal, ToolRun
@@ -524,6 +734,16 @@ def get_job_status(job_id: str):
 @router.get("/api/jobs", response_model=List[JobResponse], tags=["Execution"], dependencies=[Depends(require_role("analyst"))])
 def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by job status")):
     """List all jobs, optionally filtered by status."""
+    if tools_proxy.is_enabled():
+        try:
+            for _raw_job in tools_proxy.list_jobs():
+                _worker_job = dict(_raw_job)
+                _worker_job["artifacts"] = _sanitize_worker_artifacts(_worker_job.get("artifacts"))
+                jobs.setdefault(_worker_job["job_id"], dict(_worker_job))
+                if _worker_job["job_id"] in jobs:
+                    jobs[_worker_job["job_id"]].update(_worker_job)
+        except HTTPException:
+            pass
     job_list = list(jobs.values())
     for job in job_list:
         job["status"] = _job_status_value(job.get("status"))
@@ -576,6 +796,11 @@ def list_jobs(status: Optional[JobStatus] = Query(None, description="Filter by j
                dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def delete_job(job_id: str):
     """Delete one job from memory and the persisted tool-run history."""
+    if tools_proxy.is_enabled():
+        try:
+            tools_proxy.delete_job(job_id)
+        except HTTPException:
+            pass
     deleted_job_ids.add(job_id)
     jobs.pop(job_id, None)
     try:
@@ -594,6 +819,11 @@ def delete_job(job_id: str):
                dependencies=[Depends(require_api_key), Depends(require_role("admin"))])
 def clear_jobs():
     """Clear all in-memory and persisted tool-run history."""
+    if tools_proxy.is_enabled():
+        try:
+            tools_proxy.clear_jobs()
+        except HTTPException:
+            pass
     deleted_job_ids.update(jobs.keys())
     jobs.clear()
     try:
@@ -634,7 +864,7 @@ def download_report(report_name: str):
     """
     reports_root = Path(deps.get_reports_dir()).resolve()
     candidate = (reports_root / report_name).resolve()
-    if candidate != reports_root and reports_root not in candidate.parents:
+    if candidate != reports_root and not candidate.is_relative_to(reports_root):
         raise HTTPException(status_code=404, detail=f"Report '{report_name}' not found")
     if not candidate.is_file():
         raise HTTPException(status_code=404, detail=f"Report '{report_name}' not found")
@@ -656,7 +886,7 @@ def download_tool_artifact(artifact_path: str):
         (root / "Data" / "Active_Workspace").resolve(),
         (root / "Data" / "Exports").resolve(),
     ]
-    if not any(allowed == candidate or allowed in candidate.parents for allowed in allowed_roots):
+    if not any(allowed == candidate or candidate.is_relative_to(allowed) for allowed in allowed_roots):
         raise HTTPException(status_code=404, detail="Tool artifact not found")
     if not candidate.is_file():
         raise HTTPException(status_code=404, detail="Tool artifact not found")
@@ -670,6 +900,8 @@ def get_registry():
 @router.post("/api/registry/reload", tags=["System"], dependencies=[Depends(require_role("admin"))])
 def reload_registry():
     """Force a registry rebuild (runs tool_indexer)."""
+    if tools_proxy.is_enabled():
+        return tools_proxy.reload_registry()
     indexer_path = os.path.join(deps.get_platform_root(), 'Tools', 'tool_indexer', 'tool_indexer.py')
     if not os.path.exists(indexer_path):
         raise HTTPException(status_code=400, detail="Tool indexer not found")

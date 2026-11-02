@@ -9,7 +9,7 @@ Scope — approved by the owner 2026-10-23:
 
 Deliberately **not** encrypted, with reasons:
 
-* ``users.password_hash`` — already one-way (scrypt/PBKDF2) and ``UNIQUE``;
+* ``users.password_hash`` — already one-way (PBKDF2) and ``UNIQUE``;
   encrypting it would break equality lookups and add nothing.
 * ``auth_sessions.token_hash`` — already SHA-256, ``UNIQUE``, indexed by lookup.
 * Every ``String``/``Text`` column that is filtered or sorted (``host``,

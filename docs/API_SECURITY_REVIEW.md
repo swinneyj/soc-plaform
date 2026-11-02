@@ -29,7 +29,7 @@ boundaries, and three accepted risks, each with its rationale recorded.
 
 - **No shell injection in tool execution**: `subprocess.run([...], shell=False)` with argv lists; `tool_path` is resolved from the server-side registry (`Commander_Registry.json`), not client input (`api/routes/tools.py:86-107, 249-265`).
 - **Parameterized DB access**: all API routes use SQLAlchemy ORM `.query().filter(...)`; the only f-string SQL lives in maintenance scripts with internal table names (`scripts/migrate_sqlite_to_postgres.py`, `scripts/attic/`).
-- **Credential hygiene**: scrypt/PBKDF2-600k hashing with `hmac.compare_digest`; session tokens stored as sha256; CSRF double-submit compared with `compare_digest` (`api/auth.py:108-130, 206`).
+- **Credential hygiene**: PBKDF2-HMAC-SHA256 (600k) hashing with `hmac.compare_digest`; session tokens stored as sha256; CSRF double-submit compared with `compare_digest` (`api/auth.py:108-130, 206`).
 - **Caps and timeouts**: paste 5 MB, job queue 100 (in-memory **and** persisted count), analyze 300 s wall clock, search-one per-case inflight 1 + 60 s, tool exec 300 s.
 - **Boundary**: Splunk latch defaults to `quarantined`; report/artifact downloads resolve + containment-check paths.
 - **CORS** explicit origins, `allow_credentials=False`; `/docs` + `/openapi.json` gated behind `ENABLE_DOCS=1`.
@@ -70,7 +70,7 @@ path is header-only now. Tests: `tests/test_api_key_gate.py::test_execute_reject
 
 ### F5 — ✅ RESOLVED (2026-10-05, re-verified 2026-10-23): login had no brute-force protection and a username-enumeration timing side channel
 
-`api/routes/auth.py:55-58`: `if not user or not user.is_active or not auth.verify_password(...)` short-circuits when the user doesn't exist, so a **valid username costs a full scrypt/PBKDF2 run and an invalid one returns in microseconds** — reliable username enumeration by timing. `/api/auth/login` is exempt from the gate (necessarily) and has no rate limit or lockout; the rate limiter (`api/main.py:225-235`) covers only 5 Ollama-backed POST paths.
+`api/routes/auth.py:55-58`: `if not user or not user.is_active or not auth.verify_password(...)` short-circuits when the user doesn't exist, so a **valid username costs a full PBKDF2 run and an invalid one returns in microseconds** — reliable username enumeration by timing. `/api/auth/login` is exempt from the gate (necessarily) and has no rate limit or lockout; the rate limiter (`api/main.py:225-235`) covers only 5 Ollama-backed POST paths.
 **Fix:** run `verify_password` against a dummy hash when the user is missing (constant-time user resolution); add login-attempt throttling (per-IP + per-username, reuse the limiter infra).
 **Status:** landed — every attempt pays one KDF run (`_dummy_password_hash()` for
 missing/inactive users, `api/routes/auth.py:47,136`), and two independent sliding windows

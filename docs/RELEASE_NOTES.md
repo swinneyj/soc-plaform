@@ -23,7 +23,7 @@ stage C lands; the `main` merge itself is human-executed (E.4).*
 
 ### Stage C — Product work (P2) ✅
 - **C1** plan `7281fe8` (signed off Sept 30). **C1B.1** `30eae76` — users +
-  sessions models, scrypt (+pbkdf2 fallback) helpers,
+  sessions models, PBKDF2 helpers,
   `scripts/manage_users.py` CLI. **C1B.2** `4d4134e` — `/api/auth/*` routes,
   `resolve_actor` (session | api-key-as-admin | anonymous), session-mode read
   gate + CSRF middleware, `require_role("admin")` on the admin families.

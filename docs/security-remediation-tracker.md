@@ -174,10 +174,8 @@ they are stored, sourced from `docs/SESSION_AUTH_PLAN.md` §4 (storage) and
 **Secret classes now in scope:**
 
 - **Password hashes** — `User.password_hash` in `db/models.py`. Stored encoded as
-  `scrypt$n$r$p$salthex$hashhex` (stdlib `hashlib.scrypt`, n=2**14, r=8, p=1,
-  16-byte salt, dklen=32); some Python 3.9 builds lack OpenSSL scrypt, so
-  `verify_password` falls back to PBKDF2-HMAC-SHA256 at 600k iterations and
-  dispatches on the stored scheme prefix. Compared with `hmac.compare_digest`.
+  `pbkdf2$iterations$salthex$hashhex` (PBKDF2-HMAC-SHA256 at 600k iterations,
+  16-byte salt, dklen=32). Compared with `hmac.compare_digest`.
   Plaintext password never stored; random salt means the same password hashes
   differently every time.
 - **Session tokens** — `AuthSession.token_hash`. The cookie value is
@@ -283,7 +281,7 @@ the code (grep + the named tests), not copied from the review's prose.
 - **Regression tests:** `tests/test_internal_errors.py` — global/HTTPException handler scrub + server-side log correlation (direct invocation), plain-500 safety net, sub-500/other-5xx passthrough, end-to-end unhandled/`InternalError`/plain-500 routes, a real swept route (notables paste) mid-handler DB failure, and the request-id header contract (generated, echoed, client-supplied honored).
 
 ### F5 — login: constant-time user resolution + throttling ✅ LANDED
-- **What:** `POST /api/auth/login` used to short-circuit on a missing/inactive user, so a valid username cost a full scrypt/PBKDF2 run and an invalid one returned in microseconds — reliable username enumeration by timing; the endpoint also had no brute-force protection. Now every attempt verifies a password against a hash: missing/inactive users verify against a lazily built **dummy hash** (same KDF, same parameters), so every attempt pays exactly one KDF run. Failed attempts are counted on two independent sliding windows (per source IP and per attempted username, `LOGIN_MAX_FAILURES`/`LOGIN_WINDOW_SECONDS`, env, defaults 5/60 s); either window full → 429 **before** user resolution (even the correct password is refused while throttled). Success clears both windows.
+- **What:** `POST /api/auth/login` used to short-circuit on a missing/inactive user, so a valid username cost a full PBKDF2 run and an invalid one returned in microseconds — reliable username enumeration by timing; the endpoint also had no brute-force protection. Now every attempt verifies a password against a hash: missing/inactive users verify against a lazily built **dummy hash** (same KDF, same parameters), so every attempt pays exactly one KDF run. Failed attempts are counted on two independent sliding windows (per source IP and per attempted username, `LOGIN_MAX_FAILURES`/`LOGIN_WINDOW_SECONDS`, env, defaults 5/60 s); either window full → 429 **before** user resolution (even the correct password is refused while throttled). Success clears both windows.
 - **Where:** `api/routes/auth.py` (`_dummy_password_hash`, `_login_windows`, `_login_throttled`, `_record_login_failure`, `_clear_login_failures`; the `login` handler reorder).
 - **Regression tests:** `tests/test_api_key_gate.py` F5 block — spy-on-`verify_password` proofs (missing user → dummy hash; inactive user → dummy hash, never the stored hash; active user → real hash), a timing sanity test (missing-user login ≥ 40% of real-user login — both are one KDF run), throttle after repeat failures (incl. unknown usernames), independent per-IP/per-username windows, success clears windows, and window expiry.
 

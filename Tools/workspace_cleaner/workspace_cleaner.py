@@ -1,6 +1,7 @@
 # TOOL_NAME: Workspace_Cleaner
 # DESC: Organizes legacy tools into archives, consolidates paperwork, and safely removes empty directories.
 # CATEGORY: System Utilities
+# REQUIRES_APPROVAL: true
 
 import os
 import shutil

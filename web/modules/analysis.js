@@ -1684,7 +1684,109 @@
             return raw.charAt(0).toUpperCase() + raw.slice(1);
         },
 
+        _isClosureReady() {
+            const st = this.investigationState || null;
+            if (!st) return false;
+            const blockers = st.closure_blockers || [];
+            const unresolved = st.unresolved_questions || [];
+            const conf = Number(st.disposition_confidence || 0);
+            const substantive = Number((st.evidence_summary && st.evidence_summary.substantive_items) || 0);
+            if ((st.loop_status || '') === 'ready_for_closure' && !blockers.length && !unresolved.length && conf >= 0.8 && substantive >= 2) return true;
+            if (!blockers.length && !unresolved.length && conf >= 0.8 && substantive >= 2) return true;
+            return false;
+        },
+
+        async startAutoFollowUp() {
+            if (this.autoFollowUpRunning) return;
+            if (!this.analysisCaseId) {
+                alert('Select a case before auto-running follow-ups');
+                return;
+            }
+            const MAX_PHASE = 6;
+            this.autoFollowUpRunning = true;
+            this.autoFollowUpStop = false;
+            this.autoFollowUpMessage = 'Auto-run started.';
+            let prevKeys = '';
+            let idleRounds = 0;
+            try {
+                while (this.autoFollowUpRunning && !this.autoFollowUpStop) {
+                    const phase = Number(this.followUpPhase || 2);
+                    if (phase > MAX_PHASE) {
+                        this.autoFollowUpMessage = 'Stopped: reached Phase ' + MAX_PHASE + ' cap.';
+                        break;
+                    }
+                    if (this._isClosureReady()) {
+                        this.autoFollowUpMessage = 'Closure-ready: blockers cleared.';
+                        break;
+                    }
+                    await this.runPhase2Analysis();
+                    if (this.autoFollowUpStop || !this.autoFollowUpRunning) break;
+                    const queries = ((this.phase2Result && this.phase2Result.phase2_queries) ||
+                        (this.analysisResult && this.analysisResult.phase2_queries) || []);
+                    const keys = queries.map(q => this.getPhase2Key(q)).join('|');
+                    if (queries.length && keys === prevKeys) {
+                        idleRounds += 1;
+                        if (idleRounds >= 2) {
+                            this.autoFollowUpMessage = 'Stopped: Ollama is repeating the same queries.';
+                            break;
+                        }
+                    } else {
+                        idleRounds = 0;
+                    }
+                    prevKeys = keys;
+                    let ranAny = false;
+                    for (const q of queries) {
+                        if (this.autoFollowUpStop) break;
+                        const key = this.getPhase2Key(q);
+                        const card = this._phase2Card(key);
+                        if (card.runStatus && card.runStatus.state === 'complete') continue;
+                        if (card.runStatus && card.runStatus.state === 'running') continue;
+                        await this.runSplunkSearch({ q, kind: 'phase2' });
+                        ranAny = true;
+                    }
+                    if (this.autoFollowUpStop) break;
+                    await this.savePhase2Evidence({ silent: true });
+                    if (this._isClosureReady()) {
+                        this.autoFollowUpMessage = 'Closure-ready: blockers cleared.';
+                        break;
+                    }
+                    if (!ranAny && !queries.length) {
+                        this.autoFollowUpMessage = 'Stopped: no follow-up queries to run.';
+                        break;
+                    }
+                    const nextPhase = Math.max(3, Number(this.followUpPhase || 2) + 1);
+                    if (nextPhase > MAX_PHASE) {
+                        this.autoFollowUpMessage = 'Stopped: reached Phase ' + MAX_PHASE + ' cap.';
+                        break;
+                    }
+                    this.followUpPhase = nextPhase;
+                    this.phase2CardState = {};
+                    if (typeof this._storeAnalysisStateSnapshot === 'function') {
+                        try { this._storeAnalysisStateSnapshot(); } catch (e) {}
+                    }
+                }
+            } finally {
+                this.autoFollowUpRunning = false;
+            }
+        },
+
+        stopAutoFollowUp() {
+            this.autoFollowUpStop = true;
+            this.autoFollowUpRunning = false;
+            this.autoFollowUpMessage = 'Stopped by analyst.';
+            if (this.analysisAbortController) {
+                try { this.analysisAbortController.abort(); } catch (e) {}
+                this.analysisAbortController = null;
+            }
+            this.analysisRequestId += 1;
+            this.analysisRunning = false;
+            this._stopAnalysisStatusTimer();
+            this._stopPhase2StatusTimer();
+        },
+
         cancelAnalysis() {
+            this.autoFollowUpStop = true;
+            this.autoFollowUpRunning = false;
             // Abort the browser request as well as invalidating any late response.
             if (this.analysisAbortController) {
                 this.analysisAbortController.abort();

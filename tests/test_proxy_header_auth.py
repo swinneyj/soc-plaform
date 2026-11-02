@@ -46,16 +46,16 @@ def db(monkeypatch):
 
     rows = [
         db_models.User(
-            id=42, username="analyst1", password_hash="scrypt$16384$8$1$00$00",
+            id=42, username="analyst1", password_hash="pbkdf2$600000$00$00",
             role="analyst", is_active=True,
         ),
         db_models.User(
             # 10-digit external ID stored as username (CAC/PIV-mapped account).
-            id=7, username="1234567890", password_hash="scrypt$16384$8$1$00$00",
+            id=7, username="1234567890", password_hash="pbkdf2$600000$00$00",
             role="analyst", is_active=True,
         ),
         db_models.User(
-            id=99, username="retired", password_hash="scrypt$16384$8$1$00$00",
+            id=99, username="retired", password_hash="pbkdf2$600000$00$00",
             role="admin", is_active=False,
         ),
     ]

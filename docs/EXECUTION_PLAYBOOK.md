@@ -438,7 +438,7 @@ Design reference: `docs/SESSION_AUTH_PLAN.md`. Flag: `AUTH_MODE` — everything 
 until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror the existing
 `_API_KEY` monkeypatch pattern in `tests/test_api_key_gate.py`).
 
-**C1B.1 — Piece A: models + scrypt + user CLI.** (commit 1)
+**C1B.1 — Piece A: models + PBKDF2 + user CLI.** (commit 1)
 - `db/models.py` — append (match the file's existing Column/import style):
 
   ```python
@@ -466,19 +466,19 @@ until `AUTH_MODE=session`. Tests monkeypatch `api.auth._SESSION_MODE` (mirror th
   `db/util.py:utcnow_naive` is the api-side clock used in C1B.2. Add `Boolean` and
   `ForeignKey` to `db/models.py`'s existing `from sqlalchemy import Column, DateTime, …`
   line — neither is imported today.
-- `api/auth.py` — append the scrypt helpers exactly as specced in SESSION_AUTH_PLAN §4
-  (`hash_password` / `verify_password`, format `scrypt$n$r$p$salthex$hashhex`, n=2**14,
-  r=8, p=1, dklen=32, `hmac.compare_digest`) plus `import hashlib, hmac, secrets` at top.
+- `api/auth.py` — append the PBKDF2 helpers exactly as specced in SESSION_AUTH_PLAN §4
+  (`hash_password` / `verify_password`, format `pbkdf2$iterations$salthex$hashhex`, 600k iterations,
+  dklen=32, `hmac.compare_digest`) plus `import hashlib, hmac, secrets` at top.
 - `scripts/manage_users.py` — new CLI (stdlib + `api.auth.hash_password`): subcommands
   `create <name> --role analyst|admin`, `list`, `set-role <name> <role>`,
   `set-password <name>`, `deactivate <name>`. Password via `getpass` prompt or
   `--password-env VARNAME` (env var NAME, never the secret in argv).
-- Tests in `tests/test_api_key_gate.py`: `test_scrypt_roundtrip`,
-  `test_scrypt_wrong_password_fails`, `test_password_never_stored_plaintext`.
+- Tests in `tests/test_api_key_gate.py`: `test_pbkdf2_roundtrip`,
+  `test_pbkdf2_wrong_password_fails`, `test_password_never_stored_plaintext`.
 - Verify (isolated DB, never the real DATABASE_URL):
   `DATABASE_URL=sqlite:////tmp/auth_smoke.db .venv314/bin/python scripts/manage_users.py create smoke --role admin --password-env SMOKE_PW`
   with `SMOKE_PW=dummy123` exported → prints created; then `rm /tmp/auth_smoke.db`.
-- Commit `feat: users + sessions models, scrypt helpers, manage_users CLI (C1B.1)`.
+- Commit `feat: users + sessions models, PBKDF2 helpers, manage_users CLI (C1B.1)`.
 
 **C1B.2 — Piece B: auth routes + gates.** (commit 2)
 - `api/routes/auth.py` — new router:

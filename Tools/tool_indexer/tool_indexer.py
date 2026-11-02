@@ -51,6 +51,10 @@ def parse_tool_headers(filepath):
                             print(f"[-] {os.path.basename(filepath)}: refusing unsafe OUTPUT_DIR '{raw_dir.strip()}'")
                             continue
                         output_dirs.append('/'.join(parts))
+                elif '# REQUIRES_DB:' in check_line:
+                    metadata['requires_db'] = line.split(':', 1)[1].strip().lower() in ('1', 'true', 'yes', 'on')
+                elif '# REQUIRES_APPROVAL:' in check_line:
+                    metadata['requires_approval'] = line.split(':', 1)[1].strip().lower() in ('1', 'true', 'yes', 'on')
                 elif '# ARG:' in check_line:
                     raw_arg = line.split(':', 1)[1]
                     parts = [p.strip() for p in raw_arg.split('|')]

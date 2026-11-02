@@ -55,15 +55,15 @@ def db(monkeypatch):
 
     rows = [
         db_models.User(
-            id=ANALYST_ID, username="analyst1", password_hash="scrypt$16384$8$1$00$00",
+            id=ANALYST_ID, username="analyst1", password_hash="pbkdf2$600000$00$00",
             role="analyst", is_active=True,
         ),
         db_models.User(
-            id=ADMIN_ID, username="admin1", password_hash="scrypt$16384$8$1$00$00",
+            id=ADMIN_ID, username="admin1", password_hash="pbkdf2$600000$00$00",
             role="admin", is_active=True,
         ),
         db_models.User(
-            id=INACTIVE_ID, username="retired", password_hash="scrypt$16384$8$1$00$00",
+            id=INACTIVE_ID, username="retired", password_hash="pbkdf2$600000$00$00",
             role="admin", is_active=False,
         ),
     ]

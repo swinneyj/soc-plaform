@@ -96,6 +96,15 @@ async def lifespan(app: FastAPI):
         Base.metadata.create_all(bind=engine)
     except Exception as exc:
         app.state.database_startup_error = str(exc)
+    # Orphaned RUNNING ToolRuns (API or worker died mid-run) would poll
+    # forever and pin the admission cap — fail them once, best-effort.
+    try:
+        from api.routes.tools import reconcile_orphaned_tool_runs
+        reconciled = reconcile_orphaned_tool_runs()
+        if reconciled:
+            logger.info("[tool_runs] Startup reconciliation marked %d orphaned job(s) failed", reconciled)
+    except Exception as exc:
+        logger.warning("[tool_runs] Startup reconciliation failed: %s", exc)
     yield
 
 

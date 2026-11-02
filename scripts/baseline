@@ -37,9 +37,11 @@ collect() {
   "$PY" - "$@" <<'PYEOF'
 import json, subprocess, sys, os, glob
 
-def sh(cmd, timeout=15):
+def run(argv, timeout=15):
+    # shell=False throughout: argv lists only, no shell parsing,
+    # no pipes/redirects — filtering happens in Python below.
     try:
-        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=timeout)
+        r = subprocess.run(argv, shell=False, capture_output=True, text=True, timeout=timeout)
         return (r.stdout + r.stderr).strip()
     except Exception as e:
         return f"ERR: {e}"
@@ -50,18 +52,22 @@ state = {}
 state["test_files"] = len(glob.glob("tests/test_*.py"))
 
 # 2. Python runtime
-state["python"] = sh(".venv314/bin/python --version 2>&1") or sh("python3 --version")
+state["python"] = run([".venv314/bin/python", "--version"]) or run(["python3", "--version"])
 
 # 3. Launcher mode
-mode = sh("bash scripts/dev --check 2>/dev/null | grep mode")
+_dev_check = run(["bash", "scripts/dev", "--check"])
+mode = "\n".join(l for l in _dev_check.splitlines() if "mode" in l)
 state["launch_mode"] = mode.split(":")[-1].strip() if mode else "unknown"
 
 # 4. Services
 def up(port):
-    r = sh(f"nc -z -G 2 localhost {port} 2>/dev/null && echo up || echo down")
-    return r.strip()
+    try:
+        r = subprocess.run(["nc", "-z", "-G", "2", "localhost", str(port)], shell=False, capture_output=True, text=True, timeout=5)
+        return "up" if r.returncode == 0 else "down"
+    except Exception:
+        return "down"
 state["services"] = {
-    "tailscale_cli": "up" if sh("/opt/homebrew/bin/tailscale status 2>/dev/null | head -1").strip() else "down",
+    "tailscale_cli": "up" if run(["/opt/homebrew/bin/tailscale", "status"]).strip().splitlines()[:1] else "down",
     "postgres_5432": up(5432),
     "smb_445": up(445),
     "ssh_22": up(22),
@@ -69,16 +75,18 @@ state["services"] = {
 }
 
 # 5. Tailscale node identity (name + IP should be stable)
-ts = sh("/opt/homebrew/bin/tailscale status 2>/dev/null | grep -E '^100\\.' | head -2")
-state["tailscale_nodes"] = sorted(l.split()[1] for l in ts.splitlines() if l.strip())
+_ts_out = run(["/opt/homebrew/bin/tailscale", "status"])
+_ts_lines = [l for l in _ts_out.splitlines() if l.strip().lstrip().startswith("100.")][:2]
+state["tailscale_nodes"] = sorted(l.split()[1] for l in _ts_lines if len(l.split()) > 1)
 
 # 6. SMB share registered
-share = sh("sharing -l 2>/dev/null | grep -c Exchange")
+_sharing_out = run(["sharing", "-l"])
+share = str(sum(1 for l in _sharing_out.splitlines() if "Exchange" in l))
 state["exchange_share_registered"] = share.strip() or "0"
 
 # 7. Git identity
-state["git_branch"] = sh("git rev-parse --abbrev-ref HEAD")
-state["git_dirty_count"] = len([l for l in sh("git status --porcelain").splitlines() if l.strip()])
+state["git_branch"] = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+state["git_dirty_count"] = len([l for l in run(["git", "status", "--porcelain"]).splitlines() if l.strip()])
 
 # 8. Secret mode: token present in .env (name only, never value)
 state["bws_token_present"] = "yes" if os.path.exists(".env") and "BWS_ACCESS_TOKEN=" in open(".env").read() else "no"

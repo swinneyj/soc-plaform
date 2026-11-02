@@ -11,6 +11,9 @@ services:
       - LOG_LEVEL=INFO
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - DATABASE_URL=${COMPOSE_DATABASE_URL:-postgresql+psycopg://${POSTGRES_USER:-soc_platform}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-soc_platform}}
+      - TOOLS_WORKER_URL=http://tools-worker:8001
+      - TOOLS_WORKER_HMAC_SECRET=${TOOLS_WORKER_HMAC_SECRET:-}
+      - TOOLS_WORKER_HMAC_SECRET_SECONDARY=${TOOLS_WORKER_HMAC_SECRET_SECONDARY:-}
     # Ensure containers can resolve the host's Ollama service on Linux
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -29,6 +32,39 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      tools-worker:
+        condition: service_healthy
+
+  # Tools worker: runs Tools/*.py over HTTP. No secrets by design — no
+  # DATABASE_URL, API_KEY, OLLAMA_URL, CORS_ORIGINS, or proxy CIDRs here.
+  # The main backend enforces auth BEFORE proxying over this link.
+  tools-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: soc-platform:latest
+    environment:
+      - SOC_PLATFORM_ROOT=/app
+      - LOG_LEVEL=INFO
+      - COMMANDER_BOOT=1
+      - TOOLS_WORKER_HMAC_SECRET=${TOOLS_WORKER_HMAC_SECRET:-}
+      - TOOLS_WORKER_HMAC_SECRET_SECONDARY=${TOOLS_WORKER_HMAC_SECRET_SECONDARY:-}
+    expose:
+      - "8001"
+    volumes:
+      - ./Tools:/app/Tools
+      - ./tools_worker:/app/tools_worker
+      - ./Commander_Registry.json:/app/Commander_Registry.json
+      - ./Data:/app/Data
+      - ./Reports:/app/Reports
+    working_dir: /app
+    command: python -m uvicorn tools_worker.app:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
 
   postgres:
     image: postgres:16-alpine

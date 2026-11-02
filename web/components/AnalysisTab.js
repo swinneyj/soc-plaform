@@ -15,6 +15,8 @@ window.AnalysisTab = {
         'stageModels',
         'analysisContext',
         'analysisRunning',
+        'autoFollowUpRunning',
+        'autoFollowUpMessage',
         'analysisStatus',
         'phase2Status',
         'analysisResult',
@@ -108,6 +110,8 @@ window.AnalysisTab = {
         'update-enrichment-manual',
         'update-enrichment-finding',
         'start-next-follow-up',
+        'auto-follow-up-start',
+        'auto-follow-up-stop',
         'update-phase2-manual',
         'update-card-status',
         'update-phase2-finding',
@@ -1146,6 +1150,25 @@ window.AnalysisTab = {
         <div>
             <h3 class="text-lg font-bold text-blue-300">Stage 4: Phase {{ followUpPhase }} Follow-Up</h3>
             <p class="text-xs text-gray-400 mt-1">Targeted investigation checks generated from the prior phase findings to address remaining questions.</p>
+        </div>
+
+        <div class="flex items-center gap-3 bg-gray-900 border border-gray-700 rounded-lg px-3 py-2">
+            <button
+                v-if="!autoFollowUpRunning"
+                type="button"
+                class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded text-xs font-bold text-white transition shadow"
+                :disabled="analysisRunning || !analysisCaseId"
+                @click="$emit('auto-follow-up-start')"
+            >▶ Auto-run follow-ups until closure-ready</button>
+            <button
+                v-else
+                type="button"
+                class="px-4 py-2 bg-red-600 hover:bg-red-500 rounded text-xs font-bold text-white transition shadow"
+                @click="$emit('auto-follow-up-stop')"
+            >■ Stop auto-run</button>
+            <span v-if="autoFollowUpRunning" class="text-xs text-emerald-300 animate-pulse">Auto-run active — Phase {{ followUpPhase }}…</span>
+            <span v-else-if="autoFollowUpMessage" class="text-xs text-gray-400">{{ autoFollowUpMessage }}</span>
+            <span v-else class="text-xs text-gray-500">Runs Ollama + fake-Splunk phases 2–6 back-to-back; stops on closure-ready, repeat queries, or when you stop it.</span>
         </div>
 
         <div

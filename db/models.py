@@ -254,7 +254,7 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     username = Column(String(64), unique=True, nullable=False, index=True)
-    password_hash = Column(String(256), nullable=False)  # scrypt$n$r$p$salthex$hashhex
+    password_hash = Column(String(256), nullable=False)  # pbkdf2$iterations$salthex$hashhex
     role = Column(String(16), nullable=False, default="analyst")  # analyst|admin
     is_active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, nullable=False, default=_utcnow)
